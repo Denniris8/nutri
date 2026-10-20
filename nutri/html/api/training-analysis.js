@@ -42,22 +42,22 @@ function parseTrainingPlanReply(parts) {
   try { reply = JSON.parse(raw); }
   catch { throw new Error('OpenCode devolvió un plan que no cumple el formato JSON.'); }
   const macros = reply?.macros_objetivo;
+  const trainingMacros = reply?.macros_entrenamiento;
   const keys = ['proteinas_g', 'carbohidratos_g', 'grasas_g', 'calorias_kcal'];
   if (!reply || typeof reply !== 'object' || Array.isArray(reply)
-    || Object.keys(reply).length !== 2 || !Object.hasOwn(reply, 'plan_markdown') || !Object.hasOwn(reply, 'macros_objetivo')
+    || Object.keys(reply).length !== 3 || !Object.hasOwn(reply, 'plan_markdown') || !Object.hasOwn(reply, 'macros_objetivo') || !Object.hasOwn(reply, 'macros_entrenamiento')
     || typeof reply.plan_markdown !== 'string' || !reply.plan_markdown.trim() || reply.plan_markdown.length > 30000
-    || !macros || typeof macros !== 'object' || Array.isArray(macros)
-    || Object.keys(macros).length !== keys.length || keys.some((key) => !Object.hasOwn(macros, key))) {
+    || [macros, trainingMacros].some((values) => !values || typeof values !== 'object' || Array.isArray(values)
+      || Object.keys(values).length !== keys.length || keys.some((key) => !Object.hasOwn(values, key)))) {
     throw new Error('OpenCode devolvió un plan con campos incompletos.');
   }
   const limits = { proteinas_g: 10000, carbohidratos_g: 10000, grasas_g: 10000, calorias_kcal: 100000 };
-  for (const key of keys) {
-    const value = macros[key];
-    if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > limits[key])) {
-      throw new Error('OpenCode devolvió metas de macros no válidas.');
-    }
+  for (const values of [macros, trainingMacros]) for (const key of keys) {
+    const value = values[key];
+    if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > limits[key])) throw new Error('OpenCode devolvió metas de macros no válidas.');
   }
-  return { plan: reply.plan_markdown.trim(), macros: Object.fromEntries(keys.map((key) => [key, macros[key]])) };
+  const copy = (values) => Object.fromEntries(keys.map((key) => [key, values[key]]));
+  return { plan: reply.plan_markdown.trim(), macros: copy(macros), trainingMacros: copy(trainingMacros) };
 }
 
 async function openTrainingSession(userId, config, request) {

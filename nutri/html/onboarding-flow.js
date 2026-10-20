@@ -27,6 +27,7 @@ const savedTrainingPlansList = document.querySelector('#savedTrainingPlans');
 let generatedTrainingPlan = null;
 let generatedTrainingGoals = null;
 let generatedTrainingMacros = null;
+let generatedTrainingDayMacros = null;
 let savedTrainingPlan = false;
 let savedTrainingPlans = [];
 let savedTrainingPlansLoadId = 0;
@@ -100,8 +101,8 @@ function renderAccountTmbSummary(profile) {
   appendPlainText(summary, `: ${new Intl.NumberFormat('es-MX', { maximumFractionDigits: 0 }).format(Number(profile.restingMetabolismKcal))} kcal.`);
 }
 
-function setTrainingPlanTargets(macros) {
-  trainingPlanTargets = macros || null;
+function setTrainingPlanTargets(macros, trainingMacros = null) {
+  trainingPlanTargets = macros ? { rest: macros, training: trainingMacros } : null;
   renderMacroCards(currentFoodEntries);
 }
 
@@ -144,7 +145,8 @@ function renderSavedTrainingPlans() {
     const macros = document.createElement('span');
     const formatMacro = (value, unit) => value == null ? '—' : `${new Intl.NumberFormat('es-MX', { maximumFractionDigits: 1 }).format(value)} ${unit}`;
     macros.className = 'saved-training-plan-macros';
-    macros.textContent = `Metas diarias: proteína ${formatMacro(plan.macros?.proteinas_g, 'g')} · carbohidratos ${formatMacro(plan.macros?.carbohidratos_g, 'g')} · grasas ${formatMacro(plan.macros?.grasas_g, 'g')} · energía ${formatMacro(plan.macros?.calorias_kcal, 'kcal')}`;
+    const macroSummary = (targets) => `Proteína ${formatMacro(targets?.proteinas_g, 'g')} · carbohidratos ${formatMacro(targets?.carbohidratos_g, 'g')} · grasas ${formatMacro(targets?.grasas_g, 'g')} · energía ${formatMacro(targets?.calorias_kcal, 'kcal')}`;
+    macros.textContent = `Reposo: ${macroSummary(plan.macros)} · Entrenamiento: ${macroSummary(plan.trainingMacros)}`;
     summary.append(date, goals, macros);
     const content = document.createElement('div');
     content.className = 'saved-training-plan-content';
@@ -185,7 +187,7 @@ async function loadSavedTrainingPlans() {
     if (!response.ok) throw new Error(result.error || 'No se pudieron cargar los planes guardados.');
     savedTrainingPlans = Array.isArray(result.plans) ? result.plans : [];
     renderSavedTrainingPlans();
-    if (!generatedTrainingMacros || savedTrainingPlan) setTrainingPlanTargets(savedTrainingPlans[0]?.macros);
+    if (!generatedTrainingMacros || savedTrainingPlan) setTrainingPlanTargets(savedTrainingPlans[0]?.macros, savedTrainingPlans[0]?.trainingMacros);
   } catch (error) {
     if (loadId !== savedTrainingPlansLoadId) return;
     const message = document.createElement('li');
@@ -230,8 +232,9 @@ trainingPlanSendButton?.addEventListener('click', async () => {
   generatedTrainingPlan = null;
   generatedTrainingGoals = null;
   generatedTrainingMacros = null;
+  generatedTrainingDayMacros = null;
   savedTrainingPlan = false;
-  setTrainingPlanTargets(savedTrainingPlans[0]?.macros);
+  setTrainingPlanTargets(savedTrainingPlans[0]?.macros, savedTrainingPlans[0]?.trainingMacros);
   planSummaryText.textContent = 'Generando plan…';
   planLoading.hidden = false;
   trainingPlanTrigger.setAttribute('aria-busy', 'true');
@@ -249,7 +252,8 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     generatedTrainingPlan = result.plan;
     generatedTrainingGoals = goals;
     generatedTrainingMacros = result.macros;
-    setTrainingPlanTargets(generatedTrainingMacros);
+    generatedTrainingDayMacros = result.trainingMacros;
+    setTrainingPlanTargets(generatedTrainingMacros, generatedTrainingDayMacros);
     trainingPlanGoalsInput.value = '';
     trainingPlanSaveButton.hidden = false;
     trainingPlanSaveButton.disabled = false;
@@ -278,20 +282,20 @@ trainingPlanSendButton?.addEventListener('click', async () => {
 });
 
 trainingPlanSaveButton?.addEventListener('click', async () => {
-  if (!generatedTrainingPlan || !generatedTrainingGoals || !generatedTrainingMacros || savedTrainingPlan) return;
+  if (!generatedTrainingPlan || !generatedTrainingGoals || !generatedTrainingMacros || !generatedTrainingDayMacros || savedTrainingPlan) return;
   trainingPlanSaveButton.disabled = true;
   notifyApp('Guardando el plan de entrenamiento.', 'info');
   try {
     const response = await fetch('/api/training-plans', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros, suppressNotification: true }),
+      body: JSON.stringify({ goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros, trainingMacros: generatedTrainingDayMacros, suppressNotification: true }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo guardar el plan.');
     const savedAt = new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(result.createdAt));
     savedTrainingPlan = true;
-    setTrainingPlanTargets(generatedTrainingMacros);
-    savedTrainingPlans = [{ id: result.id, createdAt: result.createdAt, goals: generatedTrainingGoals, plan: generatedTrainingPlan }, ...savedTrainingPlans.filter((plan) => plan.id !== result.id)].slice(0, 3);
+    setTrainingPlanTargets(generatedTrainingMacros, generatedTrainingDayMacros);
+    savedTrainingPlans = [{ id: result.id, createdAt: result.createdAt, goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros, trainingMacros: generatedTrainingDayMacros }, ...savedTrainingPlans.filter((plan) => plan.id !== result.id)].slice(0, 3);
     renderSavedTrainingPlans();
     void loadSavedTrainingPlans();
     trainingPlanSaveButton.textContent = 'Guardado';
@@ -1353,10 +1357,9 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
   try {
     const response = await fetch('/api/training-analysis', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone },
-      body: JSON.stringify({ description, suppressNotification: trainingDialog.open && !document.hidden }),
+      body: JSON.stringify({ description, suppressNotification: true }),
     });
     const result = await response.json();
-    void refreshNotifications();
     if (!response.ok) throw new Error(result.error || 'No se pudo analizar el entrenamiento.');
     if (generation !== trainingOpenGeneration) return;
     const analysis = result.analysis;
@@ -1368,6 +1371,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     }
     if (!analysis.trainingSession) {
       trainingFeedback.textContent = analysis.stepsSaved ? 'Pasos guardados; no se registró una sesión ni se estimaron calorías.' : 'No se registró una sesión de entrenamiento.';
+      await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'generado', 'Resultado del entrenamiento', trainingFeedback.textContent);
       return;
     }
     if (analysis.saveTimeStatus === 'invalid') throw new Error('La hora indicada no es válida.');
@@ -1384,10 +1388,12 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
       appendTrainingMessage('assistant', 'Indica la hora con a. m./p. m. o en formato de 24 horas para guardarla correctamente.');
       trainingFeedback.textContent = 'Aclara la hora de guardado; todavía no se guardó el entrenamiento.';
       trainingInput.value = description;
+      await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'requiere_respuesta', 'Entrenamiento: falta la hora', 'Indica la hora para guardar la sesión.', null);
       return;
     }
     if (analysis.caloriesKcal == null) {
       trainingFeedback.textContent = analysis.question || 'Falta un dato para completar el análisis.';
+      await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'requiere_respuesta', 'Entrenamiento: falta una aclaración', trainingFeedback.textContent);
       return;
     }
     trainingLoadingText.textContent = 'Guardando entrenamiento…';
@@ -1397,21 +1403,22 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
       method: 'POST', credentials: 'same-origin', headers: {
         'Content-Type': 'application/json', 'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
-      body: JSON.stringify({ description, analysis, savedAt: trainingSavedAt, date: nutritionDate, suppressNotification: trainingDialog.open && !document.hidden }),
+      body: JSON.stringify({ description, analysis, savedAt: trainingSavedAt, date: nutritionDate, suppressNotification: true }),
     });
     const saved = await saveResponse.json();
-    void refreshNotifications();
     if (!saveResponse.ok) throw new Error(saved.error || 'No se pudo guardar el entrenamiento.');
     await loadTrainingEntries(nutritionDate);
     trainingSavedAt = null;
     trainingFeedback.textContent = saved.savedAt ? `Entrenamiento analizado y guardado a las ${saved.savedAt}.` : 'Entrenamiento analizado y guardado.';
     notifyApp(trainingFeedback.textContent, 'success');
+    await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'guardado', 'Entrenamiento guardado', trainingFeedback.textContent);
   } catch (error) {
     if (generation !== trainingOpenGeneration) return;
     trainingInput.value = description;
     appendTrainingMessage('error', error.message || 'No se pudo analizar el entrenamiento.');
     trainingFeedback.textContent = error.message || 'No se pudo analizar el entrenamiento.';
     notifyApp(trainingFeedback.textContent, 'error');
+    await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'error', 'No se pudo completar el entrenamiento', trainingFeedback.textContent);
   } finally {
     trainingPending = false;
     trainingTrigger.setAttribute('aria-busy', 'false');
@@ -1780,6 +1787,7 @@ let trainingManualNetCaloriesKcal = null;
 let trainingGarminReportedCaloriesKcal = null;
 let trainingAdjustmentCaloriesKcal = null;
 let trainingGarminEnabled = false;
+let trainingDaySelected = null;
 let unresolvedTrainingDuplicates = 0;
 let uncalculableManualTrainingRecords = 0;
 let restingCaloriesKcal = null;
@@ -1860,13 +1868,18 @@ function renderMacroCards(records) {
     detail.className = 'macro-detail';
     detail.textContent = items.some((item) => item.macroStatus === 'estimado') ? 'Incluye estimaciones' : 'Consumo registrado';
     const planMacroKey = { proteinG: 'proteinas_g', carbohydrateG: 'carbohidratos_g', fatG: 'grasas_g', energyKcal: 'calorias_kcal' }[key];
-    const baseTarget = trainingPlanTargets?.[planMacroKey];
-    const exerciseAware = key === 'energyKcal' || key === 'carbohydrateG';
+    const structuredTrainingTarget = trainingPlanTargets?.training && Object.values(trainingPlanTargets.training).some((value) => value !== null);
+    const selectedTargets = trainingDaySelected === null ? null : trainingDaySelected && structuredTrainingTarget ? trainingPlanTargets?.training : trainingPlanTargets?.rest;
+    const baseTarget = selectedTargets?.[planMacroKey];
+    const exerciseAware = trainingDaySelected === true && !structuredTrainingTarget && (key === 'energyKcal' || key === 'carbohydrateG');
     const exerciseExtra = key === 'carbohydrateG' && trainingAdjustmentCaloriesKcal != null ? trainingAdjustmentCaloriesKcal / 4 : trainingAdjustmentCaloriesKcal;
     const targetValue = baseTarget == null || exerciseAware && exerciseExtra == null ? null : Number(baseTarget) + (exerciseAware ? exerciseExtra : 0);
     const planTarget = document.createElement('p');
     planTarget.className = 'macro-target';
-    if (baseTarget == null) {
+    if (trainingDaySelected === null) {
+      planTarget.dataset.status = 'incomplete';
+      planTarget.textContent = 'Meta del plan no disponible: no se pudo determinar la actividad del día.';
+    } else if (baseTarget == null) {
       planTarget.textContent = 'Meta diaria del plan: —';
     } else if (exerciseAware && exerciseExtra == null) {
       planTarget.dataset.status = 'incomplete';
@@ -1881,7 +1894,7 @@ function renderMacroCards(records) {
         : difference < 0 ? `Excedido ${format.format(Math.abs(difference))} ${unit}` : 'Meta alcanzada';
       const targetLabel = exerciseAware
         ? `Meta ajustada ${format.format(targetValue)} ${unit} (base ${format.format(Number(baseTarget))} ${unit} + ${format.format(trainingAdjustmentCaloriesKcal)} kcal${key === 'carbohydrateG' ? ' / 4' : ''})`
-        : `Meta del plan ${format.format(targetValue)} ${unit}`;
+        : `Meta ${trainingDaySelected ? 'con entrenamiento' : 'en reposo'} ${format.format(targetValue)} ${unit}`;
       planTarget.textContent = `${targetLabel} · ${comparison}`;
     }
     reading.append(value, measure);
@@ -2064,6 +2077,7 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
     const { records, exercise, garminEnabled } = await response.json();
     if (!Array.isArray(records)) throw new Error();
     trainingGarminEnabled = garminEnabled === true;
+    trainingDaySelected = records.length > 0;
     trainingManualNetCaloriesKcal = Number(exercise?.manualNetKcal);
     trainingGarminReportedCaloriesKcal = Number(exercise?.deviceReportedKcal);
     trainingAdjustmentCaloriesKcal = Number(exercise?.adjustmentKcal);
@@ -2135,6 +2149,7 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
       list.append(card);
     }
   } catch {
+    trainingDaySelected = null;
     trainingGarminEnabled = false;
     trainingManualNetCaloriesKcal = null;
     trainingGarminReportedCaloriesKcal = null;

@@ -509,7 +509,8 @@ COMMIT;`);
         try {
           const data = await bodyJson(request);
           const validState = data.category === 'comida' && ['requiere_respuesta', 'guardado', 'error'].includes(data.state)
-            || data.category === 'plan' && ['generado', 'guardado', 'error'].includes(data.state);
+            || data.category === 'plan' && ['generado', 'guardado', 'error'].includes(data.state)
+            || data.category === 'entrenamiento' && ['requiere_respuesta', 'generado', 'guardado', 'error'].includes(data.state);
           if (!validState
             || typeof data.title !== 'string' || !data.title.trim() || data.title.length > 120
             || typeof data.message !== 'string' || !data.message.trim() || data.message.length > 2000
@@ -650,9 +651,9 @@ COMMIT;`);
             stepsCount: analysis.stepsCount, source: 'manual', dbQuery, textSql,
           });
         }
-        if (analysis.trainingSession && analysis.caloriesKcal == null && analysis.question && data.suppressNotification !== true) {
+        if (analysis.trainingSession && analysis.caloriesKcal == null && analysis.question) {
           await dbQuery(`${resolveNotificationsSql({ userId: claims.sub, category: 'entrenamiento', textSql })};`);
-          await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'requiere_respuesta', title: 'Entrenamiento: falta una aclaración', message: analysis.question, dbQuery, textSql });
+          if (data.suppressNotification !== true) await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'requiere_respuesta', title: 'Entrenamiento: falta una aclaración', message: analysis.question, dbQuery, textSql });
         }
         json(response, 200, { analysis });
       }
@@ -744,7 +745,7 @@ COMMIT;`);
       try { data = await bodyJson(request, 131072); }
       catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
       try {
-        const saved = await saveTrainingPlan({ userId: claims.sub, goals: data.goals, plan: data.plan, macros: data.macros, dbQuery, textSql });
+        const saved = await saveTrainingPlan({ userId: claims.sub, goals: data.goals, plan: data.plan, macros: data.macros, trainingMacros: data.trainingMacros, dbQuery, textSql });
         try { await dbQuery(`${resolveNotificationsSql({ userId: claims.sub, category: 'plan', state: 'generado', textSql })};`); } catch {}
         if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'guardado', title: 'Plan guardado', message: 'Tu plan de entrenamiento quedó guardado.', referenceId: saved.id, dbQuery, textSql }); } catch {}
         json(response, 201, { ok: true, ...saved });

@@ -104,6 +104,10 @@ CREATE TABLE `planes_entrenamiento` (
   `objetivo_carbohidratos_g` decimal(7,2) DEFAULT NULL,
   `objetivo_grasas_g` decimal(7,2) DEFAULT NULL,
   `objetivo_calorias_kcal` decimal(8,1) DEFAULT NULL,
+  `objetivo_entrenamiento_proteinas_g` decimal(7,2) DEFAULT NULL,
+  `objetivo_entrenamiento_carbohidratos_g` decimal(7,2) DEFAULT NULL,
+  `objetivo_entrenamiento_grasas_g` decimal(7,2) DEFAULT NULL,
+  `objetivo_entrenamiento_calorias_kcal` decimal(8,1) DEFAULT NULL,
   `creado_en` datetime(3) NOT NULL,
   PRIMARY KEY (`id`),
   KEY `idx_planes_entrenamiento_usuario_fecha` (`usuario_id`,`creado_en`,`id`),
@@ -112,6 +116,10 @@ CREATE TABLE `planes_entrenamiento` (
   CONSTRAINT `chk_planes_entrenamiento_carbohidratos` CHECK (((`objetivo_carbohidratos_g` is null) or (`objetivo_carbohidratos_g` between 0 and 10000))),
   CONSTRAINT `chk_planes_entrenamiento_contenido` CHECK ((char_length(trim(`contenido`)) between 1 and 30000)),
   CONSTRAINT `chk_planes_entrenamiento_grasas` CHECK (((`objetivo_grasas_g` is null) or (`objetivo_grasas_g` between 0 and 10000))),
+  CONSTRAINT `chk_planes_entrenamiento_objetivo_entrenamiento_proteinas` CHECK (((`objetivo_entrenamiento_proteinas_g` is null) or (`objetivo_entrenamiento_proteinas_g` between 0 and 10000))),
+  CONSTRAINT `chk_planes_entrenamiento_objetivo_entrenamiento_carbohidratos` CHECK (((`objetivo_entrenamiento_carbohidratos_g` is null) or (`objetivo_entrenamiento_carbohidratos_g` between 0 and 10000))),
+  CONSTRAINT `chk_planes_entrenamiento_objetivo_entrenamiento_grasas` CHECK (((`objetivo_entrenamiento_grasas_g` is null) or (`objetivo_entrenamiento_grasas_g` between 0 and 10000))),
+  CONSTRAINT `chk_planes_entrenamiento_objetivo_entrenamiento_calorias` CHECK (((`objetivo_entrenamiento_calorias_kcal` is null) or (`objetivo_entrenamiento_calorias_kcal` between 0 and 100000))),
   CONSTRAINT `chk_planes_entrenamiento_objetivos` CHECK ((char_length(trim(`objetivos`)) between 1 and 2000)),
   CONSTRAINT `chk_planes_entrenamiento_proteinas` CHECK (((`objetivo_proteinas_g` is null) or (`objetivo_proteinas_g` between 0 and 10000)))
 ) ENGINE=InnoDB AUTO_INCREMENT=5 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci

@@ -6,6 +6,9 @@
 
 ## 2026-10-20
 
+- 2026-10-20 14:57 CST — Corregidas las alertas diferidas de entrenamiento: se crean al recibir respuesta, aclaración, guardado o error solo cuando el modal está cerrado/oculto; el servidor suprime duplicados y resuelve preguntas anteriores al recibir nueva aclaración.
+- 2026-10-20 14:56 CST — Reestructuradas las metas del plan: el prompt y parser exigen macros estructurados para reposo y entrenamiento; se persisten los cuatro macros de entrenamiento en columnas nuevas con migración 0003. El dashboard escoge el conjunto según entrenamientos registrados ese día y evita sumar dos veces el ejercicio en planes nuevos; planes anteriores conservan el ajuste dinámico.
+- 2026-10-20 14:48 CST — Actualizado el prompt canónico `comportamiento-sesion-plan.md`: exige metas de macros separadas para reposo y entrenamiento, con gasto de la sesión planificada declarado como estimación; `macros_objetivo` conserva la meta base de reposo para compatibilidad.
 - 2026-10-20 14:40 CST — El modal de plan se abre desde una alerta únicamente si estaba sin leer antes del clic; seleccionar una alerta ya leída no abre el modal.
 - 2026-10-20 14:40 CST — Al seleccionar cualquier alerta de plan, se marca como leída y se abre el modal de creación/revisión del plan, independientemente del estado de la alerta.
 - 2026-10-20 14:39 CST — Diferida la alerta de plan generado hasta conocer si el modal está cerrado/oculto al recibir la respuesta; se genera entonces antes de guardar. Se aplica igual al aviso de guardado o error del plan, y se amplía el POST autenticado de alertas a estados permitidos de plan.
