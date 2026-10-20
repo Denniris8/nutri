@@ -6,12 +6,20 @@ const demoPassword = 'Demo-Prueba-2026!';
 const appNoticeDialog = document.querySelector('#appNoticeDialog');
 let appNoticeTimer;
 const recordDeleteConfirmDialog = document.querySelector('#recordDeleteConfirmDialog');
+const notificationsDialog = document.querySelector('#notificationsDialog');
+const notificationsList = document.querySelector('#notificationsList');
+const notificationsStatus = document.querySelector('#notificationsStatus');
+const notificationsBadge = document.querySelector('#notificationsBadge');
+const notificationsButton = document.querySelector('#notificationsButton');
+const notificationsFilter = document.querySelector('#notificationsFilter');
+let notificationItems = [];
 
 const trainingPlanGoalsInput = document.querySelector('#trainingPlanGoals');
 const trainingPlanSendButton = document.querySelector('#sendTrainingPlanGoals');
 const trainingPlanSaveButton = document.querySelector('#saveTrainingPlan');
 const trainingPlanDialog = document.querySelector('#trainingPlanDialog');
 const trainingPlanTrigger = document.querySelector('#createTrainingPlanButton');
+const trainingPlanTriggerLoading = document.querySelector('#trainingPlanButtonLoading');
 const planChatMessages = document.querySelector('#planChatMessages');
 const planLoading = document.querySelector('#planLoading');
 const planSummaryText = document.querySelector('#planSummaryText');
@@ -226,12 +234,14 @@ trainingPlanSendButton?.addEventListener('click', async () => {
   setTrainingPlanTargets(savedTrainingPlans[0]?.macros);
   planSummaryText.textContent = 'Generando plan…';
   planLoading.hidden = false;
+  trainingPlanTrigger.setAttribute('aria-busy', 'true');
+  trainingPlanTriggerLoading.hidden = false;
   appendTrainingPlanMessage('user', goals);
   notifyApp('Generando tu plan de entrenamiento.', 'info');
   try {
     const response = await fetch('/api/training-plan', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goals }),
+      body: JSON.stringify({ goals, suppressNotification: true }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo generar el plan.');
@@ -246,6 +256,7 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     trainingPlanSaveButton.title = '';
     planSummaryText.textContent = 'Plan generado · no guardado';
     notifyApp('Plan generado. Solo aparece en esta vista y no se guarda.', 'success');
+    await notifyResultIfHidden(trainingPlanDialog, 'plan', 'generado', 'Plan generado, aún sin guardar', 'Tu plan está listo para revisar y guardar.');
   } catch (error) {
     const sessionFailed = error.message === 'No se pudo abrir la sesión para crear el plan.';
     if (sessionFailed) {
@@ -255,8 +266,11 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     } else planSummaryText.textContent = 'No se pudo generar el plan.';
     appendTrainingPlanMessage('error', error.message || 'No se pudo generar el plan.');
     notifyApp(error.message || 'No se pudo generar el plan.', 'error');
+    await notifyResultIfHidden(trainingPlanDialog, 'plan', 'error', 'No se pudo generar el plan', 'Revisa el modal de plan e inténtalo de nuevo.');
   } finally {
     planLoading.hidden = true;
+    trainingPlanTrigger.setAttribute('aria-busy', 'false');
+    trainingPlanTriggerLoading.hidden = true;
     trainingPlanSendButton.disabled = !trainingPlanSessionReady;
     trainingPlanGoalsInput.disabled = !trainingPlanSessionReady;
     if (trainingPlanSessionReady) trainingPlanGoalsInput.focus();
@@ -270,7 +284,7 @@ trainingPlanSaveButton?.addEventListener('click', async () => {
   try {
     const response = await fetch('/api/training-plans', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros }),
+      body: JSON.stringify({ goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros, suppressNotification: true }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo guardar el plan.');
@@ -285,10 +299,12 @@ trainingPlanSaveButton?.addEventListener('click', async () => {
     planSummaryText.textContent = `Plan guardado · ${savedAt}`;
     appendTrainingPlanMessage('assistant', `Plan guardado el ${savedAt}.`);
     notifyApp('Plan de entrenamiento guardado.', 'success');
+    await notifyResultIfHidden(trainingPlanDialog, 'plan', 'guardado', 'Plan guardado', 'Tu plan de entrenamiento quedó guardado.', result.id);
   } catch (error) {
     trainingPlanSaveButton.disabled = false;
     appendTrainingPlanMessage('error', error.message || 'No se pudo guardar el plan.');
     notifyApp(error.message || 'No se pudo guardar el plan.', 'error');
+    await notifyResultIfHidden(trainingPlanDialog, 'plan', 'error', 'No se pudo guardar el plan', 'Intenta guardar el plan nuevamente.');
   }
 });
 
@@ -315,6 +331,123 @@ function notifyApp(message, kind = 'info') {
   if (!appNoticeDialog.matches(':popover-open')) appNoticeDialog.showPopover();
   clearTimeout(appNoticeTimer);
   appNoticeTimer = setTimeout(() => appNoticeDialog.hidePopover(), 5000);
+}
+
+const notificationStateLabels = { requiere_respuesta: 'Requiere respuesta', guardado: 'Guardado', generado: 'Generado', error: 'Error', resuelta: 'Resuelta' };
+async function notifyResultIfHidden(dialog, category, state, title, message, referenceId = null) {
+  if (dialog?.open && !document.hidden) return;
+  try {
+    await fetch('/api/notifications', {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ category, state, title, message: String(message).slice(0, 2000), referenceId }),
+    });
+    void refreshNotifications();
+  } catch {}
+}
+async function refreshNotifications() {
+  if (!notificationsList) return;
+  notificationsList.setAttribute('aria-busy', 'true');
+  try {
+    const response = await fetch('/api/notifications', { credentials: 'same-origin' });
+    if (!response.ok) throw new Error();
+    const result = await response.json();
+    notificationItems = result.notifications || [];
+    renderNotifications();
+    const unread = Number(result.unreadCount) || 0;
+    notificationsBadge.hidden = unread < 1;
+    notificationsBadge.textContent = unread > 99 ? '99+' : String(unread);
+    notificationsButton.setAttribute('aria-label', `Alertas${unread ? `, ${unread} sin leer` : ''}`);
+  } catch {
+    if (notificationsStatus) notificationsStatus.textContent = 'No se pudieron cargar las alertas. Intenta nuevamente.';
+  } finally {
+    notificationsList.setAttribute('aria-busy', 'false');
+  }
+}
+
+function renderNotifications() {
+  notificationsList.replaceChildren();
+  const filter = notificationsFilter?.value || 'todas';
+  const visibleItems = notificationItems.filter((notification) => filter === 'todas'
+    || filter === 'sin-leer' && !notification.readAt
+    || filter === 'requiere_respuesta' && notification.state === filter
+    || ['comida', 'entrenamiento', 'plan'].includes(filter) && notification.category === filter);
+  for (const notification of visibleItems) {
+      const item = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.id = notification.id;
+      button.dataset.category = notification.category;
+      button.dataset.state = notification.state;
+      button.dataset.message = notification.message;
+      button.dataset.unread = String(!notification.readAt);
+      const heading = document.createElement('span');
+      heading.className = 'notification-heading';
+      const title = document.createElement('strong');
+      title.textContent = notification.title;
+      const state = document.createElement('span');
+      state.className = 'notification-state';
+      state.textContent = notificationStateLabels[notification.state] || 'Aviso';
+      heading.append(title, state);
+      const message = document.createElement('p');
+      message.className = 'notification-message';
+      message.textContent = notification.message;
+      const date = document.createElement('span');
+      date.className = 'notification-date';
+      date.textContent = new Intl.DateTimeFormat('es-MX', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(notification.createdAt));
+      const action = document.createElement('span');
+      action.className = 'notification-action';
+      action.textContent = notification.state === 'requiere_respuesta' ? 'Abrir y responder →' : 'Marcar como leída';
+      button.append(heading, message, date, action);
+      item.append(button);
+      notificationsList.append(item);
+  }
+  notificationsStatus.textContent = visibleItems.length ? '' : notificationItems.length ? 'No hay alertas que coincidan con este filtro.' : 'No tienes alertas recientes.';
+}
+
+notificationsButton?.addEventListener('click', () => { void refreshNotifications(); notificationsDialog.showModal(); });
+document.querySelector('#closeNotificationsDialog')?.addEventListener('click', () => notificationsDialog.close());
+notificationsDialog?.addEventListener('close', () => notificationsButton?.focus());
+notificationsFilter?.addEventListener('change', renderNotifications);
+document.querySelector('#markNotificationsRead')?.addEventListener('click', async (event) => {
+  const button = event.currentTarget;
+  const filter = notificationsFilter?.value || 'todas';
+  const ids = notificationItems.filter((item) => !item.readAt && (filter === 'todas'
+    || filter === 'sin-leer'
+    || filter === 'requiere_respuesta' && item.state === filter
+    || ['comida', 'entrenamiento', 'plan'].includes(filter) && item.category === filter)).map((item) => item.id);
+  if (!ids.length) { button.textContent = 'No hay alertas sin leer'; return; }
+  button.disabled = true;
+  try {
+    await Promise.all(ids.map((id) => fetch(`/api/notifications/${encodeURIComponent(id)}/read`, { method: 'POST', credentials: 'same-origin' })));
+    await refreshNotifications();
+    button.textContent = 'Alertas marcadas como leídas';
+  } catch { notificationsStatus.textContent = 'No se pudieron actualizar las alertas.'; }
+  finally { button.disabled = false; setTimeout(() => { button.textContent = 'Marcar visibles como leídas'; }, 2500); }
+});
+notificationsList?.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-id]');
+  if (!button) return;
+  if (button.dataset.category === 'plan' && button.dataset.unread !== 'true') return;
+  try {
+    await fetch(`/api/notifications/${encodeURIComponent(button.dataset.id)}/read`, { method: 'POST', credentials: 'same-origin' });
+    await refreshNotifications();
+  } catch {}
+  if (button.dataset.category === 'plan') {
+    notificationsDialog.close();
+    trainingPlanTrigger?.click();
+    return;
+  }
+  if (button.dataset.state !== 'requiere_respuesta') return;
+  notificationsDialog.close();
+  if (button.dataset.category === 'comida') document.querySelector('#registerFoodButton')?.click();
+  if (button.dataset.category === 'entrenamiento') {
+    document.querySelector('#addTrainingButton')?.click();
+    if (!trainingChatMessages.textContent.includes(button.dataset.message)) appendTrainingMessage('assistant', button.dataset.message);
+  }
+});
+if (notificationsList) {
+  void refreshNotifications();
+  setInterval(() => { if (!document.hidden) void refreshNotifications(); }, 60000);
 }
 
 function navigateWithNotice(message, url) {
@@ -1062,6 +1195,8 @@ const trainingModeToggle = document.querySelector('#trainingModeToggle');
 const trainingDescriptionFields = document.querySelector('#trainingDescriptionFields');
 let trainingOpenGeneration = 0;
 let trainingSessionReady = false;
+let trainingSessionUiInitialized = false;
+let trainingPending = false;
 let trainingSavedAt = null;
 let trainingGarminConnected = false;
 const trainingModeStorageKey = 'nutriTrainingMode';
@@ -1117,6 +1252,7 @@ async function prepareTrainingSessionUi(generation) {
     notifyApp(trainingFeedback.textContent, 'error');
   } finally {
     if (generation === trainingOpenGeneration) {
+      trainingSessionUiInitialized = trainingSessionReady;
       trainingLoading.hidden = true;
       trainingAnalyzeButton.disabled = !trainingSessionReady;
       trainingInput.disabled = !trainingSessionReady;
@@ -1125,6 +1261,8 @@ async function prepareTrainingSessionUi(generation) {
   }
 }
 trainingTrigger?.addEventListener('click', () => {
+  if (trainingPending || trainingSessionUiInitialized) { trainingDialog?.showModal(); return; }
+  trainingSessionUiInitialized = true;
   const generation = ++trainingOpenGeneration;
   trainingSessionReady = false;
   trainingSavedAt = null;
@@ -1200,7 +1338,10 @@ function appendTrainingMessage(role, content) {
 trainingAnalyzeButton?.addEventListener('click', async () => {
   const generation = trainingOpenGeneration;
   const description = trainingInput.value.trim();
-  if (!description || trainingAnalyzeButton.disabled) { if (!description) trainingFeedback.textContent = 'Describe el entrenamiento para continuar.'; return; }
+  if (!description || trainingAnalyzeButton.disabled || trainingPending) { if (!description) trainingFeedback.textContent = 'Describe el entrenamiento para continuar.'; return; }
+  trainingPending = true;
+  trainingTrigger.setAttribute('aria-busy', 'true');
+  document.querySelector('#trainingButtonLoading').hidden = false;
   trainingFeedback.textContent = 'Enviando la descripción…';
   trainingLoading.hidden = false;
   trainingLoadingText.textContent = 'Analizando entrenamiento…';
@@ -1212,9 +1353,10 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
   try {
     const response = await fetch('/api/training-analysis', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone },
-      body: JSON.stringify({ description }),
+      body: JSON.stringify({ description, suppressNotification: trainingDialog.open && !document.hidden }),
     });
     const result = await response.json();
+    void refreshNotifications();
     if (!response.ok) throw new Error(result.error || 'No se pudo analizar el entrenamiento.');
     if (generation !== trainingOpenGeneration) return;
     const analysis = result.analysis;
@@ -1255,9 +1397,10 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
       method: 'POST', credentials: 'same-origin', headers: {
         'Content-Type': 'application/json', 'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
-      body: JSON.stringify({ description, analysis, savedAt: trainingSavedAt, date: nutritionDate }),
+      body: JSON.stringify({ description, analysis, savedAt: trainingSavedAt, date: nutritionDate, suppressNotification: trainingDialog.open && !document.hidden }),
     });
     const saved = await saveResponse.json();
+    void refreshNotifications();
     if (!saveResponse.ok) throw new Error(saved.error || 'No se pudo guardar el entrenamiento.');
     await loadTrainingEntries(nutritionDate);
     trainingSavedAt = null;
@@ -1270,6 +1413,9 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     trainingFeedback.textContent = error.message || 'No se pudo analizar el entrenamiento.';
     notifyApp(trainingFeedback.textContent, 'error');
   } finally {
+    trainingPending = false;
+    trainingTrigger.setAttribute('aria-busy', 'false');
+    document.querySelector('#trainingButtonLoading').hidden = true;
     if (generation === trainingOpenGeneration) {
       trainingLoading.hidden = true;
       trainingInput.disabled = false;
@@ -1440,8 +1586,9 @@ foodForm?.addEventListener('submit', async (event) => {
   const text = description.value.trim();
   if (!text) return;
   const audioReady = unlockFoodAudio();
-  const body = { requestId: foodRequestId, fecha: foodDate(), descripcion: text, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, targetEntryId: foodTargetEntryId };
+  const body = { requestId: foodRequestId, fecha: foodDate(), descripcion: text, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, targetEntryId: foodTargetEntryId, suppressNotification: true };
   let draftRestored = false;
+  let resultNotificationHandled = false;
   foodPending = true;
   description.value = '';
   description.disabled = true;
@@ -1453,7 +1600,6 @@ foodForm?.addEventListener('submit', async (event) => {
   foodChatThread.hidden = false;
   foodChatThread.scrollTop = foodChatThread.scrollHeight;
   registerFoodButton.setAttribute('aria-busy', 'true');
-  registerFoodButton.disabled = true;
   document.querySelector('#foodButtonLoading').hidden = false;
   saveButton.disabled = true;
   try {
@@ -1463,6 +1609,8 @@ foodForm?.addEventListener('submit', async (event) => {
     });
     const result = await response.json();
     if (!response.ok) {
+      resultNotificationHandled = true;
+      await notifyResultIfHidden(foodDialog, 'comida', 'error', 'No se pudo completar el registro de comida', result.message || result.error || 'Revisa el registro e inténtalo de nuevo.', result.entryId || null);
       if (result.entryId && result.requestId) {
         foodRequestId = result.requestId;
         foodTargetEntryId = result.targetEntryId || foodTargetEntryId;
@@ -1484,6 +1632,8 @@ foodForm?.addEventListener('submit', async (event) => {
       description.placeholder = 'Responde la pregunta…';
       saveButton.textContent = 'Enviar mensaje';
       feedback.textContent = '';
+      resultNotificationHandled = true;
+      await notifyResultIfHidden(foodDialog, 'comida', 'requiere_respuesta', 'Comida: falta una aclaración', result.question || result.message, result.entryId);
     } else {
       if (result.appended) { await audioReady; playFoodAddedSound(); }
       await loadFoodEntries(foodDate());
@@ -1495,6 +1645,8 @@ foodForm?.addEventListener('submit', async (event) => {
       saveButton.textContent = 'Enviar mensaje';
       feedback.textContent = `${result.message || 'Comida guardada.'} Puedes agregar alimentos o corregirlos; cierra el registro para empezar otra comida.`;
       notifyApp(feedback.textContent, 'success');
+      resultNotificationHandled = true;
+      await notifyResultIfHidden(foodDialog, 'comida', 'guardado', 'Comida guardada', result.message || 'El registro de comida quedó guardado.', result.entryId);
     }
   } catch (error) {
     if (pendingMessage.isConnected) {
@@ -1504,12 +1656,12 @@ foodForm?.addEventListener('submit', async (event) => {
     feedback.textContent = error.message || 'No se pudo guardar la comida.';
     if (!draftRestored) appendFoodChatMessage('error', feedback.textContent);
     notifyApp(feedback.textContent, 'error');
+    if (!draftRestored && !resultNotificationHandled) await notifyResultIfHidden(foodDialog, 'comida', 'error', 'No se pudo completar el registro de comida', feedback.textContent, foodTargetEntryId);
   } finally {
     foodPending = false;
     foodLoading.hidden = true;
     document.querySelector('#foodChatThread').hidden = !document.querySelector('#foodChatMessages').children.length;
     registerFoodButton.setAttribute('aria-busy', 'false');
-    registerFoodButton.disabled = false;
     document.querySelector('#foodButtonLoading').hidden = true;
     description.disabled = false;
     saveButton.disabled = false;
@@ -2006,6 +2158,7 @@ async function loadAccountProfile() {
     const response = await fetch('/api/dashboard/profile', { credentials: 'same-origin' });
     if (!response.ok) throw new Error();
     const { profile } = await response.json();
+    if (profile.accountName) document.querySelector('#activeUserAccountName').textContent = profile.accountName;
     document.querySelector('#accountSexSelect').value = profile.sex || '';
     document.querySelector('#accountHeightCm').value = profile.heightCm ?? '';
     restingCaloriesKcal = profile.restingMetabolismKcal == null ? null : Number(profile.restingMetabolismKcal);

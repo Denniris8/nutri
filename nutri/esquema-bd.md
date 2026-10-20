@@ -16,6 +16,10 @@ Sesiones JWT revocables: `session_id CHAR(36)` PK aleatoria enlazada al claim `s
 
 Relación: `usuarios (1) → (N) dashboard_sessions`, con borrado en cascada de las sesiones asociadas.
 
+## `notificaciones_usuario`
+
+Centro persistente de alertas del dashboard. Cada fila pertenece a un usuario y guarda categoría (`comida`, `entrenamiento`, `plan`), estado (`requiere_respuesta`, `guardado`, `generado`, `error`, `resuelta`), título, mensaje breve, referencia opcional al registro relacionado, fecha UTC y fecha de lectura. Índice por cuenta/lectura/fecha para cargar las 50 más recientes y contar las no leídas; al borrar una cuenta se eliminan sus alertas. Las preguntas de comida enlazan a su borrador recuperable; las alertas de entrenamiento abren el registro y las de planes reflejan generación o guardado. Al completarse una respuesta, los avisos de pregunta anteriores de esa categoría se marcan como resueltos. Esquema en `mysql/migrations/0001_notificaciones_usuario.sql`; `0002_notificacion_dummy.sql` agrega solo a las cuentas `es_prueba=1` un aviso de demostración identificado como sintético.
+
 ## `preferencias_usuario`
 
 Una fila por cuenta (`usuario_id` PK/FK a `usuarios.id`): `modo_dispositivo`, `patron_alimentario`, `zona_horaria`, `nutrition_day_start TIME`, `nutrition_day_end TIME`, `alimentos_preferidos`, `alimentos_evitar` y `actualizado_en`. La zona horaria define cómo interpretar los límites guardados en hora local; los campos generales admiten NULL para no inventar datos en perfiles antiguos.

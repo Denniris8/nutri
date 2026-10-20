@@ -1,5 +1,6 @@
 const { randomUUID } = require('node:crypto');
 const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, recordFoodError, requestFoodDescription, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock } = require('./opencode-food.js');
+const { notificationInsertSql, resolveNotificationsSql } = require('./notifications.js');
 
 function validateFoodEntry(data) {
   const fecha = typeof data?.fecha === 'string' ? data.fecha : '';
@@ -223,6 +224,7 @@ function validFoodItem(item) {
 }
 
 async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, requestOpenCode }) {
+  const suppressNotification = data?.suppressNotification === true;
   if (!/^\d+$/.test(String(userId))) { json(response, 400, { error: 'Cuenta no válida.' }); return; }
   let entry;
   try { entry = validateFoodEntry(data); }
@@ -403,6 +405,8 @@ SELECT LAST_INSERT_ID();`);
       const statements = ["SET time_zone='+00:00'", 'START TRANSACTION', `DELETE FROM registros_comida_items WHERE registro_comida_id=${entryId}`, `UPDATE registros_comidas SET estado='borrador_chat',registro_comida_destino_id=${destination},pregunta_pendiente=${textSql(question)}${createdAtUpdate},energia_kcal=NULL,energia_449_kcal=NULL,proteina_g=NULL,carbohidratos_g=NULL,grasa_g=NULL,fibra_g=NULL WHERE id=${entryId} AND usuario_id=${userId}`];
       for (const message of assistantMessages) if (message !== question) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(message)})`);
       if (!assistantMessages.includes(question)) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(question)})`);
+      statements.push(resolveNotificationsSql({ userId, category: 'comida', textSql }));
+      if (!suppressNotification) statements.push(notificationInsertSql({ userId, category: 'comida', state: 'requiere_respuesta', title: 'Comida: falta una aclaración', message: question, referenceId: entryId, textSql }));
       statements.push('COMMIT');
       await dbQuery(`${statements.join(';')};`);
       const messages = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`);
@@ -448,6 +452,8 @@ SELECT LAST_INSERT_ID();`);
       for (const message of assistantMessages) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(message)})`);
       statements.push(`UPDATE registros_comidas SET estado='completado',registro_comida_destino_id=NULL,pregunta_pendiente=NULL${createdAt ? `,creado_en=${textSql(createdAt)}` : ''},energia_kcal=${total('energia_kcal')},energia_449_kcal=${total('energia_449_kcal')},proteina_g=${total('proteina_g')},carbohidratos_g=${total('carbohidratos_g')},grasa_g=${total('grasa_g')},fibra_g=${total('fibra_g')} WHERE id=${entryId} AND usuario_id=${userId}`, `INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(confirmation)})`);
     }
+    statements.push(resolveNotificationsSql({ userId, category: 'comida', textSql }));
+    if (!suppressNotification) statements.push(notificationInsertSql({ userId, category: 'comida', state: 'guardado', title: 'Comida guardada', message: confirmation, referenceId: append || updating ? destinationId : entryId, textSql }));
     statements.push('COMMIT');
     await dbQuery(`${statements.join(';')};`);
     traceFoodSession(trace, 'items_saved', { itemCount: items.length, appended: append });
@@ -480,6 +486,7 @@ SELECT LAST_INSERT_ID();`);
         : ['parse', 'validation'].includes(stage) ? 'El asistente respondió, pero sus datos de alimentos o macros no tenían un formato válido.'
           : 'El borrador quedó guardado, pero el asistente no completó el análisis. Puedes intentarlo de nuevo.';
       try { await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'assistant', content: `[ERROR_REGISTRO] ${message}` }); } catch {}
+      if (!suppressNotification) try { await dbQuery(`${notificationInsertSql({ userId, category: 'comida', state: 'error', title: 'No se pudo completar el registro de comida', message, referenceId: entryId, textSql })};`); } catch {}
       json(response, 502, { entryId, requestId: entry.requestId, message });
       return;
     }

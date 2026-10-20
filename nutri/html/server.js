@@ -16,6 +16,7 @@ const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, openCodeRequest: d
 const { analyzeTraining, deleteTrainingSession, generateTrainingPlan, prepareTrainingSession } = require('./api/training-analysis.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
 const { deleteTrainingPlan, readTrainingPlans, saveTrainingPlan } = require('./api/training-plans.js');
+const { addNotification, markNotificationRead, notificationInsertSql, readNotifications, resolveNotificationsSql } = require('./api/notifications.js');
 
 const scrypt = promisify(scryptCallback);
 const sessionCookie = 'nutri_session';
@@ -400,8 +401,11 @@ COMMIT;`);
           || typeof timezone !== 'string' || timezone.length > 64) { authError(response, 400, 'La fecha o zona horaria no es válida.'); return; }
       try { new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(); }
       catch { authError(response, 400, 'La zona horaria no es válida.'); return; }
-      try { json(response, 200, await syncGarminTraining({ userId: claims.sub, date, timezone, dbQuery, textSql, secret: jwtSecret })); }
-      catch (error) { authError(response, error.status || 502, error.status ? error.message : 'No se pudieron sincronizar las actividades Garmin.'); }
+      try {
+        const result = await syncGarminTraining({ userId: claims.sub, date, timezone, dbQuery, textSql, secret: jwtSecret });
+        if (result.saved) await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'guardado', title: 'Actividades Garmin guardadas', message: `Se guardaron ${result.saved} actividades de Garmin.`, dbQuery, textSql });
+        json(response, 200, result);
+      } catch (error) { authError(response, error.status || 502, error.status ? error.message : 'No se pudieron sincronizar las actividades Garmin.'); }
       return;
     }
 
@@ -493,6 +497,50 @@ COMMIT;`);
       return;
     }
 
+    if (pathname === '/api/notifications') {
+      if (!['GET', 'POST'].includes(request.method)) { response.writeHead(405, { Allow: 'GET, POST' }).end(); return; }
+      if (request.method === 'POST' && !sameOrigin(request)) { authError(response, 403, 'Solicitud no permitida.'); return; }
+      let claims;
+      try { claims = await authenticated(request); }
+      catch { authError(response, 503, 'No se pudieron cargar las alertas.'); return; }
+      if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
+      if (request.method === 'POST') {
+        if (!allowAttempt(request, response, 'notification-create')) return;
+        try {
+          const data = await bodyJson(request);
+          const validState = data.category === 'comida' && ['requiere_respuesta', 'guardado', 'error'].includes(data.state)
+            || data.category === 'plan' && ['generado', 'guardado', 'error'].includes(data.state);
+          if (!validState
+            || typeof data.title !== 'string' || !data.title.trim() || data.title.length > 120
+            || typeof data.message !== 'string' || !data.message.trim() || data.message.length > 2000
+            || data.referenceId != null && !/^[1-9]\d{0,19}$/.test(String(data.referenceId))) {
+            authError(response, 400, 'Datos de alerta no válidos.'); return;
+          }
+          await dbQuery(`${notificationInsertSql({ ...data, userId: claims.sub, textSql })};`);
+          json(response, 201, { ok: true });
+        } catch (error) { authError(response, error.status || 400, error.status ? error.message : 'No se pudo guardar la alerta.'); }
+        return;
+      }
+      try { json(response, 200, await readNotifications({ userId: claims.sub, dbQuery })); }
+      catch { authError(response, 503, 'No se pudieron cargar las alertas.'); }
+      return;
+    }
+
+    const notificationRead = pathname.match(/^\/api\/notifications\/([1-9]\d{0,19})\/read$/);
+    if (notificationRead) {
+      if (request.method !== 'POST') { response.writeHead(405, { Allow: 'POST' }).end(); return; }
+      if (!sameOrigin(request)) { authError(response, 403, 'Solicitud no permitida.'); return; }
+      let claims;
+      try { claims = await authenticated(request); }
+      catch { authError(response, 503, 'No se pudo actualizar la alerta.'); return; }
+      if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
+      try {
+        const updated = await markNotificationRead({ userId: claims.sub, notificationId: notificationRead[1], dbQuery });
+        json(response, updated ? 200 : 404, { ok: updated });
+      } catch { authError(response, 503, 'No se pudo actualizar la alerta.'); }
+      return;
+    }
+
     if (pathname === '/api/food-entries/pending') {
       if (request.method !== 'GET') { response.writeHead(405, { Allow: 'GET' }).end(); return; }
       let claims;
@@ -551,6 +599,7 @@ COMMIT;`);
             action: 'POST /api/food/session', route: '/api/food/session',
           });
         } catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed' })); }
+        try { await addNotification({ userId: claims.sub, category: 'comida', state: 'error', title: 'No se pudo preparar el registro de comida', message: 'No se pudo abrir la sesión; inténtalo de nuevo.', dbQuery, textSql }); } catch {}
         authError(response, 503, 'No se pudo abrir la sesión de comidas.');
       }
       return;
@@ -567,7 +616,10 @@ COMMIT;`);
       try {
         await prepareTrainingSession({ userId: claims.sub, requestOpenCode: openCodeRequest });
         json(response, 200, { ok: true });
-      } catch { authError(response, 503, 'No se pudo preparar la sesión de entrenamiento.'); }
+      } catch {
+        try { await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'error', title: 'No se pudo preparar el entrenamiento', message: 'No se pudo abrir la sesión; inténtalo de nuevo.', dbQuery, textSql }); } catch {}
+        authError(response, 503, 'No se pudo preparar la sesión de entrenamiento.');
+      }
       return;
     }
 
@@ -598,9 +650,16 @@ COMMIT;`);
             stepsCount: analysis.stepsCount, source: 'manual', dbQuery, textSql,
           });
         }
+        if (analysis.trainingSession && analysis.caloriesKcal == null && analysis.question && data.suppressNotification !== true) {
+          await dbQuery(`${resolveNotificationsSql({ userId: claims.sub, category: 'entrenamiento', textSql })};`);
+          await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'requiere_respuesta', title: 'Entrenamiento: falta una aclaración', message: analysis.question, dbQuery, textSql });
+        }
         json(response, 200, { analysis });
       }
-      catch (error) { authError(response, error.status || 502, error.status ? error.message : 'No se pudo analizar el entrenamiento.'); }
+      catch (error) {
+        if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'error', title: 'No se pudo analizar el entrenamiento', message: 'Revisa el modal de entrenamiento e inténtalo de nuevo.', dbQuery, textSql }); } catch {}
+        authError(response, error.status || 502, error.status ? error.message : 'No se pudo analizar el entrenamiento.');
+      }
       return;
     }
 
@@ -641,8 +700,10 @@ COMMIT;`);
           plicometricRecords: plicometrics,
         };
         const generated = await generateTrainingPlan({ userId: claims.sub, goals: data && typeof data === 'object' ? data.goals : undefined, context, requestOpenCode: openCodeRequest });
+        if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'generado', title: 'Plan generado, aún sin guardar', message: 'Tu plan está listo para revisar y guardar.', dbQuery, textSql }); } catch {}
         json(response, 200, generated);
       } catch (error) {
+        if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'error', title: 'No se pudo generar el plan', message: 'Revisa el modal de plan e inténtalo de nuevo.', dbQuery, textSql }); } catch {}
         const cleanupFailed = error.code === 'TRAINING_PLAN_SESSION_CLEANUP';
         const sessionOpenFailed = error.code === 'TRAINING_PLAN_SESSION_OPEN';
         authError(response, error.status || 502, cleanupFailed ? 'No se pudo eliminar la sesión temporal de OpenCode; el plan no se guardó en la aplicación.' : sessionOpenFailed ? error.message : error.status ? error.message : 'No se pudo generar el plan de entrenamiento.');
@@ -684,8 +745,13 @@ COMMIT;`);
       catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
       try {
         const saved = await saveTrainingPlan({ userId: claims.sub, goals: data.goals, plan: data.plan, macros: data.macros, dbQuery, textSql });
+        try { await dbQuery(`${resolveNotificationsSql({ userId: claims.sub, category: 'plan', state: 'generado', textSql })};`); } catch {}
+        if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'guardado', title: 'Plan guardado', message: 'Tu plan de entrenamiento quedó guardado.', referenceId: saved.id, dbQuery, textSql }); } catch {}
         json(response, 201, { ok: true, ...saved });
-      } catch (error) { authError(response, error.status || 503, error.status ? error.message : 'No se pudo guardar el plan.'); }
+      } catch (error) {
+        if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'error', title: 'No se pudo guardar el plan', message: 'Intenta guardar el plan nuevamente.', dbQuery, textSql }); } catch {}
+        authError(response, error.status || 503, error.status ? error.message : 'No se pudo guardar el plan.');
+      }
       return;
     }
 

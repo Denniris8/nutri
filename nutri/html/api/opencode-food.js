@@ -10,10 +10,42 @@ let localServer;
 let localServerStart;
 const sessionLocks = new Map();
 const verifiedFoodSessions = new Map();
+const foodConfigPath = path.resolve(__dirname, '../../configuracion-sesion.json');
 const foodBehaviorPath = path.resolve(__dirname, '../../comportamiento-sesion-comidas.md');
 
 function getFoodSessionDefaults() {
   return { model: null, agent: null, variant: null, requestTimeoutMs: 600000, usdaTimeoutMs: 10000, maxFoodItems: 12, usdaCandidateLimit: 10 };
+}
+
+async function readFoodSessionConfig(filePath = foodConfigPath) {
+  let config;
+  try { config = JSON.parse(await readFile(filePath, 'utf8')); }
+  catch { throw new Error('No se pudo leer configuracion-sesion.json.'); }
+  const allowed = new Set(['model', 'agent', 'variant', 'requestTimeoutMs', 'usdaTimeoutMs', 'maxFoodItems', 'usdaCandidateLimit']);
+  if (!config || typeof config !== 'object' || Array.isArray(config) || Object.keys(config).some((key) => !allowed.has(key))) throw new Error('La configuración de sesión contiene campos no permitidos.');
+  let model = null;
+  if (config.model != null) {
+    const { providerID, modelID } = config.model;
+    if (typeof providerID !== 'string' || typeof modelID !== 'string' || !/^[\w.-]{1,100}$/.test(providerID) || !/^[\w.:/-]{1,150}$/.test(modelID)) throw new Error('El proveedor o modelo configurado no es válido.');
+    model = { providerID, modelID };
+  }
+  const text = (value, name) => {
+    if (value == null) return null;
+    if (typeof value !== 'string' || !/^[\w.-]{1,80}$/.test(value)) throw new Error(`La opción ${name} no es válida.`);
+    return value;
+  };
+  const integer = (value, fallback, min, max, name) => {
+    const number = value == null ? fallback : value;
+    if (!Number.isInteger(number) || number < min || number > max) throw new Error(`La opción ${name} debe estar entre ${min} y ${max}.`);
+    return number;
+  };
+  return {
+    model, agent: text(config.agent, 'agent'), variant: text(config.variant, 'variant'),
+    requestTimeoutMs: integer(config.requestTimeoutMs, 600000, 10000, 600000, 'requestTimeoutMs'),
+    usdaTimeoutMs: integer(config.usdaTimeoutMs, 10000, 3000, 30000, 'usdaTimeoutMs'),
+    maxFoodItems: integer(config.maxFoodItems, 12, 1, 12, 'maxFoodItems'),
+    usdaCandidateLimit: integer(config.usdaCandidateLimit, 10, 1, 10, 'usdaCandidateLimit'),
+  };
 }
 
 async function readFoodSystemPrompt(maxFoodItems) {
@@ -214,7 +246,7 @@ function withUserLock(userId, run) {
 
 function withFoodSessionLock(userId, run) { return withUserLock(String(userId), run); }
 
-async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode = openCodeRequest, readConfig = getFoodSessionDefaults, trace }) {
+async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig, trace }) {
   const id = String(userId);
   if (!/^\d+$/.test(id)) throw new Error('Cuenta autenticada no válida.');
   const config = await readConfig();
@@ -242,6 +274,8 @@ async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpen
           await dbQuery(`DELETE FROM sesiones_comidas_opencode WHERE usuario_id=${id} AND session_id=${textSql(stored)};`);
         } else {
           traceFoodSession(trace, 'session_config_changed', { session: shortSessionId(stored) });
+          const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(stored)}`, undefined, config.requestTimeoutMs);
+          if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) throw openCodeHttpError(deleted.status, 'DELETE /api/session/{id}', 'No se pudo sustituir la sesión con la nueva configuración.');
         }
       }
     }
@@ -289,7 +323,7 @@ async function deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode = op
 }
 
 async function requestFoodDescription({ sessionId, description, comidasDisponibles = [], continuacionRegistro = false, config, trace, requestOpenCode = openCodeRequest }) {
-  config ||= getFoodSessionDefaults();
+  config ||= await readFoodSessionConfig();
   const system = await readFoodSystemPrompt(config.maxFoodItems);
   const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
   const startedAt = Date.now();
@@ -331,5 +365,5 @@ async function requestFoodDescription({ sessionId, description, comidasDisponibl
 
 module.exports = {
   deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, openCodeRequest, recordFoodError, requestFoodDescription,
-  getFoodSessionDefaults, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock,
+  getFoodSessionDefaults, readFoodSessionConfig, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock,
 };

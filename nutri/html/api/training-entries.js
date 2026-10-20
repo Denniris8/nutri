@@ -1,5 +1,6 @@
 const { localDateTimeToUtc, parseFoodTime } = require('./food-entries.js');
 const { nextDate, nutritionDateForSelection, nutritionWindowRange, readNutritionWindow } = require('./nutrition-window.js');
+const { addNotification, resolveNotificationsSql } = require('./notifications.js');
 
 function parseTrainingSavedTime(description) {
   const time = parseFoodTime(description);
@@ -160,6 +161,7 @@ function visibleTrainingEntries(records, preferences) {
 }
 
 async function saveTrainingEntry({ response, data, userId, dbQuery, textSql, json, timezone }) {
+  const suppressNotification = data?.suppressNotification === true;
   if (!/^\d+$/.test(String(userId))) { json(response, 400, { error: 'Cuenta no válida.' }); return; }
   const nutritionDate = data.date == null ? null : data.date;
   if (nutritionDate !== null && (typeof nutritionDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(nutritionDate)
@@ -179,8 +181,13 @@ async function saveTrainingEntry({ response, data, userId, dbQuery, textSql, jso
   catch (error) { json(response, error.status || 400, { error: error.message }); return; }
   try {
     await dbQuery(`INSERT INTO registros_entrenamientos(usuario_id,origen,external_activity_id,descripcion,actividad,duracion_minutos,peso_kg,met,energia_kcal,creado_en) VALUES (${userId},'manual',NULL,${textSql(entry.description)},${textSql(entry.activity)},${entry.durationMinutes},${entry.weightKg},${entry.met},${entry.caloriesKcal},${createdAt ? textSql(createdAt) : 'UTC_TIMESTAMP(3)'});`);
+    try { await dbQuery(`${resolveNotificationsSql({ userId, category: 'entrenamiento', textSql })};`); } catch {}
+    if (!suppressNotification) try { await addNotification({ userId, category: 'entrenamiento', state: 'guardado', title: 'Entrenamiento guardado', message: 'Tu sesión manual quedó guardada.', dbQuery, textSql }); } catch {}
     json(response, 201, { ok: true, caloriesKcal: entry.caloriesKcal, savedAt: entry.savedAt });
-  } catch { json(response, 503, { error: 'No se pudo guardar el entrenamiento.' }); }
+  } catch {
+    if (!suppressNotification) try { await addNotification({ userId, category: 'entrenamiento', state: 'error', title: 'No se pudo guardar el entrenamiento', message: 'Intenta guardar la sesión nuevamente.', dbQuery, textSql }); } catch {}
+    json(response, 503, { error: 'No se pudo guardar el entrenamiento.' });
+  }
 }
 
 async function deleteTrainingEntry({ userId, entryId, dbQuery }) {

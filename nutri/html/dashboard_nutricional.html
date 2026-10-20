@@ -11,8 +11,9 @@
 <body>
   <main class="app">
     <div class="dashboard-toolbar">
-      <p id="activeUserName" class="active-user-name">Usuario activo: —</p>
+      <p id="activeUserName" class="active-user-name"><span id="activeUserAccountName">—</span></p>
       <p id="testAccountNotice" class="test-account-notice" hidden></p>
+      <button id="notificationsButton" class="button-muted notifications-button" type="button" aria-label="Alertas" title="Alertas"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span id="notificationsBadge" class="notifications-badge" hidden></span></button>
     </div>
     <nav class="view-nav" aria-label="Secciones del dashboard">
       <button type="button" data-dashboard-tab="today" aria-controls="todayView" aria-current="page">Hoy</button>
@@ -43,8 +44,8 @@
         </div>
         <div class="quick-actions">
           <button id="registerFoodButton" type="button" aria-busy="false">Registrar comida <span id="foodButtonLoading" class="assistant-thinking" aria-hidden="true" hidden></span></button>
-          <button id="addTrainingButton" class="button-training" type="button" aria-label="Guardar sesión de entrenamiento" title="Guardar sesión de entrenamiento">Registrar entrenamiento</button>
-          <button id="createTrainingPlanButton" class="button-plan" type="button">Crear plan</button>
+          <button id="addTrainingButton" class="button-training" type="button" aria-label="Guardar sesión de entrenamiento" title="Guardar sesión de entrenamiento" aria-busy="false">Registrar entrenamiento <span id="trainingButtonLoading" class="assistant-thinking" aria-hidden="true" hidden></span></button>
+          <button id="createTrainingPlanButton" class="button-plan" type="button" aria-busy="false">Crear plan <span id="trainingPlanButtonLoading" class="assistant-thinking" aria-hidden="true" hidden></span></button>
         </div>
       </header>
 
@@ -405,9 +406,9 @@
         <div class="training-plan-actions">
           <button id="sendTrainingPlanGoals" type="button">Enviar mensaje</button>
           <button id="saveTrainingPlan" type="button" title="Guardar el plan generado" disabled hidden>Guardar</button>
+          <button id="cancelTrainingPlanDialog" class="button-muted" type="button">Cerrar</button>
         </div>
       </div>
-      <div class="action-plan-dialog-actions"><button id="cancelTrainingPlanDialog" class="button-muted" type="button">Cerrar</button></div>
     </div>
   </dialog>
 
@@ -540,6 +541,13 @@
   <dialog id="recordDeleteConfirmDialog" class="more-form-dialog record-delete-dialog" aria-labelledby="recordDeleteConfirmTitle">
     <header class="more-form-header"><div><h2 id="recordDeleteConfirmTitle">Confirmar eliminación</h2><p id="recordDeleteConfirmMessage"></p></div><button id="closeRecordDeleteConfirm" class="icon-close" type="button" aria-label="Cancelar eliminación">×</button></header>
     <div class="more-form-body"><div class="action-plan-dialog-actions"><button id="cancelRecordDeleteConfirm" class="button-muted" type="button">Cancelar</button><button id="acceptRecordDeleteConfirm" class="menu-delete-submit" type="button">Eliminar</button></div></div>
+  </dialog>
+  <dialog id="notificationsDialog" class="more-form-dialog notifications-dialog" aria-labelledby="notificationsTitle">
+    <header class="more-form-header"><div><h2 id="notificationsTitle">Alertas y respuestas</h2><p>Preguntas y resultados de tus registros.</p></div><button id="closeNotificationsDialog" class="icon-close" type="button" aria-label="Cerrar">×</button></header>
+    <div class="more-form-body notifications-body">
+      <div class="notifications-tools"><label for="notificationsFilter">Mostrar<select id="notificationsFilter"><option value="todas">Todas</option><option value="sin-leer">Sin leer</option><option value="requiere_respuesta">Requieren respuesta</option><option value="comida">Comidas</option><option value="entrenamiento">Entrenamientos</option><option value="plan">Planes</option></select></label><button id="markNotificationsRead" class="button-muted" type="button">Marcar visibles como leídas</button></div>
+      <p id="notificationsStatus" class="hint" role="status" aria-live="polite">Cargando alertas…</p><ul id="notificationsList" class="notifications-list" aria-busy="true"></ul>
+    </div>
   </dialog>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
   <script src="/onboarding-flow.js?v=training-plan-session-failure-1" defer></script>

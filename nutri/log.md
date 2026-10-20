@@ -6,6 +6,29 @@
 
 ## 2026-10-20
 
+- 2026-10-20 14:40 CST — El modal de plan se abre desde una alerta únicamente si estaba sin leer antes del clic; seleccionar una alerta ya leída no abre el modal.
+- 2026-10-20 14:40 CST — Al seleccionar cualquier alerta de plan, se marca como leída y se abre el modal de creación/revisión del plan, independientemente del estado de la alerta.
+- 2026-10-20 14:39 CST — Diferida la alerta de plan generado hasta conocer si el modal está cerrado/oculto al recibir la respuesta; se genera entonces antes de guardar. Se aplica igual al aviso de guardado o error del plan, y se amplía el POST autenticado de alertas a estados permitidos de plan.
+- 2026-10-20 14:37 CST — Quitada la etiqueta “Usuario:” de la barra superior; queda únicamente el nombre de la cuenta.
+- 2026-10-20 14:37 CST — Separada la etiqueta “Usuario:” del nombre de cuenta; la etiqueta queda más pequeña y sin negrita, manteniendo el nombre destacado.
+- 2026-10-20 14:36 CST — Aumentados el tamaño y el peso tipográfico del nombre de usuario en la barra superior.
+- 2026-10-20 14:36 CST — Movido el botón de alertas a la barra superior junto al nombre de usuario. El perfil autenticado ahora incluye el nombre de la cuenta y se muestra en esa barra.
+- 2026-10-20 14:33 CST — Ajustado el ancho de las pistas del grid en tarjetas de alertas para evitar que el centrado global de botones comprima el mensaje guardado y deje márgenes laterales mayores.
+- 2026-10-20 14:33 CST — Alineado el contenido de las tarjetas de alertas a la izquierda; se anuló la alineación centrada heredada de los estilos globales de botones.
+- 2026-10-20 14:32 CST — Corregida la alerta perdida al cerrar el modal de comida durante el análisis: el registro responde primero y el cliente crea el aviso solo si el modal está cerrado o la pestaña oculta al llegar resultado/pregunta/error. Añadido POST autenticado y limitado por tasa a `/api/notifications` para esos avisos diferidos.
+- 2026-10-20 14:29 CST — Compactados los contenedores de mensajes del modal de alertas con menor padding y separación vertical.
+- 2026-10-20 14:29 CST — Se evita crear alertas redundantes al responder comidas, entrenamientos o planes cuando el modal correspondiente estaba abierto y la pestaña visible al enviar. El servidor omite avisos de pregunta, guardado y error para esos flujos; si el modal estaba cerrado o la pestaña oculta, conserva las alertas.
+- 2026-10-20 14:24 CST — Mejorada la usabilidad del modal de notificaciones con filtro por lectura/tipo, acción para marcar las alertas visibles como leídas, mensajes vacíos/carga/errores y CTA por aviso. Sustituido el emoji de campana por un icono SVG lineal minimalista.
+- 2026-10-20 — Corregida falla de persistencia de comidas `MYSQL_1267_HY000`: la consulta que resolvía alertas pendientes comparaba un `ENUM` con expresión UTF-8 de collation distinta. Se fija la collation de las comparaciones a `utf8mb4_unicode_ci`. Diagnóstico mediante errores MySQL consultados por trace_id; no se repitió ni ejecutó el registro.
+- 2026-10-20 14:14 CST — Centro persistente de alertas: agregado badge de no leídas, modal con preguntas/guardados/generados/errores, marcado de lectura y rutas autenticadas por cuenta. Comidas registran el aviso en la misma transacción; entrenamiento manual/Garmin y planes notifican resultados. Añadidas migraciones numeradas, semilla sintética solo para cuentas dummy y documentación de esquema. Pruebas escritas, no ejecutadas.
+- 2026-10-20 13:38 CST — Acciones rápidas: separado 8 px el texto de las animaciones de carga de comida, entrenamiento y plan.
+- 2026-10-20 13:36 CST — Plan de entrenamiento: el botón externo «Crear plan» muestra el indicador de carga mientras se genera, incluso si se cierra el modal.
+- 2026-10-20 13:32 CST — Registro manual de entrenamiento: el botón principal indica carga durante análisis/guardado y permite reabrir el modal sin reiniciar ni duplicar la operación.
+- 2026-10-20 13:34 CST — Registro de entrenamiento: al reabrir el modal se conserva el historial de mensajes y no se prepara una sesión nueva; si falla la preparación, se permite reintentar.
+- 2026-10-20 13:30 CST — Registrar comidas: el botón principal permanece disponible durante el análisis para reabrir el modal; `foodPending` sigue bloqueando envíos duplicados. Actualizada la prueba de regresión, sin ejecutarla.
+- 2026-10-20 13:24 CST — Formularios de comidas, entrenamiento y plan: inputs con esquinas rectas mediante estilos CSS específicos, sin modificar estructura ni comportamiento.
+- 2026-10-20 13:26 CST — Crear plan: textarea en una fila propia y botones de acción debajo, alineados al final como en registrar comidas.
+- 2026-10-20 13:28 CST — Crear plan: reunidos enviar, guardar y cerrar en una sola barra inferior con separación y ajuste adaptable a pantallas estrechas.
 - 2026-10-20 10:42 CST — Si falla la preparación de sesión de comidas, ahora se muestra el aviso solicitado en rojo y quedan deshabilitados el campo y el botón de envío; el envío también verifica que la sesión esté lista.
 - 2026-10-20 10:42 CST — Actualizado `./pull` para hacer fast-forward del repositorio hermano `garmin-connect-mcp` antes de recrear los contenedores; aclarada la regla operativa en `AGENTS.md`.
 - 2026-10-20 10:14 CST — Montada la carpeta hermana `../garmin-connect-mcp` como solo lectura en `/app/garmin-connect-mcp` dentro del contenedor Nutri, ubicación que espera el código MCP actual.
@@ -288,3 +311,4 @@
 - 2026-10-20 13:51 CST — OpenCode: el historial V2 de mensajes no contiene un elemento `type: idle`; el adaptador ahora espera el endpoint V2 `/api/experimental/session/{id}/wait` antes de leer la respuesta completa, evitando el spinner indefinido al registrar comidas.
 
 - 2026-10-20 13:55 CST — Registro de comidas: al enviar una descripción, el indicador ahora cambia de “Preparando la sesión” a “Analizando los alimentos”, evitando mostrar una fase ya terminada mientras OpenCode responde.
+- 2026-10-20 13:21 CST — Pull `47c080e`: combinado el transporte OpenCode remoto con la configuración dinámica local de comidas y la limpieza de sesiones anteriores cuando cambia la configuración; restaurado `configuracion-sesion.json`. Se conserva el endpoint remoto `/wait`.

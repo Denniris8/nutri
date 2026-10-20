@@ -259,7 +259,7 @@ test('opening Registrar comida asks the authenticated backend for its private Op
   assert.equal(elements['#registerFoodDialog'].open, true);
 });
 
-test('food save clears the description and keeps loading visible if the modal closes before response', async () => {
+test('food modal can reopen during analysis without resubmitting the request', async () => {
   let finishRequest;
   const { elements } = loadFlow('', () => new Promise((resolve) => { finishRequest = resolve; }));
   elements['#foodDescription'].value = '150 g de pollo';
@@ -269,9 +269,12 @@ test('food save clears the description and keeps loading visible if the modal cl
   assert.equal(elements['#foodLoading'].hidden, false);
   assert.equal(elements['#foodButtonLoading'].hidden, false);
   assert.equal(elements['#registerFoodButton'].attributes['aria-busy'], 'true');
-  assert.equal(elements['#registerFoodButton'].disabled, true);
+  assert.equal(elements['#registerFoodButton'].disabled, false);
   elements['#registerFoodDialog'].close();
   assert.equal(elements['#foodButtonLoading'].hidden, false);
+  elements['#registerFoodButton'].dispatch('click');
+  assert.equal(elements['#registerFoodDialog'].open, true);
+  assert.equal(elements['#saveFoodButton'].disabled, true);
   finishRequest({ ok: true, json: async () => ({ message: 'Descripción enviada.' }) });
   await submission;
   assert.match(elements['#foodEntryFeedback'].textContent, /Descripción enviada.*agregar alimentos o corregirlos/);
