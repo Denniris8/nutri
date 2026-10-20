@@ -2,6 +2,7 @@
 
 ## 2026-10-20
 
+- 2026-10-20 10:42 CST — Actualizado `./pull` para hacer fast-forward del repositorio hermano `garmin-connect-mcp` antes de recrear los contenedores; aclarada la regla operativa en `AGENTS.md`.
 - 2026-10-20 10:14 CST — Montada la carpeta hermana `../garmin-connect-mcp` como solo lectura en `/app/garmin-connect-mcp` dentro del contenedor Nutri, ubicación que espera el código MCP actual.
 - 2026-10-20 10:14 CST — Añadido el script raíz `pull`: actualiza el repositorio con `git pull --ff-only` y recrea los servicios Compose para que Nutri ejecute las migraciones pendientes al arrancar.
 - 2026-10-20 10:14 CST — Añadido runner de migraciones SQL versionadas en `mysql/migrations/`; el servicio de la app lo ejecuta antes de iniciar y registra checksums para impedir editar migraciones aplicadas. Añadida regla confirmada en `AGENTS.md`; `git pull` no se automatiza por hook y requiere reiniciar/recrear `nutri`.
