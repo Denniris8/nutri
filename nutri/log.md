@@ -268,3 +268,6 @@
 - 2026-10-19 21:59 CST — Telegram: cola protegida con allowlist estricta y vacía ya no abre el bot al público; los reintentos automáticos se limitan a GET para no duplicar operaciones, las consultas de permisos/formularios se paralelizan y los temporizadores de espera se limpian al resolver. Se restauró el flujo documentado de texto libre y respuestas a formularios.
 - 2026-10-20 11:17 CST — `./pull` ahora recrea solo el servicio `nutri`; el runner aplica ahí las migraciones pendientes y MySQL permanece activo con su volumen intacto.
 - 2026-10-20 11:17 CST — `./pull` ahora compara los commits antes/después del pull y solo reconstruye/recrea `tunnel` o `grammy` si hubo cambios en sus carpetas; Nutri sigue recreándose para ejecutar el migrador y MySQL se conserva.
+- 2026-10-20 11:26 CST — Documentado en `pull` que las migraciones se aplican al arrancar Nutri y MySQL no se recrea.
+- 2026-10-20 11:28 CST — Añadido `tunnel/AGENTS.md` con el comportamiento actual verificado, manejo de configuración sensible, reinicios, timer externo y actualización mediante `./pull`.
+- 2026-10-20 11:30 CST — Túnel: añadido chequeo HTTP cada 15 minutos a la URL pública; conserva el enlace en HTTP 200 y termina `cloudflared` ante fallo para que Docker regenere y notifique otro. Si no obtiene URL al arrancar, también fuerza el reinicio.

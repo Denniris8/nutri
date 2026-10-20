@@ -5,6 +5,7 @@ root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 before=$(git -C "$root" rev-parse HEAD)
 git -C "$root" pull --ff-only
 after=$(git -C "$root" rev-parse HEAD)
+# MySQL never needs recreation for migrations; Nutri applies them on startup.
 docker compose --project-directory "$root/nutri" -f "$root/nutri/docker-compose.yml" up -d --force-recreate nutri
 
 if ! git -C "$root" diff --quiet "$before" "$after" -- tunnel/; then

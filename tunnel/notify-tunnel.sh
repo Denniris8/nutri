@@ -52,7 +52,32 @@ if [ -n "$URL" ]; then
 else
   echo "[tunnel] No se obtuvo URL en 60s. Ultimas lineas de cloudflared:"
   tail -5 "$LOG"
+  kill "$CF_PID" 2>/dev/null || true
+  wait "$CF_PID" 2>/dev/null || true
+  exit 1
 fi
 
-# Mantener el contenedor vivo mientras corra cloudflared
+# Renovar si la página pública deja de responder con HTTP 200.
+monitor_tunnel() {
+  while kill -0 "$CF_PID" 2>/dev/null; do
+    sleep 900
+    kill -0 "$CF_PID" 2>/dev/null || return
+    status=$(curl -sS --connect-timeout 10 --max-time 30 -o /dev/null -w '%{http_code}' "$URL/" 2>/dev/null)
+    curl_status=$?
+    [ "$curl_status" -eq 0 ] || status=000
+    if [ "$status" != 200 ]; then
+      echo "[tunnel] La página pública respondió HTTP $status; reiniciando para obtener otro enlace."
+      kill "$CF_PID" 2>/dev/null || true
+      return
+    fi
+    echo "[tunnel] Comprobación HTTP 200; se conserva la URL actual."
+  done
+}
+
+monitor_tunnel &
+MONITOR_PID=$!
 wait "$CF_PID"
+CF_STATUS=$?
+kill "$MONITOR_PID" 2>/dev/null || true
+wait "$MONITOR_PID" 2>/dev/null || true
+exit "$CF_STATUS"
