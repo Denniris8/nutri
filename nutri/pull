@@ -1,7 +1,0 @@
-#!/bin/sh
-set -eu
-
-cd "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-git pull --ff-only
-git -C ../garmin-connect-mcp pull --ff-only
-docker compose up -d --force-recreate
