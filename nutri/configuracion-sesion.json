@@ -1,0 +1,12 @@
+{
+  "model": {
+    "providerID": "openai",
+    "modelID": "gpt-6-luna"
+  },
+  "agent": "build",
+  "variant": null,
+  "requestTimeoutMs": 600000,
+  "usdaTimeoutMs": 10000,
+  "maxFoodItems": 12,
+  "usdaCandidateLimit": 10
+}

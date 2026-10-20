@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#101411">
+  <title>Dashboard Nutricional</title>
+  <link rel="stylesheet" href="/dashboard_nutricional.css?v=43">
+  <link rel="stylesheet" href="/notifications.css">
+</head>
+<body>
+  <main class="app">
+    <div class="dashboard-toolbar">
+      <p id="activeUserName" class="active-user-name">Usuario activo: —</p>
+      <p id="testAccountNotice" class="test-account-notice" hidden></p>
+    </div>
+    <nav class="view-nav" aria-label="Secciones del dashboard">
+      <button type="button" data-dashboard-tab="today" aria-controls="todayView" aria-current="page">Hoy</button>
+      <button type="button" data-dashboard-tab="progress" aria-controls="progressView">Progreso</button>
+      <button type="button" data-dashboard-tab="more" aria-controls="moreView">Más</button>
+    </nav>
+
+    <div class="error" id="errorBox" aria-live="polite"></div>
+
+    <section class="dashboard-view" id="todayView" data-dashboard-view="today" aria-labelledby="todayTitle">
+      <section class="day-context panel" aria-label="Día seleccionado">
+        <div class="day-context-heading">
+          <label for="daySelect">Día seleccionado</label>
+        </div>
+        <div class="day-navigation">
+          <button id="previousDayButton" class="button-muted day-nav-button" type="button" aria-label="Día anterior" title="Día anterior">‹</button>
+          <input id="daySelect" type="date" aria-label="Seleccionar día">
+          <button id="nextDayButton" class="button-muted day-nav-button" type="button" aria-label="Día siguiente" title="Día siguiente">›</button>
+        </div>
+        <div class="day-context-meta">
+          <span><strong id="mealCount">0</strong> comidas registradas</span>
+          <span>Pasos · <time id="dailyStepsDate">fecha seleccionada</time>: <strong id="dailyStepsCount" role="status" aria-live="polite">—</strong></span>
+        </div>
+      </section>
+      <header class="view-heading">
+        <div>
+          <h1 id="todayTitle" tabindex="-1">Objetivos nutricionales</h1>
+        </div>
+        <div class="quick-actions">
+          <button id="registerFoodButton" type="button" aria-busy="false">Registrar comida <span id="foodButtonLoading" class="assistant-thinking" aria-hidden="true" hidden></span></button>
+          <button id="addTrainingButton" class="button-training" type="button" aria-label="Guardar sesión de entrenamiento" title="Guardar sesión de entrenamiento">Registrar entrenamiento</button>
+          <button id="createTrainingPlanButton" class="button-plan" type="button">Crear plan</button>
+        </div>
+      </header>
+
+      <div class="macro-section-heading">
+        <h2>Objetivos y consumo de hoy</h2>
+      </div>
+      <section class="cards" id="macroCards" aria-label="Macros consumidos en el día seleccionado" aria-live="polite"></section>
+      <section class="panel panel-pad training-energy-summary" aria-labelledby="trainingEnergySummaryTitle">
+        <div class="section-head"><div><h2 id="trainingEnergySummaryTitle">Gasto y balance parcial</h2><p>El balance usa el metabolismo basal y el ejercicio registrado; no equivale al gasto total diario.</p></div></div>
+        <div id="trainingEnergySummaryValues" class="training-energy-summary-values"></div>
+        <p id="trainingEnergySummaryWarning" class="macro-training-warning" hidden></p>
+      </section>
+      <details class="panel panel-pad food-day-list" aria-labelledby="planTitle" open>
+        <summary class="collapsible-summary section-head"><div><h2 id="planTitle">Planes creados</h2><p>Tus últimos 3 planes guardados.</p></div></summary>
+        <ul id="savedTrainingPlans" class="saved-training-plans" aria-label="Últimos 3 planes guardados" aria-busy="true"><li class="hint" role="status">Cargando planes guardados…</li></ul>
+      </details>
+      <details class="panel panel-pad food-day-list" aria-labelledby="foodEntriesTitle">
+        <summary class="collapsible-summary section-head"><div><h2 id="foodEntriesTitle">Alimentos guardados</h2><p>Cada envío aparece por separado con su hora, alimentos y macros.</p></div></summary>
+        <div id="foodEntriesList" class="meals" aria-live="polite" aria-busy="true"><div class="empty">Cargando alimentos guardados…</div></div>
+      </details>
+      <details class="panel panel-pad food-day-list" aria-labelledby="trainingEntriesTitle">
+        <summary class="collapsible-summary section-head"><div><h2 id="trainingEntriesTitle">Entrenamientos guardados</h2><p>Sesiones registradas del día nutricional seleccionado.</p></div></summary>
+        <div id="trainingEntriesList" class="meals" aria-live="polite" aria-busy="true"><div class="empty">Cargando entrenamientos guardados…</div></div>
+      </details>
+    </section>
+
+    <section class="dashboard-view" id="progressView" data-dashboard-view="progress" aria-labelledby="progressTitle" hidden>
+      <header class="view-heading"><div><h1 id="progressTitle" tabindex="-1">Progreso</h1><p>Compara tendencias y mediciones registradas.</p></div></header>
+      <section class="panel panel-pad progress-range">
+        <label for="rangeSelect">Periodo de análisis</label>
+        <select id="rangeSelect" aria-label="Seleccionar rango de lectura">
+          <option value="7">7 días</option>
+          <option value="14">14 días</option>
+          <option value="30" selected>30 días</option>
+        </select>
+      </section>
+      <section class="panel panel-pad progress-chart">
+        <div class="section-head"><div><h2>Objetivo y consumo</h2><p>Últimos días disponibles en el periodo.</p></div></div>
+        <div class="chart-frame"><div class="chart-scroll"><div class="trend-grid" id="trendCharts"></div></div></div>
+      </section>
+      <details class="panel panel-pad biometric-panel">
+        <summary class="biometric-head collapsible-summary">
+          <div><h2>Composición corporal</h2><p>MG actual, MME actual y ratio derivados de registros reales.</p></div>
+        </summary>
+        <div class="collapsible-body quality-section" id="bodyCompositionPanel"></div>
+      </details>
+      <details class="panel panel-pad biometric-panel" id="garminPanel" hidden>
+        <summary class="biometric-head collapsible-summary">
+          <div><h2>Garmin · actividad y recuperación</h2><p>Sincronización explícita; la lectura no modifica objetivos nutricionales.</p></div>
+        </summary>
+        <div class="collapsible-body quality-section garmin-section">
+          <div class="garmin-toolbar">
+            <button id="garminSyncDayButton" type="button">Sincronizar este día</button>
+            <button id="garminSyncWeekButton" class="button-muted" type="button">Sincronizar 7 días</button>
+            <span id="garminSyncStatus" class="garmin-sync-status" role="status" aria-live="polite">Consultando estado del archivo…</span>
+          </div>
+          <div id="garminDataCards" class="insight-grid"></div>
+          <div id="garminActivitiesPanel"></div>
+          <div id="garminDaysPanel"></div>
+          <div id="garminRawPanel" class="garmin-raw-panel"></div>
+        </div>
+      </details>
+    </section>
+
+    <section class="dashboard-view" id="moreView" data-dashboard-view="more" aria-labelledby="moreTitle" hidden>
+      <header class="view-heading"><div><h1 id="moreTitle" tabindex="-1">Más</h1><p>Mediciones y preferencias.</p></div></header>
+      <section class="panel panel-pad" aria-labelledby="accountProfileTitle">
+        <div class="section-head"><div><h2 id="accountProfileTitle">Perfil de cuenta</h2><p>Datos usados para el contexto nutricional.</p></div></div>
+        <form id="accountProfileForm">
+          <label for="accountHeightCm">Estatura medida (cm, opcional)</label>
+          <input id="accountHeightCm" type="number" min="80" max="250" step="0.1" inputmode="decimal">
+          <label for="accountSexSelect">Sexo registrado</label>
+          <select id="accountSexSelect" required><option value="">Cargando…</option><option value="masculino">Masculino</option><option value="femenino">Femenino</option><option value="otro">Otro</option></select>
+          <div id="accountTmbSummary" class="hint" role="status" aria-live="polite">Cargando metabolismo basal del perfil…</div>
+          <p id="accountProfileFeedback" role="status" aria-live="polite"></p>
+          <button id="saveAccountProfileButton" type="submit">Guardar perfil</button>
+        </form>
+      </section>
+      <section class="more-actions" aria-label="Más opciones">
+        <button id="moreBiometricsButton" class="panel more-action" type="button"><strong>Registros biométricos</strong><span>Peso y composición corporal</span></button>
+        <button id="morePlicometroButton" class="panel more-action" type="button"><strong>Registros de plicómetro</strong><span>Mediciones de pliegues</span></button>
+        <button id="moreOptionsButton" class="panel more-action" type="button"><strong>Opciones</strong><span>Tema y preferencias de vista</span></button>
+        <button id="morePreferencesButton" class="panel more-action" type="button"><strong>Preferencias personales</strong><span>Alimentación, ventana nutricional y Garmin Connect</span></button>
+        <button id="logoutButton" class="panel more-action menu-logout-card" type="button"><strong>Cerrar sesión</strong><span>Salir de tu cuenta</span></button>
+        <button id="deleteAccountButton" class="panel more-action menu-delete-card" type="button"><strong>Eliminar usuario</strong><span>Eliminar permanentemente tu cuenta y sus datos asociados</span></button>
+      </section>
+      <section class="integration-settings" id="integrationSettings" aria-labelledby="garminSettingsTitle" hidden>
+        <header class="integration-heading">
+          <div class="integration-heading-copy">
+            <span class="integration-kicker">Conexiones</span>
+            <h2 id="garminSettingsTitle">Dispositivos e integraciones</h2>
+            <p>Conecta Garmin Connect para incorporar actividad y métricas del dispositivo.</p>
+          </div>
+          <span class="integration-mark" aria-hidden="true">G</span>
+        </header>
+        <article class="integration-card" aria-labelledby="garminCardTitle">
+          <div class="integration-card-head">
+            <div class="integration-provider">
+              <span class="integration-provider-icon" aria-hidden="true">⌚</span>
+              <div><h3 id="garminCardTitle">Dispositivo principal</h3><p>Selecciona el dispositivo que utilizas</p></div>
+            </div>
+            <span id="garminConnectionStatus" class="integration-status" role="status" aria-live="polite">Consultando conexión…</span>
+          </div>
+          <form id="garminConnectionForm" class="integration-form">
+            <fieldset class="integration-choice-group">
+              <legend>Dispositivo principal</legend>
+              <div class="integration-choice-grid">
+                <label class="integration-choice"><input type="radio" name="integrationDevice" value="ninguno" required><span><strong>No uso ninguno</strong><small>Continuar con el seguimiento manual.</small></span></label>
+                <label class="integration-choice"><input type="radio" name="integrationDevice" value="garmin" required><span><strong>Garmin Connect</strong><small>Conectar para incorporar actividad y métricas diarias.</small></span></label>
+              </div>
+            </fieldset>
+            <fieldset id="integrationCredentialFields" class="integration-credentials" hidden>
+              <legend>Cuenta Garmin Connect</legend>
+              <div class="integration-fields">
+                <label for="garminUsername">Correo electrónico<input id="garminUsername" type="email" autocomplete="username" placeholder="nombre@correo.com"></label>
+                <label for="garminPassword">Contraseña<input id="garminPassword" type="password" autocomplete="new-password" placeholder="Contraseña de Garmin Connect"></label>
+              </div>
+              <div class="integration-form-footer">
+                <p>Prueba la cuenta antes de guardarla. Las credenciales solo se guardan si Garmin Connect confirma el acceso.</p>
+                <button id="verifyGarminDashboardButton" class="button-muted" type="button">Probar cuenta Garmin</button>
+              </div>
+            </fieldset>
+            <div class="integration-form-footer">
+              <p id="integrationCredentialNote">Elige el dispositivo que utilizas.</p>
+              <button id="saveIntegrationButton" type="submit">Guardar dispositivo</button>
+            </div>
+          </form>
+        </article>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="actionPlanDialog" class="action-plan-dialog" aria-labelledby="actionPlanDialogTitle">
+    <form id="actionPlanDialogForm">
+      <h2 id="actionPlanDialogTitle">Actualizar plan de acción</h2>
+      <p>¿Quieres agregar algún dato u objetivo extra? Es opcional; el plan también se puede generar con la información ya registrada.</p>
+      <label for="actionPlanExtraData">Información adicional</label>
+      <textarea id="actionPlanExtraData" maxlength="1200" placeholder="Ej.: 2 g de proteína/kg de peso; priorizar fuerza 3 días/semana; más carbohidratos en días de entrenamiento."></textarea>
+      <div class="action-plan-dialog-actions">
+        <button id="cancelActionPlanUpdate" class="button-muted" type="button">Cancelar</button>
+        <button id="confirmActionPlanUpdate" type="submit">Generar plan</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="modal" id="reportModal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="reportModalTitle">
+      <div class="modal-head">
+        <div>
+          <h3 class="modal-title" id="reportModalTitle">Ultimo reporte</h3>
+          <div class="modal-meta" id="reportModalMeta">-</div>
+        </div>
+        <button type="button" class="icon-close" id="closeReportModal" aria-label="Cerrar">×</button>
+      </div>
+      <div class="modal-body" id="reportModalBody"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="exportModal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="exportModalTitle">
+      <div class="modal-head">
+        <div>
+          <h3 class="modal-title" id="exportModalTitle">Exportacion y compartir</h3>
+          <div class="modal-meta">Selecciona el contenido para PDF/compartir</div>
+        </div>
+        <button type="button" class="icon-close" id="closeExportModal" aria-label="Cerrar">×</button>
+      </div>
+      <div class="modal-body export-modal-body">
+        <ul class="export-options">
+          <li class="export-option"><input type="checkbox" id="expDayData" checked><label for="expDayData">1 - Datos del día</label></li>
+          <li class="export-option"><input type="checkbox" id="expWeekData"><label for="expWeekData">2 - Datos por semana (7 días)</label></li>
+          <li class="export-option"><input type="checkbox" id="expBiometric" checked><label for="expBiometric">3 - Datos biométricos</label></li>
+          <li class="export-option"><input type="checkbox" id="expPlico" checked><label for="expPlico">4 - Datos plicómetro</label></li>
+          <li class="export-option"><input type="checkbox" id="expMeals" checked><label for="expMeals">5 - Comidas registradas</label></li>
+          <li class="export-option"><input type="checkbox" id="expReport" checked><label for="expReport">6 - Reporte nutricional (último)</label></li>
+          <li class="export-option"><input type="checkbox" id="expAnalysis" checked><label for="expAnalysis">7 - Calidad, composición y objetivos</label></li>
+        </ul>
+        <div class="export-preview" id="exportPreview">Vista previa de exportación pendiente.</div>
+        <div class="hero-actions">
+          <button id="generatePdfButton" type="button">Generar PDF</button>
+          <button id="shareSummaryButton" class="button-muted" type="button">Compartir</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="sourcesModal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="sourcesModalTitle">
+      <div class="modal-head">
+        <div>
+          <h3 class="modal-title" id="sourcesModalTitle">Fuentes del evento</h3>
+          <div class="modal-meta" id="sourcesModalMeta">-</div>
+        </div>
+        <button type="button" class="icon-close" id="closeSourcesModal" aria-label="Cerrar">×</button>
+      </div>
+      <div class="modal-body source-modal-body" id="sourcesModalBody"></div>
+    </div>
+  </div>
+
+  <div class="modal" id="assistantModal" aria-hidden="true">
+    <section class="modal-card assistant-card" role="dialog" aria-modal="true" aria-labelledby="assistantTitle">
+      <div class="modal-head">
+        <div>
+          <h3 class="modal-title assistant-title" id="assistantTitle">
+            Asistente
+            <span id="assistantThinking" class="assistant-thinking" role="status" aria-label="El asistente está generando una respuesta" title="El asistente está pensando" hidden></span>
+          </h3>
+          <div class="modal-meta" id="assistantStatus" role="status">Conectando…</div>
+        </div>
+        <div class="assistant-head-actions">
+          <button type="button" class="button-muted" id="assistantNewChat">Nueva conversación</button>
+          <button type="button" class="icon-close" id="assistantClose" aria-label="Cerrar">×</button>
+        </div>
+      </div>
+      <div class="assistant-content">
+        <div class="assistant-messages" id="assistantMessages" role="log" aria-live="polite" aria-relevant="additions text"></div>
+        <div class="assistant-pending" id="assistantPending" hidden></div>
+        <p class="assistant-error" id="assistantError" role="alert" aria-live="assertive"></p>
+        <form class="assistant-composer" id="assistantForm">
+          <label class="sr-only" for="assistantInput">Mensaje para el asistente</label>
+          <textarea id="assistantInput" rows="3" maxlength="5000" placeholder="Escribe un mensaje…" required></textarea>
+          <div class="assistant-composer-actions">
+            <span>Máximo 5,000 caracteres. Las acciones sensibles pueden pedir autorización.</span>
+            <div>
+              <button type="button" class="button-muted" id="assistantInterrupt" hidden>Interrumpir</button>
+              <button type="submit" id="assistantSend">Enviar</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </section>
+  </div>
+
+  <dialog id="biometricsModal" class="more-form-dialog" aria-labelledby="biometricsModalTitle">
+      <header class="more-form-header">
+        <div>
+          <h2 id="biometricsModalTitle">Registros biométricos</h2>
+          <p>El peso es obligatorio; las métricas de composición son opcionales y se habilitan para mediciones BIA.</p>
+        </div>
+        <button type="button" class="icon-close" id="closeBiometricsModal" aria-label="Cerrar">×</button>
+      </header>
+      <div class="more-form-body">
+        <form id="biometricsForm">
+          <label for="biometricWeight">Peso (Weight) kg * (manual o desde báscula)</label>
+          <input id="biometricWeight" type="number" min="20" max="400" step="0.1" inputmode="decimal" required>
+          <label for="biometricSource">Fuente de la medición</label>
+           <select id="biometricSource" aria-controls="biometricBiaFields" aria-expanded="false">
+            <option value="manual" selected>Peso medido manualmente (sin BIA)</option>
+            <option value="bia">Lectura de báscula BIA</option>
+          </select>
+           <p class="hint">El peso manual basta para registrar una medición. Elige BIA para agregar valores opcionales informados por la báscula.</p>
+          <div id="biometricBiaFields" hidden>
+            <div class="form-grid-2">
+              <div>
+                <label for="biometricBmi">Índice de masa corporal (BMI / IMC) (opcional)</label>
+                <input id="biometricBmi" type="number" min="8" max="90" step="0.1" inputmode="decimal">
+              </div>
+              <div>
+                  <label for="biometricBodyFat">Grasa (Fat) corporal % (opcional)</label>
+                <input id="biometricBodyFat" type="number" min="0" max="80" step="0.1" inputmode="decimal">
+              </div>
+            </div>
+            <div class="form-grid-2">
+              <div>
+                  <label for="biometricMuscle">Músculo (Muscle) esquelético % (opcional)</label>
+                <input id="biometricMuscle" type="number" min="0" max="80" step="0.1" inputmode="decimal">
+              </div>
+              <div>
+                <label for="biometricBmr">Metabolismo basal (RM / Resting Metabolism) kcal (opcional)</label>
+                <input id="biometricBmr" type="number" min="800" max="20000" step="1" inputmode="numeric">
+              </div>
+            </div>
+            <div class="form-grid-2">
+              <div>
+                  <label for="biometricVisceral">Grasa visceral (Visceral Fat) nivel (opcional)</label>
+                <input id="biometricVisceral" type="number" min="0" max="59" step="1" inputmode="numeric">
+              </div>
+              <div>
+                  <label for="biometricBodyAge">Edad corporal (Body Age) años (opcional)</label>
+                <input id="biometricBodyAge" type="number" min="5" max="120" step="1" inputmode="numeric">
+              </div>
+            </div>
+          </div>
+          <label for="biometricNotes">Notas (opcional)</label>
+          <input id="biometricNotes" maxlength="1000" placeholder="Ej.: báscula mañana en ayunas…">
+          <p id="biometricsFormFeedback" role="alert" aria-live="polite"></p>
+          <button type="submit">Guardar registro biométrico</button>
+        </form>
+        <h4 class="biometric-history-title">Mediciones guardadas</h4>
+        <div id="biometricsTableBody" class="biometric-history" aria-live="polite"><div class="empty">Cargando mediciones guardadas…</div></div>
+      </div>
+  </dialog>
+
+  <dialog id="plicometroModal" class="more-form-dialog" aria-labelledby="plicometroModalTitle">
+    <header class="more-form-header">
+      <div><h2 id="plicometroModalTitle">Registros de plicómetro</h2><p>Registra los pliegues en milímetros; puedes dejar vacíos los que no mediste.</p></div>
+      <button type="button" class="icon-close" id="closePlicometroModal" aria-label="Cerrar">×</button>
+    </header>
+    <form id="plicometroForm" class="more-form-body">
+      <label for="plicometroDate">Fecha de medición</label>
+      <input id="plicometroDate" type="date" required>
+      <div class="form-grid-2">
+        <div><label for="plicometroTriceps">Tríceps (mm)</label><input id="plicometroTriceps" type="number" min="0" max="120" step="0.1" inputmode="decimal"></div>
+        <div><label for="plicometroBiceps">Bíceps (mm)</label><input id="plicometroBiceps" type="number" min="0" max="120" step="0.1" inputmode="decimal"></div>
+        <div><label for="plicometroSubescapular">Subescapular (mm)</label><input id="plicometroSubescapular" type="number" min="0" max="120" step="0.1" inputmode="decimal"></div>
+        <div><label for="plicometroSuprailiaco">Suprailíaco (mm)</label><input id="plicometroSuprailiaco" type="number" min="0" max="120" step="0.1" inputmode="decimal"></div>
+        <div><label for="plicometroAbdominal">Abdominal (mm)</label><input id="plicometroAbdominal" type="number" min="0" max="120" step="0.1" inputmode="decimal"></div>
+        <div><label for="plicometroMuslo">Muslo anterior (mm)</label><input id="plicometroMuslo" type="number" min="0" max="120" step="0.1" inputmode="decimal"></div>
+      </div>
+      <label for="plicometroPantorrilla">Pantorrilla (mm)</label>
+      <input id="plicometroPantorrilla" type="number" min="0" max="120" step="0.1" inputmode="decimal">
+      <p id="plicometroFormFeedback" role="status" aria-live="polite"></p>
+      <div class="form-actions"><button type="submit">Guardar registro</button><button type="button" class="button-muted" id="cancelPlicometroModal">Cancelar</button></div>
+      <h3 class="biometric-history-title">Mediciones guardadas</h3>
+      <div id="plicometroTableBody" class="biometric-history" aria-live="polite"></div>
+    </form>
+  </dialog>
+
+  <dialog id="registerFoodDialog" class="more-form-dialog" aria-labelledby="registerFoodTitle">
+    <header class="more-form-header">
+      <div><h2 id="registerFoodTitle">Registrar comida</h2><p>Si necesito aclarar algo, te preguntaré antes de guardar.</p></div>
+      <button id="closeFoodDialog" class="icon-close" type="button" aria-label="Cerrar">×</button>
+    </header>
+    <form id="registerFoodForm" class="more-form-body">
+      <div class="form-hints">
+        <p class="hint">De preferencia, pesa los alimentos en báscula para obtener datos más precisos.</p>
+        <p id="foodEntryDate" class="hint"></p>
+      </div>
+      <div id="foodChatThread" class="food-chat-thread" hidden>
+        <div id="foodChatMessages" class="food-chat-messages" aria-live="polite"></div>
+        <p id="foodLoading" class="food-loading" role="status" aria-live="polite" hidden><span class="assistant-thinking" aria-hidden="true"></span><span id="foodLoadingText">Esperando respuesta…</span></p>
+      </div>
+      <label id="foodDescriptionLabel" for="foodDescription">Alimentos consumidos</label>
+      <input id="foodDescription" class="food-chat-input" type="text" maxlength="5000" placeholder="Ej.: 150 g de pollo, 100 g de arroz cocido y 1 manzana" required>
+      <p id="foodEntryFeedback" role="status" aria-live="polite"></p>
+      <div class="action-plan-dialog-actions">
+        <button id="cancelFoodEntry" class="button-muted" type="button">Cancelar</button>
+        <button id="saveFoodButton" type="submit">Guardar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="trainingPlanDialog" class="more-form-dialog" aria-labelledby="trainingPlanDialogTitle">
+    <header class="more-form-header">
+      <div><h2 id="trainingPlanDialogTitle">Crear plan de entrenamiento</h2><p id="planSummaryText">Cuéntame tus objetivos y generaré un plan con tus datos registrados.</p></div>
+      <button id="closeTrainingPlanDialog" class="icon-close" type="button" aria-label="Cerrar">×</button>
+    </header>
+    <div id="planContent" class="more-form-body training-plan-chat">
+      <div class="food-chat-thread" aria-label="Conversación para crear tu plan de entrenamiento">
+        <div id="planChatMessages" class="food-chat-messages" aria-live="polite">
+          <div class="food-chat-message" data-role="assistant"><span class="food-chat-speaker">Asistente</span><p class="food-chat-text">Junto con los datos de tu perfil y tus preferencias personales, tus objetivos servirán para generar con IA un plan de entrenamiento especializado. Cuéntame qué quieres lograr con el mayor detalle posible.</p></div>
+        </div>
+        <p id="planLoading" class="food-loading" role="status" aria-live="polite" hidden><span class="assistant-thinking" aria-hidden="true"></span>Preparando tu plan…</p>
+      </div>
+      <label for="trainingPlanGoals">Tus objetivos</label>
+      <div class="training-plan-composer">
+        <textarea id="trainingPlanGoals" class="food-chat-input" maxlength="2000" rows="2" placeholder="Ej.: Quiero ganar fuerza y masa muscular, entrenar 4 días por semana y priorizar piernas. Tengo experiencia intermedia y dispongo de mancuernas y gimnasio."></textarea>
+        <div class="training-plan-actions">
+          <button id="sendTrainingPlanGoals" type="button">Enviar mensaje</button>
+          <button id="saveTrainingPlan" type="button" title="Guardar el plan generado" disabled hidden>Guardar</button>
+        </div>
+      </div>
+      <div class="action-plan-dialog-actions"><button id="cancelTrainingPlanDialog" class="button-muted" type="button">Cerrar</button></div>
+    </div>
+  </dialog>
+
+  <div class="modal" id="optionsModal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="optionsModalTitle">
+      <div class="modal-head">
+        <div>
+          <h3 class="modal-title" id="optionsModalTitle">Opciones</h3>
+          <div class="modal-meta">Preferencias de vista del dashboard.</div>
+        </div>
+        <button type="button" class="icon-close" id="closeOptionsModal" aria-label="Cerrar">×</button>
+      </div>
+      <div class="modal-body export-modal-body">
+        <div class="option-row">
+          <label for="darkModeToggle">Modo oscuro</label>
+          <span class="switch"><input type="checkbox" id="darkModeToggle" role="switch"><span class="switch-track"></span></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <dialog id="trainingModal" class="more-form-dialog" aria-labelledby="trainingModalTitle">
+    <header class="more-form-header">
+      <div><h2 id="trainingModalTitle">Registrar entrenamiento</h2><p>Describe tu sesión; incluye duración, intensidad y distancia si aplica.</p></div>
+      <button id="closeTrainingModal" class="icon-close" type="button" aria-label="Cerrar">×</button>
+    </header>
+    <div class="more-form-body training-ui-body">
+      <p class="hint">El gasto energético de una sesión puede ser estimado; no equivale a una medición de calorías activas del día.</p>
+      <div class="food-chat-thread" aria-label="Conversación de entrenamiento">
+        <div id="trainingChatMessages" class="food-chat-messages" aria-live="polite">
+          <div class="food-chat-message" data-role="assistant"><span class="food-chat-speaker">Asistente</span><p id="trainingInitialPrompt" class="food-chat-text">Cuéntame qué entrenamiento hiciste. Por ejemplo: actividad, tiempo, distancia e intensidad.</p></div>
+        </div>
+        <p id="trainingLoading" class="food-loading" role="status" aria-live="polite" hidden><span class="assistant-thinking" aria-hidden="true"></span><span id="trainingLoadingText">Preparando sesión…</span></p>
+      </div>
+      <div id="trainingDescriptionFields" class="training-description-fields">
+        <label for="trainingDescription">Descripción de la sesión</label>
+        <textarea id="trainingDescription" class="food-chat-input" maxlength="1200" placeholder="Ej.: entrenamiento de fuerza durante 45 minutos, intensidad moderada" aria-label="Describe tu entrenamiento"></textarea>
+        <p class="hint">Las calorías se estimarán; la sesión se guardará automáticamente cuando el cálculo esté completo.</p>
+      </div>
+      <p id="trainingFeedback" role="status" aria-live="polite"></p>
+      <fieldset id="trainingModeToggle" class="training-mode-toggle" aria-label="Modo para registrar entrenamiento" hidden>
+        <legend>Elige cómo registrar</legend>
+        <label><input type="radio" name="trainingMode" value="description" checked> Describir sesión</label>
+        <label><input type="radio" name="trainingMode" value="garmin"> Garmin Connect</label>
+      </fieldset>
+      <div class="action-plan-dialog-actions">
+        <button id="cancelTrainingModal" class="button-muted" type="button">Cancelar</button>
+        <button id="syncGarminTrainingButton" class="button-muted" type="button" hidden>Sincronizar con Garmin</button>
+        <button id="trainingAnalyzeButton" type="button">Enviar mensaje</button>
+      </div>
+    </div>
+  </dialog>
+  <div class="modal" id="nutritionWindowModal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="nutritionWindowModalTitle">
+      <div class="modal-head">
+        <div>
+          <h3 class="modal-title" id="nutritionWindowModalTitle">Ventana nutricional</h3>
+          <div class="modal-meta">Define cuándo empieza y termina tu día nutricional. Es la única fuente para agrupar tus comidas; el fin puede ser del día calendario siguiente.</div>
+        </div>
+        <button type="button" class="icon-close" id="closeNutritionWindowModal" aria-label="Cerrar">×</button>
+      </div>
+      <div class="modal-body">
+        <form id="nutritionWindowForm">
+          <label for="nutritionWindowStart">Inicio del día *</label>
+          <input id="nutritionWindowStart" type="time" required>
+          <label for="nutritionWindowEnd">Fin del día *</label>
+          <input id="nutritionWindowEnd" type="time" required>
+          <p id="nutritionWindowStatus" class="hint" role="status" aria-live="polite">Cargando tu ventana actual…</p>
+          <button type="submit">Guardar ventana</button>
+        </form>
+      </div>
+    </div>
+  </div>
+  <dialog id="deleteAccountDialog" class="more-form-dialog" aria-labelledby="deleteAccountTitle">
+    <header class="more-form-header"><div><h2 id="deleteAccountTitle">Eliminar usuario</h2><p>Se eliminarán tu cuenta y todos sus registros relacionados. Esta acción no se puede deshacer.</p></div><button id="closeDeleteAccount" class="icon-close" type="button" aria-label="Cerrar">×</button></header>
+    <form id="deleteAccountForm" class="more-form-body">
+      <label for="deleteAccountPassword">Confirma tu contraseña</label>
+      <input id="deleteAccountPassword" type="password" autocomplete="current-password" required>
+      <p id="deleteAccountError" role="alert" aria-live="polite"></p>
+      <div class="action-plan-dialog-actions">
+        <button id="cancelDeleteAccount" class="button-muted" type="button">Cancelar</button>
+        <button class="menu-delete-submit" type="submit">Eliminar usuario</button>
+      </div>
+    </form>
+  </dialog>
+  <dialog id="preferencesEditDialog" class="more-form-dialog" aria-labelledby="preferencesEditTitle">
+    <header class="more-form-header"><div><h2 id="preferencesEditTitle">Actualizar preferencias personales</h2><p>Corrige tus preferencias y guarda los cambios.</p></div><button id="closePreferencesEdit" class="icon-close" type="button" aria-label="Cerrar">×</button></header>
+    <form id="preferencesEditForm" class="more-form-body">
+      <label for="editDietPattern">Patrón alimentario<select id="editDietPattern" required><option value="">Selecciona…</option><option value="omnivoro">Omnívoro</option><option value="vegetariano">Vegetariano</option><option value="vegano">Vegano</option><option value="pescetariano">Pescetariano</option><option value="otro">Otro</option><option value="sin_preferencia">Sin preferencia</option></select></label>
+      <fieldset class="more-form-choice-group">
+        <legend>Dispositivos e integraciones</legend>
+        <label><input id="editDeviceModeManual" type="radio" name="editDeviceMode" value="ninguno" required><span><strong>No uso ninguno</strong><small>Seguiré el modo manual con mis registros y objetivos.</small></span></label>
+        <label><input id="editDeviceModeGarmin" type="radio" name="editDeviceMode" value="garmin" required><span><strong>Garmin Connect</strong><small>Probaré mi cuenta para habilitar la conexión Garmin.</small></span></label>
+      </fieldset>
+      <fieldset id="editGarminCredentialsSection" class="edit-garmin-credentials" hidden>
+        <legend>Cuenta Garmin Connect</legend>
+        <label for="editGarminUsername">Correo electrónico<input id="editGarminUsername" type="email" maxlength="254" autocomplete="username"></label>
+        <label for="editGarminPassword">Contraseña<input id="editGarminPassword" type="password" maxlength="256" autocomplete="new-password"></label>
+        <p id="editGarminCredentialsNote" class="hint" role="status" aria-live="polite">Prueba la cuenta antes de guardar. Las credenciales se almacenan cifradas.</p>
+        <div class="action-plan-dialog-actions">
+          <button id="editVerifyGarminButton" class="button-muted" type="button">Probar cuenta</button>
+          <button id="editUnlinkGarminButton" class="button-muted" type="button" hidden>Desvincular cuenta</button>
+        </div>
+      </fieldset>
+      <div class="form-grid-2">
+        <div><label for="editNutritionStartHour">Inicio · Hora (1–12)</label><input id="editNutritionStartHour" type="number" min="1" max="12" step="1" required></div>
+        <div><label for="editNutritionStartMinute">Inicio · Minutos</label><input id="editNutritionStartMinute" type="number" min="0" max="59" step="1" required></div>
+        <div><label for="editNutritionStartPeriod">Inicio · AM/PM</label><select id="editNutritionStartPeriod" required><option value="">Selecciona…</option><option value="AM">AM</option><option value="PM">PM</option></select></div>
+        <div><label for="editNutritionEndHour">Fin · Hora (1–12)</label><input id="editNutritionEndHour" type="number" min="1" max="12" step="1" required></div>
+        <div><label for="editNutritionEndMinute">Fin · Minutos</label><input id="editNutritionEndMinute" type="number" min="0" max="59" step="1" required></div>
+        <div><label for="editNutritionEndPeriod">Fin · AM/PM</label><select id="editNutritionEndPeriod" required><option value="">Selecciona…</option><option value="AM">AM</option><option value="PM">PM</option></select></div>
+      </div>
+      <p class="hint">Define el intervalo para contar y acumular los macros dentro del mismo día nutricional; puede cruzar la medianoche. Por ejemplo, de 9:00 AM a 2:00 AM del día siguiente.</p>
+      <label for="editPreferredFoods">Alimentos o tipos de comida que prefieres (opcional)<textarea id="editPreferredFoods" maxlength="800" placeholder="Ej.: pescado, comidas sencillas"></textarea></label>
+      <label for="editAvoidedFoods">Alimentos que prefieres evitar (opcional)<textarea id="editAvoidedFoods" maxlength="800" placeholder="Ej.: alimentos muy picantes"></textarea></label>
+      <p class="hint">Este campo es para gustos, no para alergias o restricciones médicas; esas requieren un registro separado.</p>
+      <div class="form-grid-2">
+        <label for="editAllergiesStatus">¿Cuál describe mejor tu situación?<select id="editAllergiesStatus" required><option value="">Selecciona…</option><option value="ninguna_conocida">No conozco alergias</option><option value="registradas">Sí, tengo alergias conocidas</option><option value="sin_informacion">No estoy seguro / prefiero no indicarlo</option></select></label>
+        <label for="editMedicationsStatus">¿Cuál describe mejor tu situación?<select id="editMedicationsStatus" required><option value="">Selecciona…</option><option value="ninguno">No tomo medicamentos de uso regular</option><option value="registrados">Sí, tomo medicamentos de uso regular</option><option value="sin_informacion">No estoy seguro / prefiero no indicarlo</option></select></label>
+      </div>
+      <label id="editAllergiesDetailsLabel" for="editAllergiesDetails" hidden>Indica el alérgeno y la reacción conocida, uno por línea</label>
+      <textarea id="editAllergiesDetails" maxlength="2000" placeholder="Ej.: cacahuate — urticaria" hidden></textarea>
+      <label id="editMedicationsDetailsLabel" for="editMedicationsDetails" hidden>Indica nombre, dosis y frecuencia tal como te lo indicaron, uno por línea</label>
+      <textarea id="editMedicationsDetails" maxlength="3000" placeholder="Ej.: medicamento, dosis y frecuencia prescritas" hidden></textarea>
+      <p class="hint">Se guardan como datos personales de salud para dar contexto; no modifican tratamientos ni sustituyen indicaciones médicas.</p>
+      <p id="preferencesEditFeedback" role="alert" aria-live="polite"></p>
+      <div class="action-plan-dialog-actions"><button id="cancelPreferencesEdit" class="button-muted" type="button">Cancelar</button><button id="savePreferencesEditButton" type="submit">Guardar cambios</button></div>
+    </form>
+  </dialog>
+  <dialog id="recordDeleteConfirmDialog" class="more-form-dialog record-delete-dialog" aria-labelledby="recordDeleteConfirmTitle">
+    <header class="more-form-header"><div><h2 id="recordDeleteConfirmTitle">Confirmar eliminación</h2><p id="recordDeleteConfirmMessage"></p></div><button id="closeRecordDeleteConfirm" class="icon-close" type="button" aria-label="Cancelar eliminación">×</button></header>
+    <div class="more-form-body"><div class="action-plan-dialog-actions"><button id="cancelRecordDeleteConfirm" class="button-muted" type="button">Cancelar</button><button id="acceptRecordDeleteConfirm" class="menu-delete-submit" type="button">Eliminar</button></div></div>
+  </dialog>
+  <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
+  <script src="/onboarding-flow.js?v=steps-daily-5" defer></script>
+</body>
+</html>

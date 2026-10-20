@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="/notifications.css">
+  <meta name="theme-color" content="#101411">
+  <title>Preferencias · Dashboard Nutricional</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101411; color: #edf2eb; }
+    body { margin: 0; padding: 2rem 1rem; }
+    main { width: min(100%, 760px); box-sizing: border-box; margin: 0 auto; padding: clamp(1.2rem, 4vw, 2.4rem); border: 1px solid #37423a; border-radius: 20px; background: #19211b; }
+    h1, h2 { margin-top: 0; } p, small { color: #b8c4b9; }
+    fieldset { min-width: 0; margin: 1.5rem 0; padding: 1rem; border: 1px solid #455345; border-radius: 14px; }
+    legend { padding: 0 .4rem; font-weight: 700; }
+    label { display: block; margin: .85rem 0 .4rem; }
+    input, select, textarea, button { width: 100%; box-sizing: border-box; padding: .75rem; border: 1px solid #536153; border-radius: 10px; color: inherit; background: #101411; font: inherit; }
+    textarea { min-height: 5rem; resize: vertical; }
+    input[type="radio"] { width: auto; margin-right: .5rem; accent-color: #b8de8b; }
+    .choice { display: flex; align-items: center; margin: .65rem 0; }
+    .choice label { margin: 0; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: .8rem; }
+    .device-choice-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: .8rem; }
+    .device-choice { display: flex; align-items: flex-start; gap: .65rem; margin: 0; padding: 1rem; border: 1px solid #455345; border-radius: 12px; background: #101411; cursor: pointer; }
+     .device-choice:has(input:checked) { border-color: #b8de8b; background: #202a21; }
+     #verifyGarminButton.is-verified, #verifyGarminButton.is-verified:disabled { background: #25834f; color: #fff; cursor: not-allowed; opacity: 1; }
+    .device-choice input[type="radio"] { flex: 0 0 auto; margin: .2rem 0 0; }
+    .device-choice span { display: grid; gap: .25rem; }
+    .device-choice small { line-height: 1.4; }
+    button { margin-top: 1rem; border: 0; background: #b8de8b; color: #172016; font-weight: 700; cursor: pointer; }
+    .button-cancel { background: #29352b; color: inherit; }
+    [hidden] { display: none !important; }
+    [role="alert"] { min-height: 1.4em; color: #ffaaa0; }
+  </style>
+</head>
+<body>
+  <main>
+    <p id="preferencesStep" class="eyebrow">Antes de entrar al dashboard · Paso 1 de 2</p>
+    <h1 id="preferencesTitle">Preferencias personales</h1>
+    <p id="preferencesIntro">Estas respuestas personalizan tu experiencia. No cambian las reglas comunes de seguridad ni sustituyen datos de salud.</p>
+    <p id="testDataNotice" role="status" hidden>Valores ficticios precargados para probar la pantalla; no describen a una persona real.</p>
+    <form id="preferencesForm">
+      <fieldset>
+        <legend>Ventana nutricional</legend>
+        <p><strong>Inicio del día nutricional</strong></p>
+        <div class="grid">
+          <div><label for="nutritionDayStartHour">Hora (1–12)</label><input id="nutritionDayStartHour" type="number" min="1" max="12" step="1" inputmode="numeric" required></div>
+          <div><label for="nutritionDayStartMinute">Minutos</label><input id="nutritionDayStartMinute" type="number" min="0" max="59" step="1" inputmode="numeric" placeholder="00" required></div>
+          <div><label for="nutritionDayStartPeriod">AM/PM</label><select id="nutritionDayStartPeriod" required><option value="">Selecciona…</option><option value="AM">AM</option><option value="PM">PM</option></select></div>
+        </div>
+        <p><strong>Final del día nutricional</strong></p>
+        <div class="grid">
+          <div><label for="nutritionDayEndHour">Hora (1–12)</label><input id="nutritionDayEndHour" type="number" min="1" max="12" step="1" inputmode="numeric" required></div>
+          <div><label for="nutritionDayEndMinute">Minutos</label><input id="nutritionDayEndMinute" type="number" min="0" max="59" step="1" inputmode="numeric" placeholder="00" required></div>
+          <div><label for="nutritionDayEndPeriod">AM/PM</label><select id="nutritionDayEndPeriod" required><option value="">Selecciona…</option><option value="AM">AM</option><option value="PM">PM</option></select></div>
+        </div>
+        <p><small>Define el intervalo para contar y acumular los macros dentro del mismo día nutricional; puede cruzar la medianoche. Por ejemplo, de 9:00 AM a 2:00 AM del día siguiente.</small></p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Dispositivos e integraciones</legend>
+        <div class="device-choice-grid" role="radiogroup" aria-label="Selecciona tu dispositivo principal">
+          <label class="device-choice"><input id="deviceModeManual" type="radio" name="deviceMode" value="ninguno" required><span><strong>No uso ninguno</strong><small>Seguiré el modo manual con mis registros y objetivos.</small></span></label>
+          <label class="device-choice"><input id="deviceModeGarmin" type="radio" name="deviceMode" value="garmin" required><span><strong>Garmin Connect</strong><small>Agregar datos de cuenta para una conexión futura.</small></span></label>
+        </div>
+        <div id="integrationCredentialsSection" hidden>
+          <label for="integrationUsername">Correo de Garmin Connect</label>
+          <input id="integrationUsername" type="email" maxlength="254" autocomplete="username">
+          <label for="integrationPassword">Contraseña de Garmin Connect</label>
+          <input id="integrationPassword" type="password" maxlength="256" autocomplete="new-password">
+           <p id="integrationCredentialsNote" role="status" aria-live="polite"><small>Prueba el acceso antes de guardar. Las credenciales se almacenan cifradas en tu cuenta.</small></p>
+          <button id="verifyGarminButton" type="button" class="button-cancel" hidden>Probar cuenta</button>
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Preferencias de alimentos</legend>
+        <label for="dietPattern">Patrón alimentario</label>
+        <select id="dietPattern" name="patronAlimentario" required>
+          <option value="">Selecciona…</option>
+          <option value="omnivoro">Omnívoro</option>
+          <option value="vegetariano">Vegetariano</option>
+          <option value="vegano">Vegano</option>
+          <option value="pescetariano">Pescetariano</option>
+          <option value="otro">Otro</option>
+          <option value="sin_preferencia">Sin preferencia</option>
+        </select>
+        <label for="preferredFoods">Alimentos o tipos de comida que prefieres (opcional)</label>
+        <textarea id="preferredFoods" maxlength="800" placeholder="Ej.: pescado, comidas sencillas"></textarea>
+        <label for="avoidedFoods">Alimentos que prefieres evitar (opcional)</label>
+        <textarea id="avoidedFoods" maxlength="800" placeholder="Ej.: alimentos muy picantes"></textarea>
+        <p><small>Este campo es para gustos, no para alergias o restricciones médicas; esas requieren un registro separado.</small></p>
+      </fieldset>
+
+      <fieldset>
+        <legend>Alergias conocidas</legend>
+        <label for="allergiesStatus">¿Cuál describe mejor tu situación?</label>
+        <select id="allergiesStatus" required>
+          <option value="">Selecciona…</option>
+          <option value="ninguna_conocida">No conozco alergias</option>
+          <option value="registradas">Sí, tengo alergias conocidas</option>
+          <option value="sin_informacion">No estoy seguro / prefiero no indicarlo</option>
+        </select>
+        <label id="allergiesDetailsLabel" for="allergiesDetails" hidden>Indica el alérgeno y la reacción conocida, uno por línea</label>
+        <textarea id="allergiesDetails" maxlength="2000" placeholder="Ej.: cacahuate — urticaria" hidden></textarea>
+      </fieldset>
+
+      <fieldset>
+        <legend>Medicamentos de uso permanente o regular</legend>
+        <label for="medicationsStatus">¿Cuál describe mejor tu situación?</label>
+        <select id="medicationsStatus" required>
+          <option value="">Selecciona…</option>
+          <option value="ninguno">No tomo medicamentos de uso regular</option>
+          <option value="registrados">Sí, tomo medicamentos de uso regular</option>
+          <option value="sin_informacion">No estoy seguro / prefiero no indicarlo</option>
+        </select>
+        <label id="medicationsDetailsLabel" for="medicationsDetails" hidden>Indica nombre, dosis y frecuencia tal como te lo indicaron, uno por línea</label>
+        <textarea id="medicationsDetails" maxlength="3000" placeholder="Ej.: medicamento, dosis y frecuencia prescritas" hidden></textarea>
+        <p><small>Se guardan como datos personales de salud para dar contexto; no modifican tratamientos ni sustituyen indicaciones médicas.</small></p>
+      </fieldset>
+      <p id="formError" role="alert" aria-live="polite"></p>
+      <button id="savePreferencesButton" type="submit">Guardar preferencias y continuar</button>
+      <button id="cancelPreferences" type="button" class="button-cancel">Cancelar</button>
+    </form>
+  </main>
+  <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
+  <script src="/onboarding-flow.js" defer></script>
+</body>
+</html>

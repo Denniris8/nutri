@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#101411">
+  <title>Términos y condiciones · Dashboard Nutricional</title>
+  <link rel="stylesheet" href="/dashboard_nutricional.css">
+  <link rel="stylesheet" href="/notifications.css">
+  <style>
+    .terms-panel { width: min(100%, 760px); margin: 6vh auto; }
+    .terms-intro, .terms-section p { color: var(--muted); }
+    .terms-content { display: grid; gap: 1rem; max-height: min(58vh, 620px); overflow-y: auto; margin: 1.25rem 0; padding-right: .5rem; }
+    .terms-section { padding: 1rem; border: 1px solid var(--line); border-radius: var(--shape-md); background: var(--panel-strong); }
+    .terms-section h2 { margin: 0 0 .4rem; font-size: var(--type-title); }
+    .terms-section p { margin: 0; }
+    .terms-example { border-left: 4px solid var(--accent); }
+    .terms-provisional { color: var(--md-sys-color-warning); font-weight: 650; }
+    .terms-actions { position: sticky; bottom: 0; padding-top: .75rem; background: var(--panel); }
+  </style>
+</head>
+<body>
+  <main class="app">
+    <section class="panel panel-pad terms-panel" aria-labelledby="termsTitle">
+      <p class="terms-provisional">Texto provisional · pendiente de revisión legal</p>
+      <h1 id="termsTitle">Términos y condiciones</h1>
+      <p class="terms-intro">Lee este ejemplo antes de decidir si quieres continuar usando el dashboard nutricional.</p>
+      <div id="termsContent" class="terms-content" tabindex="0" aria-label="Contenido de términos y condiciones">
+        <section class="terms-section">
+          <h2>1. Uso del dashboard</h2>
+          <p>La aplicación permite registrar y consultar información relacionada con alimentación, actividad física y objetivos personales. Usa el servicio de forma responsable y proporciona datos que reflejen lo que sabes; puedes dejar sin completar los datos que desconozcas.</p>
+        </section>
+        <section class="terms-section">
+          <h2>2. Información personal y de salud</h2>
+          <p>Al completar tu perfil o registrar datos, estos se asocian con tu cuenta para ofrecer las funciones del dashboard. Evita incluir información de otras personas sin su autorización. Antes de aceptar, consulta también el aviso de privacidad aplicable al servicio.</p>
+        </section>
+        <section class="terms-section">
+          <h2>3. Orientación nutricional</h2>
+          <p>Los cálculos y análisis pueden ser estimaciones basadas en los datos proporcionados; no son mediciones clínicas, diagnóstico ni sustituto de la atención de profesionales de salud. Verifica los resultados y consulta a un profesional para decisiones médicas o nutricionales importantes.</p>
+        </section>
+        <section class="terms-section terms-example">
+          <h2>Ejemplo práctico</h2>
+          <p>Si registras “una porción de arroz” sin indicar su cantidad, el sistema podría pedirte una aclaración o mostrar un valor estimado. Revisa la información y confirma la cantidad antes de guardar; no tomes una estimación como una medición exacta.</p>
+        </section>
+        <section class="terms-section">
+          <h2>4. Tu decisión</h2>
+          <p>Si aceptas, se guardará tu decisión y podrás continuar al dashboard. Si rechazas, se guardará el rechazo y se cerrará tu sesión. Si tienes dudas sobre el alcance de estas condiciones, no aceptes hasta revisarlas.</p>
+        </section>
+      </div>
+      <div class="quick-actions terms-actions">
+        <button id="acceptTermsButton" type="button">Aceptar</button>
+        <button id="rejectTermsButton" class="button-muted" type="button">Rechazar</button>
+      </div>
+      <p id="termsError" role="alert" aria-live="polite"></p>
+    </section>
+  </main>
+  <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
+  <script src="/onboarding-flow.js" defer></script>
+</body>
+</html>

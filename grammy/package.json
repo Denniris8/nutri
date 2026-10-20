@@ -1,0 +1,14 @@
+{
+  "name": "nutricion-telegram-bot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Bot de Telegram (grammY) para nutricion_app",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "grammy": "^1.35.0"
+  }
+}

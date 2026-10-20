@@ -1,0 +1,40 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_NAME:?Define DB_NAME en .env}
+      MYSQL_USER: ${DB_USER:?Define DB_USER en .env}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Define DB_PASSWORD en .env}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?Define DB_PASSWORD en .env}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  nutri:
+    image: node:22-bookworm-slim
+    restart: unless-stopped
+    working_dir: /app
+    command: sh -c "apt-get update && apt-get install -y --no-install-recommends default-mysql-client && rm -rf /var/lib/apt/lists/* && sh mysql/migrate.sh && node html/server.js"
+    env_file: .env
+    environment:
+      DB_HOST: mysql
+      DB_PORT: 3306
+      PORT: 8080
+      HOST: 0.0.0.0
+    volumes:
+      - .:/app:ro
+      - ../garmin-connect-mcp:/app/garmin-connect-mcp:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  mysql_data:
