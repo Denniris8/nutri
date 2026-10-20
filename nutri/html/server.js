@@ -644,7 +644,8 @@ COMMIT;`);
         json(response, 200, generated);
       } catch (error) {
         const cleanupFailed = error.code === 'TRAINING_PLAN_SESSION_CLEANUP';
-        authError(response, error.status || 502, cleanupFailed ? 'No se pudo eliminar la sesión temporal de OpenCode; el plan no se guardó en la aplicación.' : error.status ? error.message : 'No se pudo generar el plan de entrenamiento.');
+        const sessionOpenFailed = error.code === 'TRAINING_PLAN_SESSION_OPEN';
+        authError(response, error.status || 502, cleanupFailed ? 'No se pudo eliminar la sesión temporal de OpenCode; el plan no se guardó en la aplicación.' : sessionOpenFailed ? error.message : error.status ? error.message : 'No se pudo generar el plan de entrenamiento.');
       }
       return;
     }

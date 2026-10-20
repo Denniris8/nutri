@@ -23,6 +23,7 @@ let savedTrainingPlan = false;
 let savedTrainingPlans = [];
 let savedTrainingPlansLoadId = 0;
 let trainingPlanTargets = null;
+let trainingPlanSessionReady = true;
 
 const tmbExplanation = 'Tasa metabólica basal: energía estimada que el cuerpo utiliza en reposo. No equivale al gasto total diario ni a la meta de ingesta.';
 const mifflinExplanation = 'Mifflin-St Jeor es una ecuación que estima el metabolismo basal a partir de edad, sexo, estatura y peso compatibles; es una estimación, no una medición.';
@@ -184,6 +185,11 @@ async function loadSavedTrainingPlans() {
 if (savedTrainingPlansList) void loadSavedTrainingPlans();
 
 trainingPlanTrigger?.addEventListener('click', () => {
+  if (!trainingPlanSessionReady) planSummaryText.textContent = 'Cuéntame tus objetivos y generaré un plan con tus datos registrados.';
+  trainingPlanSessionReady = true;
+  trainingPlanGoalsInput.disabled = false;
+  trainingPlanSendButton.disabled = false;
+  planSummaryText.classList.remove('food-session-error');
   trainingPlanDialog?.showModal();
   trainingPlanGoalsInput?.focus();
 });
@@ -192,6 +198,7 @@ document.querySelector('#cancelTrainingPlanDialog')?.addEventListener('click', (
 trainingPlanDialog?.addEventListener('close', () => trainingPlanTrigger?.focus());
 
 trainingPlanSendButton?.addEventListener('click', async () => {
+  if (!trainingPlanSessionReady) return;
   const goals = trainingPlanGoalsInput.value.trim();
   if (!goals) {
     trainingPlanGoalsInput.focus();
@@ -232,14 +239,19 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     planSummaryText.textContent = 'Plan generado · no guardado';
     notifyApp('Plan generado. Solo aparece en esta vista y no se guarda.', 'success');
   } catch (error) {
-    planSummaryText.textContent = 'No se pudo generar el plan.';
+    const sessionFailed = error.message === 'No se pudo abrir la sesión para crear el plan.';
+    if (sessionFailed) {
+      trainingPlanSessionReady = false;
+      planSummaryText.textContent = error.message;
+      planSummaryText.classList.add('food-session-error');
+    } else planSummaryText.textContent = 'No se pudo generar el plan.';
     appendTrainingPlanMessage('error', error.message || 'No se pudo generar el plan.');
     notifyApp(error.message || 'No se pudo generar el plan.', 'error');
   } finally {
     planLoading.hidden = true;
-    trainingPlanSendButton.disabled = false;
-    trainingPlanGoalsInput.disabled = false;
-    trainingPlanGoalsInput.focus();
+    trainingPlanSendButton.disabled = !trainingPlanSessionReady;
+    trainingPlanGoalsInput.disabled = !trainingPlanSessionReady;
+    if (trainingPlanSessionReady) trainingPlanGoalsInput.focus();
   }
 });
 
@@ -1075,6 +1087,7 @@ async function showGarminTrainingSync(generation) {
 }
 async function prepareTrainingSessionUi(generation) {
   trainingAnalyzeButton.disabled = true;
+  trainingInput.disabled = true;
   trainingLoading.hidden = false;
   trainingLoadingText.textContent = 'Preparando sesión…';
   trainingFeedback.textContent = 'Preparando la sesión de entrenamiento…';
@@ -1086,16 +1099,20 @@ async function prepareTrainingSessionUi(generation) {
     if (generation !== trainingOpenGeneration) return;
     trainingSessionReady = true;
     trainingFeedback.textContent = 'Sesión lista.';
+    trainingFeedback.classList.remove('food-session-error');
     notifyApp(trainingFeedback.textContent, 'success');
-  } catch (error) {
+  } catch {
     if (generation !== trainingOpenGeneration) return;
-    trainingFeedback.textContent = error.message || 'No se pudo preparar la sesión de entrenamiento.';
+    trainingSessionReady = false;
+    trainingFeedback.textContent = 'No se pudo abrir la sesión de entrenamiento';
+    trainingFeedback.classList.add('food-session-error');
     notifyApp(trainingFeedback.textContent, 'error');
   } finally {
     if (generation === trainingOpenGeneration) {
       trainingLoading.hidden = true;
       trainingAnalyzeButton.disabled = !trainingSessionReady;
-      if (trainingDialog.open) trainingInput.focus();
+      trainingInput.disabled = !trainingSessionReady;
+      if (trainingSessionReady && trainingDialog.open) trainingInput.focus();
     }
   }
 }
@@ -1104,7 +1121,8 @@ trainingTrigger?.addEventListener('click', () => {
   trainingSessionReady = false;
   trainingSavedAt = null;
   trainingInput.value = '';
-  trainingInput.disabled = false;
+  trainingInput.disabled = true;
+  trainingFeedback.classList.remove('food-session-error');
   trainingGarminConnected = false;
   document.querySelector(`[name="trainingMode"][value="${savedTrainingMode()}"]`).checked = true;
   updateTrainingMode();
@@ -1114,7 +1132,6 @@ trainingTrigger?.addEventListener('click', () => {
   document.querySelector('#trainingChatMessages .food-chat-message:first-child .food-chat-text').id = 'trainingInitialPrompt';
   updateTrainingMode();
   trainingDialog?.showModal();
-  trainingInput.focus();
   void showGarminTrainingSync(generation);
   void prepareTrainingSessionUi(generation);
 });

@@ -183,16 +183,21 @@ async function generateTrainingPlan({ userId, goals, context, requestOpenCode = 
   const systemPrompt = await readTrainingPlanPrompt();
   const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
   const fingerprint = createHash('sha256').update(JSON.stringify({ userId: id, scope: 'training-plan', model: config.model, agent: config.agent, variant: config.variant })).digest('hex');
-  const created = await requestOpenCode('POST', '/session', {
-    title: 'Plan de entrenamiento',
-    ...(config.agent ? { agent: config.agent } : {}),
-    ...(model ? { model: { id: model.modelID, providerID: model.providerID, ...(config.variant ? { variant: config.variant } : {}) } } : {}),
-    permission: permissions,
-    metadata: { trainingPlanUserId: id, trainingPlanConfigSha256: fingerprint },
-  }, config.requestTimeoutMs);
+  let created;
+  try {
+    created = await requestOpenCode('POST', '/session', {
+      title: 'Plan de entrenamiento',
+      ...(config.agent ? { agent: config.agent } : {}),
+      ...(model ? { model: { id: model.modelID, providerID: model.providerID, ...(config.variant ? { variant: config.variant } : {}) } } : {}),
+      permission: permissions,
+      metadata: { trainingPlanUserId: id, trainingPlanConfigSha256: fingerprint },
+    }, config.requestTimeoutMs);
+  } catch {
+    throw Object.assign(new Error('No se pudo abrir la sesión para crear el plan.'), { code: 'TRAINING_PLAN_SESSION_OPEN' });
+  }
   const sessionId = created.data?.id;
   if (created.status < 200 || created.status >= 300 || !/^ses_[A-Za-z0-9_-]{4,120}$/.test(sessionId || '')) {
-    throw new Error('No se pudo iniciar la sesión para generar el plan.');
+    throw Object.assign(new Error('No se pudo abrir la sesión para crear el plan.'), { code: 'TRAINING_PLAN_SESSION_OPEN' });
   }
   try {
     const result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
