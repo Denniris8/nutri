@@ -1,3 +1,4 @@
+- 2026-10-20 10:53 CST — Docker Compose: añadido el punto de montaje `garmin-connect-mcp/` al proyecto; Docker no podía crear el destino anidado bajo `/app:ro` y el contenedor de la app no arrancaba.
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
