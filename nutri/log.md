@@ -6,6 +6,7 @@
 
 ## 2026-10-20
 
+- 2026-10-20 15:27 CST — El prompt canónico del plan ahora exige revisar las tres mediciones biométricas y plicométricas más recientes cuando existan, describir tendencias sin inferirlas con datos insuficientes y usar esos hallazgos para afinar recomendaciones.
 - 2026-10-20 15:26 CST — Las metas de proteína y grasas ahora se etiquetan simplemente como “Meta”, ya que no cambian por entrenamiento; calorías y carbohidratos conservan la etiqueta “Meta ajustada” cuando corresponde.
 - 2026-10-20 15:25 CST — El prompt canónico del plan exige colocar literalmente después de los macros: “Las metas de calorías y carbohidratos se ajustan según los entrenamientos registrados para el día seleccionado.”
 - 2026-10-20 15:24 CST — Los planes nuevos guardan únicamente macros_objetivo de reposo; el prompt y parser dejan de solicitar macros de entrenamiento. El dashboard suma a la meta de reposo el ajuste del ejercicio registrado en kcal y carbohidratos, e ignora los objetivos de entrenamiento antiguos para evitar doble conteo.
