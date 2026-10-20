@@ -10,44 +10,10 @@ let localServer;
 let localServerStart;
 const sessionLocks = new Map();
 const verifiedFoodSessions = new Map();
-const foodConfigPath = path.resolve(__dirname, '../../configuracion-sesion.json');
 const foodBehaviorPath = path.resolve(__dirname, '../../comportamiento-sesion-comidas.md');
 
-async function readFoodSessionConfig(filePath = foodConfigPath) {
-  let config;
-  try { config = JSON.parse(await readFile(filePath, 'utf8')); }
-  catch { throw new Error('No se pudo leer configuracion-sesion.json.'); }
-  const allowed = new Set(['model', 'agent', 'variant', 'requestTimeoutMs', 'usdaTimeoutMs', 'maxFoodItems', 'usdaCandidateLimit']);
-  if (!config || typeof config !== 'object' || Array.isArray(config) || Object.keys(config).some((key) => !allowed.has(key))) {
-    throw new Error('La configuración de sesión contiene campos no permitidos.');
-  }
-  let model = null;
-  if (config.model != null) {
-    const { providerID, modelID } = config.model;
-    if (typeof providerID !== 'string' || typeof modelID !== 'string' || !/^[\w.-]{1,100}$/.test(providerID) || !/^[\w.:/-]{1,150}$/.test(modelID)) {
-      throw new Error('El proveedor o modelo configurado no es válido.');
-    }
-    model = { providerID, modelID };
-  }
-  const optionalText = (value, name, pattern) => {
-    if (value == null) return null;
-    if (typeof value !== 'string' || !pattern.test(value)) throw new Error(`La opción ${name} no es válida.`);
-    return value;
-  };
-  const boundedInteger = (value, fallback, min, max, name) => {
-    const number = value == null ? fallback : value;
-    if (!Number.isInteger(number) || number < min || number > max) throw new Error(`La opción ${name} debe estar entre ${min} y ${max}.`);
-    return number;
-  };
-  return {
-    model,
-    agent: optionalText(config.agent, 'agent', /^[\w.-]{1,80}$/),
-    variant: optionalText(config.variant, 'variant', /^[\w.-]{1,80}$/),
-    requestTimeoutMs: boundedInteger(config.requestTimeoutMs, 600000, 10000, 600000, 'requestTimeoutMs'),
-    usdaTimeoutMs: boundedInteger(config.usdaTimeoutMs, 10000, 3000, 30000, 'usdaTimeoutMs'),
-    maxFoodItems: boundedInteger(config.maxFoodItems, 12, 1, 12, 'maxFoodItems'),
-    usdaCandidateLimit: boundedInteger(config.usdaCandidateLimit, 10, 1, 10, 'usdaCandidateLimit'),
-  };
+function getFoodSessionDefaults() {
+  return { model: null, agent: null, variant: null, requestTimeoutMs: 600000, usdaTimeoutMs: 10000, maxFoodItems: 12, usdaCandidateLimit: 10 };
 }
 
 async function readFoodSystemPrompt(maxFoodItems) {
@@ -85,28 +51,23 @@ function openCodeHttpError(status, operation, message) {
 async function requestOpenCodePrompt(service, sessionId, body, timeoutMs) {
   const messagePath = `/api/session/${sessionId}/message`;
   const promptPath = `/api/session/${sessionId}/prompt`;
+  const waitPath = `/api/experimental/session/${encodeURIComponent(sessionId)}/wait`;
   const text = [body.system, ...(body.parts || []).filter((part) => part.type === 'text').map((part) => part.text)]
     .filter(Boolean).join('\n\n');
   const submitted = await request(service, 'POST', promptPath, { text }, timeoutMs);
   if (submitted.status < 200 || submitted.status >= 300) throw openCodeHttpError(submitted.status, `POST ${promptPath}`, 'OpenCode no pudo aceptar el mensaje.');
   const userMessageId = submitted.data?.id;
   if (typeof userMessageId !== 'string') throw new Error('OpenCode no devolvió el identificador del mensaje.');
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const history = await request(service, 'GET', `${messagePath}?order=desc&limit=20`, undefined, timeoutMs);
-    if (history.status < 200 || history.status >= 300) throw openCodeHttpError(history.status, `GET ${messagePath}`, 'OpenCode no devolvió el historial del mensaje.');
-    const messages = Array.isArray(history.data?.data) ? history.data.data : Array.isArray(history.data) ? history.data : [];
-    const userIndex = messages.findIndex((message) => message.id === userMessageId);
-    const idleIndex = messages.findIndex((message) => message.type === 'idle');
-    const reply = userIndex > 0 && idleIndex >= 0 && idleIndex < userIndex
-      ? messages.slice(0, userIndex).find((message) => message.type === 'assistant') : null;
-    if (reply?.time?.completed != null) {
-      if (reply.error) throw Object.assign(new Error('OpenCode no pudo completar el mensaje.'), { code: 'OPEN_CODE_ERROR' });
-      return { status: 200, data: { info: { id: reply.id }, parts: reply.content || [] } };
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-  throw Object.assign(new Error('OpenCode no respondió dentro del tiempo configurado.'), { code: 'TIMEOUT' });
+  const waited = await request(service, 'POST', waitPath, undefined, timeoutMs);
+  if (waited.status < 200 || waited.status >= 300) throw openCodeHttpError(waited.status, `POST ${waitPath}`, 'OpenCode no terminó el mensaje.');
+  const history = await request(service, 'GET', `${messagePath}?order=desc&limit=20`, undefined, timeoutMs);
+  if (history.status < 200 || history.status >= 300) throw openCodeHttpError(history.status, `GET ${messagePath}`, 'OpenCode no devolvió el historial del mensaje.');
+  const messages = Array.isArray(history.data?.data) ? history.data.data : Array.isArray(history.data) ? history.data : [];
+  const userIndex = messages.findIndex((message) => message.id === userMessageId);
+  const reply = userIndex > 0 ? messages.slice(0, userIndex).find((message) => message.type === 'assistant') : null;
+  if (!reply || reply.time?.completed == null) throw Object.assign(new Error('OpenCode no devolvió una respuesta completa.'), { code: 'OPEN_CODE_ERROR' });
+  if (reply.error) throw Object.assign(new Error('OpenCode no pudo completar el mensaje.'), { code: 'OPEN_CODE_ERROR' });
+  return { status: 200, data: { info: { id: reply.id }, parts: reply.content || [] } };
 }
 
 async function recordFoodError({ dbQuery, textSql, userId, trace, stage, error, httpStatus = null, action = 'POST /api/food-entries', route = '/api/food-entries', method = 'POST' }) {
@@ -142,7 +103,7 @@ const shortSessionId = (sessionId) => `…${String(sessionId).slice(-8)}`;
 function validateServiceUrl(value) {
   const url = new URL(value);
   const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (!['http:', 'https:'].includes(url.protocol) || !['127.0.0.1', 'localhost', '::1'].includes(host) || url.username || url.password) {
+  if (!['http:', 'https:'].includes(url.protocol) || !['127.0.0.1', 'localhost', '::1', 'host.docker.internal'].includes(host) || url.username || url.password) {
     throw Object.assign(new Error('OpenCode debe estar disponible en loopback.'), { code: 'SERVICE_CONFIG' });
   }
   return url.origin;
@@ -153,7 +114,7 @@ async function loadService() {
   try {
     const service = JSON.parse(await readFile(serviceFile, 'utf8'));
     if (!service.url) throw new Error('missing_url');
-    return { url: validateServiceUrl(service.url), password: String(service.password || ''), autoStart: false };
+    return { url: validateServiceUrl(process.env.OPENCODE_SERVICE_PROXY_URL || service.url), password: String(service.password || ''), autoStart: false };
   } catch (error) {
     if (process.env.OPENCODE_SERVICE_FILE) throw Object.assign(new Error('No se pudo cargar el registro local de OpenCode.'), { code: 'SERVICE_CONFIG' });
     const port = Number(process.env.OPENCODE_PORT || 4096);
@@ -253,7 +214,7 @@ function withUserLock(userId, run) {
 
 function withFoodSessionLock(userId, run) { return withUserLock(String(userId), run); }
 
-async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig, trace }) {
+async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode = openCodeRequest, readConfig = getFoodSessionDefaults, trace }) {
   const id = String(userId);
   if (!/^\d+$/.test(id)) throw new Error('Cuenta autenticada no válida.');
   const config = await readConfig();
@@ -281,8 +242,6 @@ async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpen
           await dbQuery(`DELETE FROM sesiones_comidas_opencode WHERE usuario_id=${id} AND session_id=${textSql(stored)};`);
         } else {
           traceFoodSession(trace, 'session_config_changed', { session: shortSessionId(stored) });
-          const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(stored)}`, undefined, config.requestTimeoutMs);
-          if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) throw openCodeHttpError(deleted.status, 'DELETE /api/session/{id}', 'No se pudo sustituir la sesión con la nueva configuración.');
         }
       }
     }
@@ -330,7 +289,7 @@ async function deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode = op
 }
 
 async function requestFoodDescription({ sessionId, description, comidasDisponibles = [], continuacionRegistro = false, config, trace, requestOpenCode = openCodeRequest }) {
-  config ||= await readFoodSessionConfig();
+  config ||= getFoodSessionDefaults();
   const system = await readFoodSystemPrompt(config.maxFoodItems);
   const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
   const startedAt = Date.now();
@@ -372,5 +331,5 @@ async function requestFoodDescription({ sessionId, description, comidasDisponibl
 
 module.exports = {
   deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, openCodeRequest, recordFoodError, requestFoodDescription,
-  readFoodSessionConfig, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock,
+  getFoodSessionDefaults, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock,
 };

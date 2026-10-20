@@ -27,9 +27,15 @@ services:
       DB_PORT: 3306
       PORT: 8080
       HOST: 0.0.0.0
+      OPENCODE_SERVICE_FILE: /run/opencode/service.json
+      OPENCODE_SERVICE_PROXY_URL: http://host.docker.internal:49375
+      OPENCODE_AUTO_START: "false"
     volumes:
       - .:/app:ro
       - ../garmin-connect-mcp:/app/garmin-connect-mcp:ro
+      - /home/pcp/.local/state/opencode/service.json:/run/opencode/service.json:ro
+    extra_hosts:
+      - "host.docker.internal:172.21.0.1"
     ports:
       - "8080:8080"
     depends_on:

@@ -274,3 +274,17 @@
 - 2026-10-20 11:30 CST — Telegram del túnel: actualizado el aviso para explicar el chequeo cada 15 minutos y el envío de un enlace nuevo si no responde HTTP 200; eliminado el texto obsoleto de renovación diaria a las 06:00.
 - 2026-10-20 11:30 CST — Túnel: fijado el destino predeterminado a `http://127.0.0.1:8080`, coherente con `network_mode: host` y el dashboard.
 - 2026-10-20 11:30 CST — Revisadas las instrucciones de `tunnel`: quitadas descripciones de renovación diaria como comportamiento normal y documentado que un timer externo que fuerce reinicios contradice la conservación del enlace sano.
+
+- 2026-10-20 13:17 CST — Nutri/OpenCode: montado en solo lectura el registro del servicio del host; el contenedor conecta por el proxy de la puerta de enlace Docker 172.21.0.1:49375 y no intenta iniciar OpenCode localmente.
+
+- 2026-10-20 13:23 CST — Registro de comidas: si falla la recuperación del borrador, la interfaz muestra el error seguro de la API en lugar de ocultarlo como fallo al abrir sesión.
+
+- 2026-10-20 13:26 CST — Dashboard en HTTP por Tailscale: generación de ID de borrador de comida migrada de `crypto.randomUUID()` (solo contexto seguro) a UUID v4 con `crypto.getRandomValues()`, disponible también en HTTP.
+
+- 2026-10-20 13:44 CST — Nutri/OpenCode: eliminado `configuracion-sesion.json` y su lectura/validación; comida y planes usan el modelo global de OpenCode. Límites operativos conservados como defaults fijos. Sesiones existentes se renovarán al abrir con el modelo global.
+
+- 2026-10-20 13:44 CST — Corrección de migración del modelo global: la sesión OpenCode antigua ya no se elimina; Nutri crea otra con el modelo global y conserva el historial anterior en OpenCode.
+
+- 2026-10-20 13:51 CST — OpenCode: el historial V2 de mensajes no contiene un elemento `type: idle`; el adaptador ahora espera el endpoint V2 `/api/experimental/session/{id}/wait` antes de leer la respuesta completa, evitando el spinner indefinido al registrar comidas.
+
+- 2026-10-20 13:55 CST — Registro de comidas: al enviar una descripción, el indicador ahora cambia de “Preparando la sesión” a “Analizando los alimentos”, evitando mostrar una fase ya terminada mientras OpenCode responde.

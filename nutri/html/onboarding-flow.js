@@ -28,6 +28,14 @@ let trainingPlanSessionReady = true;
 const tmbExplanation = 'Tasa metabólica basal: energía estimada que el cuerpo utiliza en reposo. No equivale al gasto total diario ni a la meta de ingesta.';
 const mifflinExplanation = 'Mifflin-St Jeor es una ecuación que estima el metabolismo basal a partir de edad, sexo, estatura y peso compatibles; es una estimación, no una medición.';
 
+function createFoodRequestId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function appendPlainText(parent, text) {
   if (!text) return;
   const span = document.createElement('span');
@@ -1342,7 +1350,10 @@ function renderFoodChat(messages) {
 
 async function restoreFoodDraft(feedback) {
   const response = await fetch('/api/food-entries/pending', { credentials: 'same-origin' });
-  if (!response.ok) throw new Error('No se pudo recuperar el borrador de comida.');
+  if (!response.ok) {
+    const error = await response.json().catch(() => null);
+    throw new Error(error?.error || 'No se pudo recuperar el borrador de comida.');
+  }
   const { draft } = await response.json();
   const description = document.querySelector('#foodDescription');
   const label = document.querySelector('#foodDescriptionLabel');
@@ -1358,7 +1369,7 @@ async function restoreFoodDraft(feedback) {
     save.textContent = 'Enviar mensaje';
     feedback.textContent = draft.question ? '' : 'Este borrador sigue pendiente; aún no se muestra como comida guardada.';
   } else {
-    foodRequestId = crypto.randomUUID();
+    foodRequestId = createFoodRequestId();
     foodEntryDate = '';
     foodTargetEntryId = null;
     renderFoodChat([]);
@@ -1401,11 +1412,11 @@ document.querySelector('#registerFoodButton')?.addEventListener('click', async (
     description.disabled = false;
     saveButton.disabled = false;
     description.focus();
-  } catch {
+  } catch (error) {
     foodSessionReady = false;
     description.disabled = true;
     saveButton.disabled = true;
-    feedback.textContent = 'No se pudo abrir la sesión de comidas';
+    feedback.textContent = error instanceof Error ? error.message : 'No se pudo abrir la sesión de comidas';
     feedback.classList.add('food-session-error');
     notifyApp(feedback.textContent, 'error');
   } finally {
@@ -1437,6 +1448,7 @@ foodForm?.addEventListener('submit', async (event) => {
   const pendingMessage = appendFoodChatMessage('user', text);
   feedback.textContent = 'Enviando la descripción…';
   foodLoading.hidden = false;
+  document.querySelector('#foodLoadingText').textContent = 'Analizando los alimentos…';
   const foodChatThread = document.querySelector('#foodChatThread');
   foodChatThread.hidden = false;
   foodChatThread.scrollTop = foodChatThread.scrollHeight;
@@ -1475,7 +1487,7 @@ foodForm?.addEventListener('submit', async (event) => {
     } else {
       if (result.appended) { await audioReady; playFoodAddedSound(); }
       await loadFoodEntries(foodDate());
-      foodRequestId = crypto.randomUUID();
+      foodRequestId = createFoodRequestId();
       foodEntryDate = foodDate();
       foodTargetEntryId = result.entryId;
       document.querySelector('#foodDescriptionLabel').textContent = 'Agregar o corregir alimentos';

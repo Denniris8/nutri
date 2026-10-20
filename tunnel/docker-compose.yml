@@ -15,8 +15,8 @@ services:
     container_name: nutricion-tunnel
     restart: always
     env_file:
-      - .env
-      - ../grammy/.env
+      - ../../app/tunnel/.env
+      - ../../app/grammy/.env
     network_mode: host
     environment:
       TUNNEL_TARGET: http://127.0.0.1:8080

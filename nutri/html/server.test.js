@@ -1,13 +1,10 @@
 const assert = require('node:assert/strict');
 const { createHash, randomBytes, scryptSync } = require('node:crypto');
 const http = require('node:http');
-const { mkdtemp, rm, writeFile } = require('node:fs/promises');
-const os = require('node:os');
-const path = require('node:path');
 const test = require('node:test');
 const { createServer, signJwt } = require('./server.js');
 const { validateBiometric } = require('./api/biometrics.js');
-const { ensureFoodOpenCodeSession, openCodeRequest, requestFoodDescription, readFoodSessionConfig } = require('./api/opencode-food.js');
+const { ensureFoodOpenCodeSession, openCodeRequest, requestFoodDescription, getFoodSessionDefaults } = require('./api/opencode-food.js');
 const { saveFoodEntry } = require('./api/food-entries.js');
 const { toMysqlTime } = require('./api/preferences.js');
 
@@ -31,7 +28,7 @@ const structuredOutputPart = (input) => ({
 });
 
 async function foodSessionMetadata(config) {
-  config ||= await readFoodSessionConfig();
+  config ||= getFoodSessionDefaults();
   const settings = { model: config.model, agent: config.agent, variant: config.variant };
   return { foodConfigSha256: createHash('sha256').update(JSON.stringify(settings)).digest('hex') };
 }
@@ -499,13 +496,10 @@ test('OpenCode food sessions are private per authenticated user and reused on re
   assert.equal(created, 2);
 });
 
-test('an existing user session is recreated when configuracion-sesion.json changes model', async (t) => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'nutri-session-model-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const configFile = path.join(directory, 'config.json');
+test('an existing session is recreated when injected session defaults change', async () => {
   const config = (modelID, variant) => ({ model: { providerID: 'ollama', modelID }, agent: 'food-parser', variant, requestTimeoutMs: 600000, usdaTimeoutMs: 7000, maxFoodItems: 8, usdaCandidateLimit: 5 });
-  await writeFile(configFile, JSON.stringify(config('qwen3:8b', 'low')));
-  const readConfig = () => readFoodSessionConfig(configFile);
+  let activeConfig = config('qwen3:8b', 'low');
+  const readConfig = async () => activeConfig;
   const sessions = new Map();
   let storedSession = '';
   let created = 0;
@@ -531,58 +525,31 @@ test('an existing user session is recreated when configuracion-sesion.json chang
   const first = await ensureFoodOpenCodeSession(options);
   assert.equal(await ensureFoodOpenCodeSession(options), first);
   assert.equal(created, 1);
-  await writeFile(configFile, JSON.stringify(config('qwen3:14b', 'high')));
+  activeConfig = config('qwen3:14b', 'high');
   const changed = await ensureFoodOpenCodeSession(options);
   assert.notEqual(changed, first);
   assert.equal(created, 2);
   assert.deepEqual(sessions.get(changed).model, { id: 'qwen3:14b', providerID: 'ollama', variant: 'high' });
 });
 
-test('food session configuration is re-read and applied to existing sessions', async (t) => {
-  const activeConfig = await readFoodSessionConfig();
-  assert.deepEqual(activeConfig.model, { providerID: 'openai', modelID: 'gpt-6-luna' });
-  assert.equal(activeConfig.agent, 'build');
-  assert.equal(activeConfig.requestTimeoutMs, 600000);
-  const directory = await mkdtemp(path.join(os.tmpdir(), 'nutri-session-config-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const configFile = path.join(directory, 'config.json');
-  const config = (modelID, variant) => ({ model: { providerID: 'ollama', modelID }, agent: 'food-parser', variant, requestTimeoutMs: 45000, usdaTimeoutMs: 7000, maxFoodItems: 8, usdaCandidateLimit: 5 });
-  await writeFile(configFile, JSON.stringify(config('qwen3:8b', 'low')));
-  const first = await readFoodSessionConfig(configFile);
-  assert.equal(first.model.modelID, 'qwen3:8b');
+test('food sessions use OpenCode global model defaults instead of Nutri overrides', async () => {
+  const defaults = getFoodSessionDefaults();
+  assert.equal(defaults.model, null);
+  assert.equal(defaults.agent, null);
+  assert.equal(defaults.variant, null);
+  assert.equal(defaults.requestTimeoutMs, 600000);
+  assert.equal(defaults.maxFoodItems, 12);
   const sent = [];
-  const requestOpenCode = async (method, route, body, timeout) => {
-    sent.push({ method, route, body, timeout });
-    return { status: 200, data: { parts: [{ type: 'text', text: '{"items":[],"clarificationQuestion":"Aclara la cantidad."}' }] } };
-  };
-  const readConfig = () => readFoodSessionConfig(configFile);
-  await requestFoodDescription({ sessionId: 'ses_private_food', description: 'Avena', config: await readConfig(), requestOpenCode });
-  await writeFile(configFile, JSON.stringify(config('qwen3:14b', 'high')));
-  const second = await readConfig();
-  await requestFoodDescription({ sessionId: 'ses_private_food', description: 'Avena', config: await readConfig(), requestOpenCode });
-  assert.equal(second.model.modelID, 'qwen3:14b');
-  assert.equal(sent[0].body.model.modelID, 'qwen3:8b');
-  assert.equal(sent[1].body.model.modelID, 'qwen3:14b');
-  assert.equal(sent[1].body.agent, 'food-parser');
-  assert.equal(sent[1].body.variant, 'high');
-  assert.equal(sent[1].body.format, undefined);
-  assert.match(sent[1].body.system, /hasta 8 alimentos/);
-  assert.equal(sent[1].timeout, 45000);
-  assert.deepEqual(sent[1].body.tools, {});
-  let sessionBody;
-  await ensureFoodOpenCodeSession({
-    userId: '77', readConfig,
-    textSql: (value) => `CONVERT(0x${Buffer.from(value).toString('hex')} USING utf8mb4)`,
-    dbQuery: async () => '',
-    requestOpenCode: async (method, route, body) => {
-      if (route === '/session') { sessionBody = body; return { status: 201, data: { id: 'ses_config77' } }; }
-      return { status: 200, data: { id: 'ses_config77' } };
+  await requestFoodDescription({
+    sessionId: 'ses_global_default', description: 'Avena', config: defaults,
+    requestOpenCode: async (method, route, body, timeout) => {
+      sent.push({ method, route, body, timeout });
+      return { status: 200, data: { parts: [{ type: 'text', text: '{"items":[],"clarificationQuestion":"Aclara la cantidad."}' }] } };
     },
   });
-  assert.deepEqual(sessionBody.model, { id: 'qwen3:14b', providerID: 'ollama', variant: 'high' });
-  assert.deepEqual(sessionBody.permission, [{ permission: '*', pattern: '*', action: 'deny' }]);
-  await writeFile(configFile, JSON.stringify({ model: null, unauthorized: true }));
-  await assert.rejects(readFoodSessionConfig(configFile), /campos no permitidos/);
+  assert.equal(sent[0].body.model, undefined);
+  assert.equal(sent[0].body.agent, undefined);
+  assert.equal(sent[0].timeout, 600000);
 });
 
 test('food session belongs to the authenticated user and reuses only that user session', async () => {

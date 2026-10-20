@@ -1,7 +1,7 @@
 const { createHash } = require('node:crypto');
 const path = require('node:path');
 const { readFile } = require('node:fs/promises');
-const { openCodeRequest, readFoodSessionConfig } = require('./opencode-food.js');
+const { openCodeRequest, getFoodSessionDefaults } = require('./opencode-food.js');
 const { parseTrainingSavedTime } = require('./training-entries.js');
 
 const permissions = [{ permission: '*', pattern: '*', action: 'deny' }];
@@ -120,7 +120,7 @@ function parseReply(parts, biometricContext) {
   return reply;
 }
 
-async function analyzeTraining({ userId, description, biometricData, stepContext, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
+async function analyzeTraining({ userId, description, biometricData, stepContext, requestOpenCode = openCodeRequest, readConfig = getFoodSessionDefaults }) {
   const id = String(userId);
   const text = typeof description === 'string' ? description.trim() : '';
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta autenticada no válida.'), { status: 400 });
@@ -154,7 +154,7 @@ async function analyzeTraining({ userId, description, biometricData, stepContext
   });
 }
 
-async function prepareTrainingSession({ userId, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
+async function prepareTrainingSession({ userId, requestOpenCode = openCodeRequest, readConfig = getFoodSessionDefaults }) {
   const id = String(userId);
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta autenticada no válida.'), { status: 400 });
   return withUserLock(id, async () => {
@@ -172,7 +172,7 @@ async function deleteTrainingSession({ userId, requestOpenCode = openCodeRequest
   sessions.delete(id);
 }
 
-async function generateTrainingPlan({ userId, goals, context, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
+async function generateTrainingPlan({ userId, goals, context, requestOpenCode = openCodeRequest, readConfig = getFoodSessionDefaults }) {
   const id = String(userId);
   const text = typeof goals === 'string' ? goals.trim() : '';
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta autenticada no válida.'), { status: 400 });
