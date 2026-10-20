@@ -271,3 +271,6 @@
 - 2026-10-20 11:26 CST — Documentado en `pull` que las migraciones se aplican al arrancar Nutri y MySQL no se recrea.
 - 2026-10-20 11:28 CST — Añadido `tunnel/AGENTS.md` con el comportamiento actual verificado, manejo de configuración sensible, reinicios, timer externo y actualización mediante `./pull`.
 - 2026-10-20 11:30 CST — Túnel: añadido chequeo HTTP cada 15 minutos a la URL pública; conserva el enlace en HTTP 200 y termina `cloudflared` ante fallo para que Docker regenere y notifique otro. Si no obtiene URL al arrancar, también fuerza el reinicio.
+- 2026-10-20 11:30 CST — Telegram del túnel: actualizado el aviso para explicar el chequeo cada 15 minutos y el envío de un enlace nuevo si no responde HTTP 200; eliminado el texto obsoleto de renovación diaria a las 06:00.
+- 2026-10-20 11:30 CST — Túnel: fijado el destino predeterminado a `http://127.0.0.1:8080`, coherente con `network_mode: host` y el dashboard.
+- 2026-10-20 11:30 CST — Revisadas las instrucciones de `tunnel`: quitadas descripciones de renovación diaria como comportamiento normal y documentado que un timer externo que fuerce reinicios contradice la conservación del enlace sano.

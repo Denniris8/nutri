@@ -1,6 +1,6 @@
 #!/bin/sh
 # =============================================================================
-# Túnel gratuito diario del dashboard (Cloudflare quick tunnel).
+# Túnel público del dashboard (Cloudflare quick tunnel).
 # - Arranca cloudflared contra el contenedor del dashboard.
 # - Captura la URL publica https://xxxx.trycloudflare.com de sus logs.
 # - La envía por Telegram (Bot API) a los IDs configurados en NOTIFY_CHAT_IDS.
@@ -9,7 +9,7 @@
 # =============================================================================
 set -u
 
-TARGET_URL="${TUNNEL_TARGET:-http://nutricion-dashboard:8080}"
+TARGET_URL="${TUNNEL_TARGET:-http://127.0.0.1:8080}"
 TOKEN="${BOT_TOKEN:-}"
 IDS="${NOTIFY_CHAT_IDS:-}"
 LOG=/tmp/cloudflared.log
@@ -23,10 +23,10 @@ notify() {
   for id in $(echo "$IDS" | tr ',' ' '); do
     curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
       -d chat_id="$id" \
-      --data-urlencode "text=🌐 Dashboard accesible desde fuera:
+       --data-urlencode "text=🌐 Dashboard accesible desde fuera:
 ${url}
 
-(Se renueva a diario ~06:00 y te llegará la nueva dirección. Este enlace es privado: no lo compartas — quien lo tenga puede ver tu dashboard.)" >/dev/null && \
+(La conexión se comprueba cada 15 minutos. Si no responde HTTP 200, se renovará el enlace y te enviaremos otro. Este enlace es privado: no lo compartas.)" >/dev/null && \
       echo "[tunnel] URL enviada por Telegram a $id" || \
       echo "[tunnel] Fallo enviando mensaje a $id"
   done

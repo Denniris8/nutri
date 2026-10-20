@@ -4,9 +4,10 @@
 # - Usa red host para alcanzar el dashboard, limitado a 127.0.0.1:8080.
 # - El token del bot viene de ../grammy/.env (se reutiliza) y los IDs de
 #   notificacion estan en ./.env (NOTIFY_CHAT_IDS).
-# - restart: always -> si el tunel cae o reinicia la Raspberry, se genera una
-#   URL nueva y se vuelve a notificar por Telegram automaticamente.
-# - Un timer de systemd (tunnel-refresh.timer) lo reinicia a diario a las 06:00.
+# - El monitor conserva la URL con HTTP 200; ante otro estado o error de red,
+#   termina cloudflared y restart: always genera y notifica una URL nueva.
+# - Un timer externo que fuerce el reinicio también rotará la URL, sin importar
+#   el HTTP status. No está definido ni administrado desde esta carpeta.
 
 services:
   tunnel:
