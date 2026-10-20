@@ -40,7 +40,7 @@
 ### 2.2 Reglas duras de datos y ejecución
 
 - Toda operación en BD debe hacerse solo con `mysql`.
-- Todo cambio de esquema o datos persistente debe guardarse primero como una migración SQL nueva, numerada e inmutable en `mysql/migrations/`; al iniciar la app, `mysql/migrate.sh` aplica las migraciones pendientes y registra su checksum en `schema_migrations`. Nunca inferir ni guardar automáticamente cambios hechos a mano directamente en MySQL: convertirlos en una migración revisada. Usar `./pull` desde la carpeta base `proyecto nutri` para actualizar el repositorio (incluidos Nutri y `garmin-connect-mcp`) y recrear los contenedores; `git pull` por sí solo no ejecuta código ni migraciones.
+- Todo cambio de esquema o datos persistente debe guardarse primero como una migración SQL nueva, numerada e inmutable en `mysql/migrations/`; al iniciar la app, `mysql/migrate.sh` aplica las migraciones pendientes y registra su checksum en `schema_migrations`. Nunca inferir ni guardar automáticamente cambios hechos a mano directamente en MySQL: convertirlos en una migración revisada. Usar `./pull` desde la carpeta base `proyecto nutri` para actualizar el repositorio (incluidos Nutri y `garmin-connect-mcp`) y recrear solo el servicio `nutri`; al arrancar, este aplica las migraciones pendientes contra MySQL sin recrear su contenedor. Si el pull trae cambios bajo `tunnel/` o `grammy/`, reconstruir y recrear solo el servicio correspondiente. `git pull` por sí solo no ejecuta código ni migraciones.
 - No usar subagentes salvo autorización explícita del usuario o regla obligatoria.
 - No ejecutar pruebas, builds, linters ni pruebas manuales hasta que el usuario vuelva a autorizarlos explícitamente.
 - No saltar trazabilidad de fuentes ni validaciones de consistencia.

@@ -2,5 +2,15 @@
 set -eu
 
 root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+before=$(git -C "$root" rev-parse HEAD)
 git -C "$root" pull --ff-only
-docker compose --project-directory "$root/nutri" -f "$root/nutri/docker-compose.yml" up -d --force-recreate
+after=$(git -C "$root" rev-parse HEAD)
+docker compose --project-directory "$root/nutri" -f "$root/nutri/docker-compose.yml" up -d --force-recreate nutri
+
+if ! git -C "$root" diff --quiet "$before" "$after" -- tunnel/; then
+  docker compose --project-directory "$root/tunnel" -f "$root/tunnel/docker-compose.yml" up -d --build --force-recreate
+fi
+
+if ! git -C "$root" diff --quiet "$before" "$after" -- grammy/; then
+  docker compose --project-directory "$root/grammy" -f "$root/grammy/docker-compose.yml" up -d --build --force-recreate
+fi

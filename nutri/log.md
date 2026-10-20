@@ -265,3 +265,5 @@
 - 2026-10-19 15:43 CST — Dashboard: el botón para eliminar un plan quedó fuera del desplegable del contenido; ahora puede usarse con el plan colapsado y mantiene un área táctil de 44×44.
 - 2026-10-19 15:45 CST — Dashboard: el botón para eliminar se integró dentro del borde de cada tarjeta de plan, visible con el contenido colapsado y sin activar el desplegable.
 - 2026-10-19 21:59 CST — Telegram: cola protegida con allowlist estricta y vacía ya no abre el bot al público; los reintentos automáticos se limitan a GET para no duplicar operaciones, las consultas de permisos/formularios se paralelizan y los temporizadores de espera se limpian al resolver. Se restauró el flujo documentado de texto libre y respuestas a formularios.
+- 2026-10-20 11:17 CST — `./pull` ahora recrea solo el servicio `nutri`; el runner aplica ahí las migraciones pendientes y MySQL permanece activo con su volumen intacto.
+- 2026-10-20 11:17 CST — `./pull` ahora compara los commits antes/después del pull y solo reconstruye/recrea `tunnel` o `grammy` si hubo cambios en sus carpetas; Nutri sigue recreándose para ejecutar el migrador y MySQL se conserva.
