@@ -1262,6 +1262,7 @@ const foodDate = () => foodEntryDate || document.querySelector('#daySelect')?.va
 let foodRequestId = '';
 let foodTargetEntryId = null;
 let foodPending = false;
+let foodSessionReady = false;
 let foodAudioContext;
 
 function unlockFoodAudio() {
@@ -1329,7 +1330,6 @@ async function restoreFoodDraft(feedback) {
   const description = document.querySelector('#foodDescription');
   const label = document.querySelector('#foodDescriptionLabel');
   const save = document.querySelector('#saveFoodButton');
-  description.disabled = false;
   if (draft) {
     foodRequestId = draft.requestId;
     foodEntryDate = draft.fecha;
@@ -1359,9 +1359,16 @@ document.querySelector('#registerFoodButton')?.addEventListener('click', async (
   const feedback = document.querySelector('#foodEntryFeedback');
   const foodLoading = document.querySelector('#foodLoading');
   const foodChatThread = document.querySelector('#foodChatThread');
+  const description = document.querySelector('#foodDescription');
+  const saveButton = document.querySelector('#saveFoodButton');
+  if (!foodPending) {
+    foodSessionReady = false;
+    description.disabled = true;
+    feedback.classList.remove('food-session-error');
+  }
   foodLoading.hidden = false;
   document.querySelector('#foodLoadingText').textContent = foodPending ? 'Esperando respuesta…' : 'Preparando la sesión…';
-  document.querySelector('#saveFoodButton').disabled = true;
+  saveButton.disabled = true;
   foodForm.hidden = false;
   feedback.textContent = foodPending ? 'Esperando respuesta…' : 'Revisando borradores y preparando la sesión…';
   foodDialog.showModal();
@@ -1372,15 +1379,22 @@ document.querySelector('#registerFoodButton')?.addEventListener('click', async (
     await restoreFoodDraft(feedback);
     const response = await fetch('/api/food/session', { method: 'POST', credentials: 'same-origin' });
     if (!response.ok) throw new Error((await response.json()).error || 'No se pudo preparar una sesión nueva de comida.');
+    foodSessionReady = true;
     notifyApp('Sesión de comida lista.', 'success');
-    document.querySelector('#foodDescription').focus();
-  } catch (error) {
-    feedback.textContent = error.message || 'No se pudo preparar la sesión.';
+    description.disabled = false;
+    saveButton.disabled = false;
+    description.focus();
+  } catch {
+    foodSessionReady = false;
+    description.disabled = true;
+    saveButton.disabled = true;
+    feedback.textContent = 'No se pudo abrir la sesión de comidas';
+    feedback.classList.add('food-session-error');
     notifyApp(feedback.textContent, 'error');
   } finally {
     foodLoading.hidden = true;
     foodChatThread.hidden = !document.querySelector('#foodChatMessages').children.length;
-    document.querySelector('#saveFoodButton').disabled = false;
+    saveButton.disabled = !foodSessionReady;
   }
 });
 const closeFoodDialog = () => foodDialog.close();
@@ -1389,7 +1403,7 @@ document.querySelector('#cancelFoodEntry')?.addEventListener('click', closeFoodD
 foodDialog?.addEventListener('close', () => foodTrigger?.focus());
 foodForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
-  if (foodPending) return;
+  if (foodPending || !foodSessionReady) return;
   const feedback = document.querySelector('#foodEntryFeedback');
   const saveButton = document.querySelector('#saveFoodButton');
   const foodLoading = document.querySelector('#foodLoading');

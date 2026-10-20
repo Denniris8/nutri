@@ -444,6 +444,7 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
 .food-chat-speaker { font-size: 11px; font-weight: 700; opacity: .8; }
 .food-chat-text { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .more-form-body .food-chat-input { min-height: 44px; padding: 8px 12px; border-radius: var(--shape-full); }
+.food-session-error { color: var(--bad); font-weight: 600; }
 .food-chat-message[data-role="assistant"] { justify-self: start; }
 .training-ui-body { display: grid; gap: 8px; }
 
