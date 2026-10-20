@@ -5,14 +5,14 @@ const { deleteTrainingPlan, readTrainingPlans, saveTrainingPlan, validateTrainin
 test('saved training plan is owned by the authenticated user and records its UTC creation date', async () => {
   let sql;
   const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
-  const trainingMacros = { proteinas_g: 140, carbohidratos_g: 270, grasas_g: 65, calorias_kcal: 2200 };
   const result = await saveTrainingPlan({
-    userId: '27', goals: 'Ganar fuerza', plan: '# Plan', macros, trainingMacros,
+    userId: '27', goals: 'Ganar fuerza', plan: '# Plan', macros,
     textSql: (value) => `CONVERT(0x${Buffer.from(value).toString('hex')} USING utf8mb4)`,
     dbQuery: async (query) => { sql = query; return '{"id":5,"createdAt":"2026-10-15T12:00:00Z"}'; },
   });
-  assert.match(sql, /objetivo_entrenamiento_proteinas_g,objetivo_entrenamiento_carbohidratos_g,objetivo_entrenamiento_grasas_g,objetivo_entrenamiento_calorias_kcal,creado_en\) VALUES \(27,/);
-  assert.match(sql, /,140\.00,220\.00,65\.00,2000\.0,140\.00,270\.00,65\.00,2200\.0,UTC_TIMESTAMP/);
+  assert.match(sql, /INSERT INTO planes_entrenamiento\(usuario_id,objetivos,contenido,objetivo_proteinas_g,objetivo_carbohidratos_g,objetivo_grasas_g,objetivo_calorias_kcal,creado_en\) VALUES \(27,/);
+  assert.doesNotMatch(sql, /objetivo_entrenamiento_/);
+  assert.match(sql, /,140\.00,220\.00,65\.00,2000\.0,UTC_TIMESTAMP/);
   assert.match(sql, /UTC_TIMESTAMP\(3\)/);
   assert.match(sql, /WHERE id=LAST_INSERT_ID\(\) AND usuario_id=27/);
   assert.deepEqual(result, { id: 5, createdAt: '2026-10-15T12:00:00Z' });
@@ -22,7 +22,7 @@ test('training plan persistence rejects oversized or empty input', () => {
   const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
   assert.throws(() => validateTrainingPlan({ userId: '27', goals: '', plan: '# Plan', macros }), { status: 400 });
   assert.throws(() => validateTrainingPlan({ userId: '27', goals: 'Objetivo', plan: 'x'.repeat(30001), macros }), { status: 400 });
-  assert.throws(() => validateTrainingPlan({ userId: '27', goals: 'Objetivo', plan: '# Plan', macros, trainingMacros: { ...macros, proteinas_g: '140 g' } }), { status: 400 });
+  assert.throws(() => validateTrainingPlan({ userId: '27', goals: 'Objetivo', plan: '# Plan', macros: { ...macros, proteinas_g: '140 g' } }), { status: 400 });
 });
 
 test('saved plan listing is scoped to the authenticated user and limited to the latest three', async () => {
@@ -31,7 +31,7 @@ test('saved plan listing is scoped to the authenticated user and limited to the 
     userId: '27',
     dbQuery: async (query) => {
       sql = query;
-       return '{"id":5,"goals":"Ganar fuerza","plan":"# Plan","macros":{"proteinas_g":140,"carbohidratos_g":220,"grasas_g":65,"calorias_kcal":2000},"trainingMacros":{"proteinas_g":140,"carbohidratos_g":270,"grasas_g":65,"calorias_kcal":2200},"createdAt":"2026-10-15T12:00:00Z"}';
+       return '{"id":5,"goals":"Ganar fuerza","plan":"# Plan","macros":{"proteinas_g":140,"carbohidratos_g":220,"grasas_g":65,"calorias_kcal":2000},"createdAt":"2026-10-15T12:00:00Z"}';
     },
   });
   assert.match(sql, /WHERE usuario_id=27 ORDER BY creado_en DESC,id DESC LIMIT 3/);

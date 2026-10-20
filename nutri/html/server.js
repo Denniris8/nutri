@@ -745,7 +745,7 @@ COMMIT;`);
       try { data = await bodyJson(request, 131072); }
       catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
       try {
-        const saved = await saveTrainingPlan({ userId: claims.sub, goals: data.goals, plan: data.plan, macros: data.macros, trainingMacros: data.trainingMacros, dbQuery, textSql });
+        const saved = await saveTrainingPlan({ userId: claims.sub, goals: data.goals, plan: data.plan, macros: data.macros, dbQuery, textSql });
         try { await dbQuery(`${resolveNotificationsSql({ userId: claims.sub, category: 'plan', state: 'generado', textSql })};`); } catch {}
         if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'guardado', title: 'Plan guardado', message: 'Tu plan de entrenamiento quedó guardado.', referenceId: saved.id, dbQuery, textSql }); } catch {}
         json(response, 201, { ok: true, ...saved });
@@ -811,6 +811,15 @@ COMMIT;`);
       try { data = await bodyJson(request); }
       catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
       await saveTrainingEntry({ response, data, userId: claims.sub, dbQuery, textSql, json, timezone: request.headers['x-client-timezone'] });
+      if (response.statusCode === 201) {
+        try { await deleteTrainingSession({ userId: claims.sub, requestOpenCode: openCodeRequest }); }
+        catch {
+          const traceId = randomUUID();
+          try {
+            await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,usuario_id,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('training-opencode')},${textSql(traceId)},${textSql('session_cleanup_failed')},${textSql('after_training_saved')},${textSql('POST /api/training-entries')},${textSql('POST')},${textSql('/api/training-entries')},${claims.sub},${textSql('TRAINING_SESSION_CLEANUP')},${textSql('Error')},201,${textSql('No se pudo eliminar la sesión OpenCode después de guardar el entrenamiento.')});`);
+          } catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
+        }
+      }
       return;
     }
 

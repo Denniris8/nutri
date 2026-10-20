@@ -1,27 +1,24 @@
 const macroFields = ['proteinas_g', 'carbohidratos_g', 'grasas_g', 'calorias_kcal'];
 
-function validateTrainingPlan({ userId, goals, plan, macros, trainingMacros }) {
+function validateTrainingPlan({ userId, goals, plan, macros }) {
   const id = String(userId);
   const objectives = typeof goals === 'string' ? goals.trim() : '';
   const content = typeof plan === 'string' ? plan.trim() : '';
   const limits = { proteinas_g: 10000, carbohidratos_g: 10000, grasas_g: 10000, calorias_kcal: 100000 };
   if (!/^\d+$/.test(id) || !objectives || objectives.length > 2000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(objectives)
     || !content || content.length > 30000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(content)
-    || [macros, trainingMacros].some((values) => !values || typeof values !== 'object' || Array.isArray(values)
-      || Object.keys(values).length !== macroFields.length || macroFields.some((key) => !Object.hasOwn(values, key)
-        || values[key] !== null && (typeof values[key] !== 'number' || !Number.isFinite(values[key]) || values[key] < 0 || values[key] > limits[key])))) {
+    || !macros || typeof macros !== 'object' || Array.isArray(macros)
+    || Object.keys(macros).length !== macroFields.length || macroFields.some((key) => !Object.hasOwn(macros, key)
+      || macros[key] !== null && (typeof macros[key] !== 'number' || !Number.isFinite(macros[key]) || macros[key] < 0 || macros[key] > limits[key]))) {
     throw Object.assign(new Error('El objetivo, el plan o sus macros no son válidos.'), { status: 400 });
   }
-  const copy = (values) => Object.fromEntries(macroFields.map((key) => [key, values[key]]));
-  return { id, objectives, content, macros: copy(macros), trainingMacros: copy(trainingMacros) };
+  return { id, objectives, content, macros: Object.fromEntries(macroFields.map((key) => [key, macros[key]])) };
 }
 
-async function saveTrainingPlan({ userId, goals, plan, macros, trainingMacros, dbQuery, textSql }) {
-  const entry = validateTrainingPlan({ userId, goals, plan, macros, trainingMacros });
-  const macroSql = (values, key, decimals) => values[key] === null ? 'NULL' : values[key].toFixed(decimals);
-  const rest = (key, decimals) => macroSql(entry.macros, key, decimals);
-  const training = (key, decimals) => macroSql(entry.trainingMacros, key, decimals);
-  const saved = await dbQuery(`INSERT INTO planes_entrenamiento(usuario_id,objetivos,contenido,objetivo_proteinas_g,objetivo_carbohidratos_g,objetivo_grasas_g,objetivo_calorias_kcal,objetivo_entrenamiento_proteinas_g,objetivo_entrenamiento_carbohidratos_g,objetivo_entrenamiento_grasas_g,objetivo_entrenamiento_calorias_kcal,creado_en) VALUES (${entry.id},${textSql(entry.objectives)},${textSql(entry.content)},${rest('proteinas_g', 2)},${rest('carbohidratos_g', 2)},${rest('grasas_g', 2)},${rest('calorias_kcal', 1)},${training('proteinas_g', 2)},${training('carbohidratos_g', 2)},${training('grasas_g', 2)},${training('calorias_kcal', 1)},UTC_TIMESTAMP(3)); SELECT JSON_OBJECT('id',LAST_INSERT_ID(),'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ')) FROM planes_entrenamiento WHERE id=LAST_INSERT_ID() AND usuario_id=${entry.id} LIMIT 1;`);
+async function saveTrainingPlan({ userId, goals, plan, macros, dbQuery, textSql }) {
+  const entry = validateTrainingPlan({ userId, goals, plan, macros });
+  const macroSql = (key, decimals) => entry.macros[key] === null ? 'NULL' : entry.macros[key].toFixed(decimals);
+  const saved = await dbQuery(`INSERT INTO planes_entrenamiento(usuario_id,objetivos,contenido,objetivo_proteinas_g,objetivo_carbohidratos_g,objetivo_grasas_g,objetivo_calorias_kcal,creado_en) VALUES (${entry.id},${textSql(entry.objectives)},${textSql(entry.content)},${macroSql('proteinas_g', 2)},${macroSql('carbohidratos_g', 2)},${macroSql('grasas_g', 2)},${macroSql('calorias_kcal', 1)},UTC_TIMESTAMP(3)); SELECT JSON_OBJECT('id',LAST_INSERT_ID(),'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ')) FROM planes_entrenamiento WHERE id=LAST_INSERT_ID() AND usuario_id=${entry.id} LIMIT 1;`);
   if (!saved) throw new Error('No se pudo recuperar el plan guardado.');
   return JSON.parse(saved);
 }
@@ -29,7 +26,7 @@ async function saveTrainingPlan({ userId, goals, plan, macros, trainingMacros, d
 async function readTrainingPlans({ userId, dbQuery }) {
   const id = String(userId);
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta no válida.'), { status: 400 });
-  const rows = await dbQuery(`SELECT JSON_OBJECT('id',id,'goals',objetivos,'plan',contenido,'macros',JSON_OBJECT('proteinas_g',objetivo_proteinas_g,'carbohidratos_g',objetivo_carbohidratos_g,'grasas_g',objetivo_grasas_g,'calorias_kcal',objetivo_calorias_kcal),'trainingMacros',IF(objetivo_entrenamiento_proteinas_g IS NULL AND objetivo_entrenamiento_carbohidratos_g IS NULL AND objetivo_entrenamiento_grasas_g IS NULL AND objetivo_entrenamiento_calorias_kcal IS NULL,NULL,JSON_OBJECT('proteinas_g',objetivo_entrenamiento_proteinas_g,'carbohidratos_g',objetivo_entrenamiento_carbohidratos_g,'grasas_g',objetivo_entrenamiento_grasas_g,'calorias_kcal',objetivo_entrenamiento_calorias_kcal)),'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ')) FROM planes_entrenamiento WHERE usuario_id=${id} ORDER BY creado_en DESC,id DESC LIMIT 3;`);
+  const rows = await dbQuery(`SELECT JSON_OBJECT('id',id,'goals',objetivos,'plan',contenido,'macros',JSON_OBJECT('proteinas_g',objetivo_proteinas_g,'carbohidratos_g',objetivo_carbohidratos_g,'grasas_g',objetivo_grasas_g,'calorias_kcal',objetivo_calorias_kcal),'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ')) FROM planes_entrenamiento WHERE usuario_id=${id} ORDER BY creado_en DESC,id DESC LIMIT 3;`);
   return rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [];
 }
 

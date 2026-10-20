@@ -27,7 +27,6 @@ const savedTrainingPlansList = document.querySelector('#savedTrainingPlans');
 let generatedTrainingPlan = null;
 let generatedTrainingGoals = null;
 let generatedTrainingMacros = null;
-let generatedTrainingDayMacros = null;
 let savedTrainingPlan = false;
 let savedTrainingPlans = [];
 let savedTrainingPlansLoadId = 0;
@@ -101,8 +100,8 @@ function renderAccountTmbSummary(profile) {
   appendPlainText(summary, `: ${new Intl.NumberFormat('es-MX', { maximumFractionDigits: 0 }).format(Number(profile.restingMetabolismKcal))} kcal.`);
 }
 
-function setTrainingPlanTargets(macros, trainingMacros = null) {
-  trainingPlanTargets = macros ? { rest: macros, training: trainingMacros } : null;
+function setTrainingPlanTargets(macros) {
+  trainingPlanTargets = macros || null;
   renderMacroCards(currentFoodEntries);
 }
 
@@ -145,8 +144,7 @@ function renderSavedTrainingPlans() {
     const macros = document.createElement('span');
     const formatMacro = (value, unit) => value == null ? '—' : `${new Intl.NumberFormat('es-MX', { maximumFractionDigits: 1 }).format(value)} ${unit}`;
     macros.className = 'saved-training-plan-macros';
-    const macroSummary = (targets) => `Proteína ${formatMacro(targets?.proteinas_g, 'g')} · carbohidratos ${formatMacro(targets?.carbohidratos_g, 'g')} · grasas ${formatMacro(targets?.grasas_g, 'g')} · energía ${formatMacro(targets?.calorias_kcal, 'kcal')}`;
-    macros.textContent = `Reposo: ${macroSummary(plan.macros)} · Entrenamiento: ${macroSummary(plan.trainingMacros)}`;
+    macros.textContent = `Meta en reposo: proteína ${formatMacro(plan.macros?.proteinas_g, 'g')} · carbohidratos ${formatMacro(plan.macros?.carbohidratos_g, 'g')} · grasas ${formatMacro(plan.macros?.grasas_g, 'g')} · energía ${formatMacro(plan.macros?.calorias_kcal, 'kcal')}`;
     summary.append(date, goals, macros);
     const content = document.createElement('div');
     content.className = 'saved-training-plan-content';
@@ -187,7 +185,7 @@ async function loadSavedTrainingPlans() {
     if (!response.ok) throw new Error(result.error || 'No se pudieron cargar los planes guardados.');
     savedTrainingPlans = Array.isArray(result.plans) ? result.plans : [];
     renderSavedTrainingPlans();
-    if (!generatedTrainingMacros || savedTrainingPlan) setTrainingPlanTargets(savedTrainingPlans[0]?.macros, savedTrainingPlans[0]?.trainingMacros);
+    if (!generatedTrainingMacros || savedTrainingPlan) setTrainingPlanTargets(savedTrainingPlans[0]?.macros);
   } catch (error) {
     if (loadId !== savedTrainingPlansLoadId) return;
     const message = document.createElement('li');
@@ -232,9 +230,8 @@ trainingPlanSendButton?.addEventListener('click', async () => {
   generatedTrainingPlan = null;
   generatedTrainingGoals = null;
   generatedTrainingMacros = null;
-  generatedTrainingDayMacros = null;
   savedTrainingPlan = false;
-  setTrainingPlanTargets(savedTrainingPlans[0]?.macros, savedTrainingPlans[0]?.trainingMacros);
+  setTrainingPlanTargets(savedTrainingPlans[0]?.macros);
   planSummaryText.textContent = 'Generando plan…';
   planLoading.hidden = false;
   trainingPlanTrigger.setAttribute('aria-busy', 'true');
@@ -252,8 +249,7 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     generatedTrainingPlan = result.plan;
     generatedTrainingGoals = goals;
     generatedTrainingMacros = result.macros;
-    generatedTrainingDayMacros = result.trainingMacros;
-    setTrainingPlanTargets(generatedTrainingMacros, generatedTrainingDayMacros);
+    setTrainingPlanTargets(generatedTrainingMacros);
     trainingPlanGoalsInput.value = '';
     trainingPlanSaveButton.hidden = false;
     trainingPlanSaveButton.disabled = false;
@@ -282,20 +278,20 @@ trainingPlanSendButton?.addEventListener('click', async () => {
 });
 
 trainingPlanSaveButton?.addEventListener('click', async () => {
-  if (!generatedTrainingPlan || !generatedTrainingGoals || !generatedTrainingMacros || !generatedTrainingDayMacros || savedTrainingPlan) return;
+  if (!generatedTrainingPlan || !generatedTrainingGoals || !generatedTrainingMacros || savedTrainingPlan) return;
   trainingPlanSaveButton.disabled = true;
   notifyApp('Guardando el plan de entrenamiento.', 'info');
   try {
     const response = await fetch('/api/training-plans', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros, trainingMacros: generatedTrainingDayMacros, suppressNotification: true }),
+      body: JSON.stringify({ goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros, suppressNotification: true }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo guardar el plan.');
     const savedAt = new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(result.createdAt));
     savedTrainingPlan = true;
-    setTrainingPlanTargets(generatedTrainingMacros, generatedTrainingDayMacros);
-    savedTrainingPlans = [{ id: result.id, createdAt: result.createdAt, goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros, trainingMacros: generatedTrainingDayMacros }, ...savedTrainingPlans.filter((plan) => plan.id !== result.id)].slice(0, 3);
+    setTrainingPlanTargets(generatedTrainingMacros);
+    savedTrainingPlans = [{ id: result.id, createdAt: result.createdAt, goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros }, ...savedTrainingPlans.filter((plan) => plan.id !== result.id)].slice(0, 3);
     renderSavedTrainingPlans();
     void loadSavedTrainingPlans();
     trainingPlanSaveButton.textContent = 'Guardado';
@@ -1868,10 +1864,8 @@ function renderMacroCards(records) {
     detail.className = 'macro-detail';
     detail.textContent = items.some((item) => item.macroStatus === 'estimado') ? 'Incluye estimaciones' : 'Consumo registrado';
     const planMacroKey = { proteinG: 'proteinas_g', carbohydrateG: 'carbohidratos_g', fatG: 'grasas_g', energyKcal: 'calorias_kcal' }[key];
-    const structuredTrainingTarget = trainingPlanTargets?.training && Object.values(trainingPlanTargets.training).some((value) => value !== null);
-    const selectedTargets = trainingDaySelected === null ? null : trainingDaySelected && structuredTrainingTarget ? trainingPlanTargets?.training : trainingPlanTargets?.rest;
-    const baseTarget = selectedTargets?.[planMacroKey];
-    const exerciseAware = trainingDaySelected === true && !structuredTrainingTarget && (key === 'energyKcal' || key === 'carbohydrateG');
+    const baseTarget = trainingPlanTargets?.[planMacroKey];
+    const exerciseAware = trainingDaySelected === true && (key === 'energyKcal' || key === 'carbohydrateG');
     const exerciseExtra = key === 'carbohydrateG' && trainingAdjustmentCaloriesKcal != null ? trainingAdjustmentCaloriesKcal / 4 : trainingAdjustmentCaloriesKcal;
     const targetValue = baseTarget == null || exerciseAware && exerciseExtra == null ? null : Number(baseTarget) + (exerciseAware ? exerciseExtra : 0);
     const planTarget = document.createElement('p');
@@ -1894,7 +1888,7 @@ function renderMacroCards(records) {
         : difference < 0 ? `Excedido ${format.format(Math.abs(difference))} ${unit}` : 'Meta alcanzada';
       const targetLabel = exerciseAware
         ? `Meta ajustada ${format.format(targetValue)} ${unit} (base ${format.format(Number(baseTarget))} ${unit} + ${format.format(trainingAdjustmentCaloriesKcal)} kcal${key === 'carbohydrateG' ? ' / 4' : ''})`
-        : `Meta ${trainingDaySelected ? 'con entrenamiento' : 'en reposo'} ${format.format(targetValue)} ${unit}`;
+        : `Meta ${format.format(targetValue)} ${unit}`;
       planTarget.textContent = `${targetLabel} · ${comparison}`;
     }
     reading.append(value, measure);

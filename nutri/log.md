@@ -6,6 +6,12 @@
 
 ## 2026-10-20
 
+- 2026-10-20 15:26 CST — Las metas de proteína y grasas ahora se etiquetan simplemente como “Meta”, ya que no cambian por entrenamiento; calorías y carbohidratos conservan la etiqueta “Meta ajustada” cuando corresponde.
+- 2026-10-20 15:25 CST — El prompt canónico del plan exige colocar literalmente después de los macros: “Las metas de calorías y carbohidratos se ajustan según los entrenamientos registrados para el día seleccionado.”
+- 2026-10-20 15:24 CST — Los planes nuevos guardan únicamente macros_objetivo de reposo; el prompt y parser dejan de solicitar macros de entrenamiento. El dashboard suma a la meta de reposo el ajuste del ejercicio registrado en kcal y carbohidratos, e ignora los objetivos de entrenamiento antiguos para evitar doble conteo.
+- 2026-10-20 15:09 CST — A solicitud del usuario, eliminados mediante MySQL los 7 planes de entrenamiento de la cuenta `Usuario de prueba` (`usuario_id=24`); verificación posterior confirmó 0 planes restantes.
+- 2026-10-20 14:58 CST — Al guardar correctamente un entrenamiento, el servidor elimina su sesión OpenCode en memoria; si falla la limpieza, conserva el resultado 201 y registra el fallo de forma segura en `errores_aplicacion`.
+- 2026-10-20 15:00 CST — Al guardar correctamente una comida, se elimina la sesión OpenCode persistida y ya no se abre otra inmediatamente. La siguiente operación de comidas la preparará cuando sea necesaria. Las sesiones temporales de generación de planes ya se eliminaban al terminar la generación, antes de guardar el plan.
 - 2026-10-20 14:57 CST — Corregidas las alertas diferidas de entrenamiento: se crean al recibir respuesta, aclaración, guardado o error solo cuando el modal está cerrado/oculto; el servidor suprime duplicados y resuelve preguntas anteriores al recibir nueva aclaración.
 - 2026-10-20 14:56 CST — Reestructuradas las metas del plan: el prompt y parser exigen macros estructurados para reposo y entrenamiento; se persisten los cuatro macros de entrenamiento en columnas nuevas con migración 0003. El dashboard escoge el conjunto según entrenamientos registrados ese día y evita sumar dos veces el ejercicio en planes nuevos; planes anteriores conservan el ajuste dinámico.
 - 2026-10-20 14:48 CST — Actualizado el prompt canónico `comportamiento-sesion-plan.md`: exige metas de macros separadas para reposo y entrenamiento, con gasto de la sesión planificada declarado como estimación; `macros_objetivo` conserva la meta base de reposo para compatibilidad.

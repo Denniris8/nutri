@@ -463,8 +463,6 @@ SELECT LAST_INSERT_ID();`);
     const records = await readFoodEntries({ userId, fecha: entry.fecha, dbQuery, textSql });
     try {
       await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode, forgetOnError: true });
-      await ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode, trace });
-      traceFoodSession(trace, 'next_food_session_ready');
     }
     catch (error) {
       traceFoodSession(trace, 'session_cleanup_failed', {
