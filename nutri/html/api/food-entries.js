@@ -481,9 +481,12 @@ SELECT LAST_INSERT_ID();`);
     }
     const retainedTargetId = updateTargetId || appendTargetId || (activeTarget && (!createsNew || asksCorrection && !asksAddition) ? activeTarget.id : null);
     if (updateTargetId != null) {
-      const availableItemIds = new Set((target?.items || []).map((item) => String(item.itemId)));
+      const availableItemIds = new Set((target?.items || []).map((item) => String(item.targetItemId)));
       if (!items.some((item) => item.targetItemId != null) || items.some((item) => item.targetItemId != null && !availableItemIds.has(String(item.targetItemId)))) {
-        clarification = 'No pude identificar el alimento guardado que quieres corregir. Indica cuál alimento y cantidad deseas actualizar.';
+        const availableItems = (target?.items || []).map((item) => `${item.name}${item.quantity ? ` (${item.quantity})` : ''}`).join('; ');
+        clarification = availableItems
+          ? `No pude identificar cuál alimento corregir. Los alimentos guardados en esa comida son: ${availableItems}. Indica cuál y la cantidad correcta.`
+          : 'No encontré alimentos guardados en esa comida. Indica cuál registro quieres corregir.';
         updateTargetId = null;
       }
     } else if (items.some((item) => item.targetItemId != null)) {
