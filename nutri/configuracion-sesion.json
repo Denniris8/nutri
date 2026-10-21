@@ -3,7 +3,7 @@
     "providerID": "nvidia",
     "modelID": "z-ai/glm-5.3-flash"
   },
-  "agent": "build",
+  "agent": "plan",
   "variant": null,
   "requestTimeoutMs": 600000,
   "usdaTimeoutMs": 10000,
