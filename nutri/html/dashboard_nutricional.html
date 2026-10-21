@@ -112,19 +112,8 @@
 
     <section class="dashboard-view" id="moreView" data-dashboard-view="more" aria-labelledby="moreTitle" hidden>
       <header class="view-heading"><div><h1 id="moreTitle" tabindex="-1">Más</h1><p>Mediciones y preferencias.</p></div></header>
-      <section class="panel panel-pad" aria-labelledby="accountProfileTitle">
-        <div class="section-head"><div><h2 id="accountProfileTitle">Perfil de cuenta</h2><p>Datos usados para el contexto nutricional.</p></div></div>
-        <form id="accountProfileForm">
-          <label for="accountHeightCm">Estatura medida (cm, opcional)</label>
-          <input id="accountHeightCm" type="number" min="80" max="250" step="0.1" inputmode="decimal">
-          <label for="accountSexSelect">Sexo registrado</label>
-          <select id="accountSexSelect" required><option value="">Cargando…</option><option value="masculino">Masculino</option><option value="femenino">Femenino</option><option value="otro">Otro</option></select>
-          <div id="accountTmbSummary" class="hint" role="status" aria-live="polite">Cargando metabolismo basal del perfil…</div>
-          <p id="accountProfileFeedback" role="status" aria-live="polite"></p>
-          <button id="saveAccountProfileButton" type="submit">Guardar perfil</button>
-        </form>
-      </section>
       <section class="more-actions" aria-label="Más opciones">
+        <button id="moreAccountProfileButton" class="panel more-action" type="button"><strong>Perfil de cuenta</strong><span>Estatura, sexo y metabolismo basal</span></button>
         <button id="moreBiometricsButton" class="panel more-action" type="button"><strong>Registros biométricos</strong><span>Peso y composición corporal</span></button>
         <button id="morePlicometroButton" class="panel more-action" type="button"><strong>Registros de plicómetro</strong><span>Mediciones de pliegues</span></button>
         <button id="moreOptionsButton" class="panel more-action" type="button"><strong>Opciones</strong><span>Tema y preferencias de vista</span></button>
@@ -177,6 +166,24 @@
       </section>
     </section>
   </main>
+
+  <dialog id="accountProfileDialog" class="more-form-dialog" aria-labelledby="accountProfileTitle">
+    <header class="more-form-header">
+      <div><h2 id="accountProfileTitle">Perfil de cuenta</h2><p>Datos usados para el contexto nutricional.</p></div>
+      <button id="closeAccountProfileDialog" class="icon-close" type="button" aria-label="Cerrar">×</button>
+    </header>
+    <div class="more-form-body">
+      <form id="accountProfileForm">
+        <label for="accountHeightCm">Estatura medida (cm, opcional)</label>
+        <input id="accountHeightCm" type="number" min="80" max="250" step="0.1" inputmode="decimal">
+        <label for="accountSexSelect">Sexo registrado</label>
+        <select id="accountSexSelect" required><option value="">Cargando…</option><option value="masculino">Masculino</option><option value="femenino">Femenino</option><option value="otro">Otro</option></select>
+        <div id="accountTmbSummary" class="hint" role="status" aria-live="polite">Cargando metabolismo basal del perfil…</div>
+        <p id="accountProfileFeedback" role="status" aria-live="polite"></p>
+        <button id="saveAccountProfileButton" type="submit">Guardar perfil</button>
+      </form>
+    </div>
+  </dialog>
 
   <dialog id="actionPlanDialog" class="action-plan-dialog" aria-labelledby="actionPlanDialogTitle">
     <form id="actionPlanDialogForm">

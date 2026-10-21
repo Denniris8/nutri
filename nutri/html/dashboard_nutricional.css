@@ -589,8 +589,10 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
   .view-nav { position: fixed; top: auto; bottom: max(8px, env(safe-area-inset-bottom)); left: 50%; width: min(calc(100% - 20px), 620px); margin: 0; transform: translateX(-50%); border-radius: var(--shape-xl); box-shadow: var(--elevation-2); }
   .view-nav button { min-height: 44px; padding: 7px 4px; font-size: 13px; }
   .view-heading { align-items: flex-start; }
-  .day-context { grid-template-columns: minmax(0, 1fr) auto; padding: 10px 12px; }
-  .day-context-meta { font-size: 12px; }
+  .day-context { grid-template-columns: minmax(0, 1fr); gap: 10px; padding: 12px; }
+  .day-context-heading, .day-navigation, .day-context-meta { grid-column: 1; grid-row: auto; }
+  .day-context-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; font-size: 12px; }
+  .day-context-meta > span { min-width: 0; padding: 8px; border: 1px solid var(--line); border-radius: var(--shape-sm); background: var(--md-sys-color-surface-container-low); }
   .quick-actions { width: 100%; }
   .quick-actions button { flex: 1 1 160px; }
   .dashboard-view { gap: 10px; }
@@ -617,7 +619,5 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
 }
 @media (max-width: 380px) {
   .cards { grid-template-columns: 1fr !important; }
-  .day-context { grid-template-columns: 1fr; }
-  .day-context-meta { grid-column: 1; grid-row: auto; display: flex; flex-wrap: wrap; justify-content: space-between; }
-  .day-navigation { grid-row: auto; }
+  .day-context-meta { grid-template-columns: 1fr; }
 }

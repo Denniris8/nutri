@@ -2187,6 +2187,14 @@ async function loadAccountProfile() {
 
 if (document.querySelector('#accountProfileForm')) loadAccountProfile();
 
+document.querySelector('#moreAccountProfileButton')?.addEventListener('click', () => {
+  document.querySelector('#accountProfileDialog').showModal();
+  void loadAccountProfile();
+});
+document.querySelector('#closeAccountProfileDialog')?.addEventListener('click', () => {
+  document.querySelector('#accountProfileDialog').close();
+});
+
 document.querySelector('#accountProfileForm')?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = event.currentTarget;

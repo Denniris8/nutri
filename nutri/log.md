@@ -1,3 +1,5 @@
+- 2026-10-20 23:11 CST — Dashboard móvil: reordenado “Día seleccionado” en una columna, con selector de fecha a todo lo ancho y métricas separadas en bloques para evitar que se amontonen en pantallas estrechas. No se ejecutaron pruebas.
+- 2026-10-20 23:13 CST — Perfil de cuenta: convertido en opción de la pestaña “Más” que abre un modal, siguiendo el patrón de las demás opciones; el perfil se vuelve a cargar al abrirlo y se puede cerrar con botón o Escape.
 - 2026-10-20 19:55 CST — Dashboard: deshabilitado el zoom de pellizco mediante viewport en acceso, dashboard, preferencias y términos. Esto reduce accesibilidad; navegadores con zoom accesible pueden ignorarlo.
 - 2026-10-20 19:40 CST — Flujo de comidas: cambiado el agente OpenCode `build` por el agente integrado de solo lectura `plan`; la huella de configuración hará que la app renueve la sesión de comidas.
 - 2026-10-20 19:32 CST — Registro de comidas: alineado el modelo explícito con el default global de OpenCode `nvidia/z-ai/glm-5.3-flash`, disponible en el catálogo del servicio.
