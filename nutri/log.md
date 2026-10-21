@@ -1,3 +1,4 @@
+- 2026-10-20 19:32 CST — Registro de comidas: alineado el modelo explícito con el default global de OpenCode `nvidia/z-ai/glm-5.3-flash`, disponible en el catálogo del servicio.
 - 2026-10-20 19:20 CST — Configuración de comidas: establecido el modelo solicitado nvidia/GLM-5.3 en `configuracion-sesion.json`.
 - 2026-10-20 11:17 CST — Registrar entrenamiento y crear plan: si falla la apertura de la sesión OpenCode, se muestran errores rojos y se deshabilitan el campo y el botón de envío hasta volver a abrir el formulario; el servidor distingue el fallo de creación de sesión del error al generar el plan.
 - 2026-10-20 10:53 CST — Movido `pull` a la carpeta base `proyecto nutri`; ahora actualiza el repositorio raíz y ejecuta Compose con el compose de Nutri, recreando ambos servicios.

@@ -1,7 +1,7 @@
 {
   "model": {
     "providerID": "nvidia",
-    "modelID": "GLM-5.3"
+    "modelID": "z-ai/glm-5.3-flash"
   },
   "agent": "build",
   "variant": null,
