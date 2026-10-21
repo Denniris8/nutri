@@ -491,9 +491,11 @@ notificationsList?.addEventListener('click', async (event) => {
   if (!button) return;
   if (button.dataset.category === 'plan' && button.dataset.unread !== 'true') return;
   try {
-    await fetch(`/api/notifications/${encodeURIComponent(button.dataset.id)}/read`, { method: 'POST', credentials: 'same-origin' });
+    const response = await fetch(`/api/notifications/${encodeURIComponent(button.dataset.id)}/read`, { method: 'POST', credentials: 'same-origin' });
+    if (!response.ok) throw new Error('No se pudo marcar la alerta como leída.');
     await refreshNotifications();
-  } catch {}
+  } catch (error) { notifyApp(error.message || 'No se pudo marcar la alerta como leída.', 'error'); return; }
+  if (button.dataset.state === 'error') return;
   if (button.dataset.category === 'plan') {
     notificationsDialog.close();
     trainingPlanTrigger?.click();
