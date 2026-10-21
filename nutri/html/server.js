@@ -25,6 +25,7 @@ const termsVersion = 1;
 const bodyLimit = 32768;
 const loginLimit = 10;
 const limitWindow = 15 * 60 * 1000;
+const foodEntryWindow = 5 * 60 * 1000;
 const dummySalt = randomBytes(16);
 let dummyHashPromise;
 const countryDialCodes = {
@@ -216,11 +217,19 @@ function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_S
   function allowAttempt(request, response, type) {
     const key = `${type}:${request.socket.remoteAddress || 'unknown'}`;
     const time = Date.now();
+    const maxAttempts = loginLimit;
+    const messageType = ['food-entry', 'training-analysis', 'training-plan'].includes(type);
+    const windowMs = messageType ? foodEntryWindow : limitWindow;
     for (const [entry, state] of attempts) if (state.until <= time) attempts.delete(entry);
-    const state = attempts.get(key) || { count: 0, until: time + limitWindow };
-    if (state.count >= loginLimit) {
-      response.setHeader('Retry-After', Math.ceil((state.until - time) / 1000));
-      authError(response, 429, 'Demasiados intentos. Intenta más tarde.');
+    const state = attempts.get(key) || { count: 0, until: time + windowMs };
+    if (state.count >= maxAttempts) {
+      const retryAfter = Math.max(1, Math.ceil((state.until - time) / 1000));
+      response.setHeader('Retry-After', retryAfter);
+      const retryMinutes = Math.max(1, Math.ceil(retryAfter / 60));
+      const message = messageType
+        ? `Límite de 10 mensajes alcanzado. Podrás enviar más en ${retryMinutes} minuto${retryMinutes === 1 ? '' : 's'}.`
+        : 'Demasiados intentos. Intenta más tarde.';
+      authError(response, 429, message);
       return false;
     }
     state.count += 1;
