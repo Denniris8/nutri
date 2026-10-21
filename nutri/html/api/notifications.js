@@ -15,7 +15,7 @@ async function addNotification(options) {
 
 function resolveNotificationsSql({ userId, category, state = 'requiere_respuesta', textSql }) {
   if (!/^[1-9]\d{0,19}$/.test(String(userId)) || !categories.has(category) || !states.has(state)) throw new Error('notification_invalid');
-  return `UPDATE notificaciones_usuario SET estado='resuelta',leida_en=COALESCE(leida_en,UTC_TIMESTAMP(3)) WHERE usuario_id=${userId} AND categoria=${textSql(category)} COLLATE utf8mb4_unicode_ci AND estado=${textSql(state)} COLLATE utf8mb4_unicode_ci`;
+  return `UPDATE notificaciones_usuario SET estado='resuelta',leida_en=COALESCE(leida_en,UTC_TIMESTAMP(3)) WHERE usuario_id=${userId} AND BINARY categoria=BINARY ${textSql(category)} AND BINARY estado=BINARY ${textSql(state)}`;
 }
 
 async function readNotifications({ userId, dbQuery }) {
