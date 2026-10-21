@@ -15,7 +15,7 @@ const { deleteFoodEntry, readFoodEntries, readPendingFoodDraft, saveFoodEntry } 
 const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError, safeOpenCodeErrorCode, traceFoodSession } = require('./api/opencode-food.js');
 const { analyzeTraining, deleteTrainingSession, generateTrainingPlan, prepareTrainingSession } = require('./api/training-analysis.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
-const { deleteTrainingPlan, readTrainingPlans, saveTrainingPlan } = require('./api/training-plans.js');
+const { deleteTrainingPlan, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
 const { addNotification, markNotificationRead, notificationInsertSql, readNotifications, resolveNotificationsSql } = require('./api/notifications.js');
 
 const scrypt = promisify(scryptCallback);
@@ -683,6 +683,7 @@ COMMIT;`);
           dbQuery(`SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT('fecha',fecha,'tricepsMm',triceps_mm,'bicepsMm',biceps_mm,'subescapularMm',subescapular_mm,'suprailiacoMm',suprailiaco_mm,'abdominalMm',abdominal_mm,'musloAnteriorMm',muslo_anterior_mm,'pantorrillaMm',pantorrilla_mm)),JSON_ARRAY()) FROM (SELECT id,fecha,triceps_mm,biceps_mm,subescapular_mm,suprailiaco_mm,abdominal_mm,muslo_anterior_mm,pantorrilla_mm FROM registros_plicometro WHERE usuario_id=${claims.sub} ORDER BY fecha DESC,id DESC) AS plicometric_records;`),
           dbQuery(`SELECT JSON_OBJECT('age',edad) FROM usuarios WHERE id=${claims.sub} LIMIT 1;`),
         ]);
+        const previousPlanRow = await dbQuery(`SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ'),'goals',objetivos,'content',contenido,'macros',JSON_OBJECT('proteinas_g',objetivo_proteinas_g,'carbohidratos_g',objetivo_carbohidratos_g,'grasas_g',objetivo_grasas_g,'calorias_kcal',objetivo_calorias_kcal)) FROM planes_entrenamiento WHERE usuario_id=${claims.sub} ORDER BY creado_en DESC,id DESC LIMIT 1;`);
         const age = ageRow ? JSON.parse(ageRow).age : null;
         const biometrics = JSON.parse(biometricRows || '[]');
         const plicometrics = JSON.parse(plicometricRows || '[]');
@@ -699,6 +700,7 @@ COMMIT;`);
           } : null,
           biometricRecords: biometrics,
           plicometricRecords: plicometrics,
+          previousTrainingPlanSummary: summarizeTrainingPlan(previousPlanRow ? JSON.parse(previousPlanRow) : null),
         };
         const generated = await generateTrainingPlan({ userId: claims.sub, goals: data && typeof data === 'object' ? data.goals : undefined, context, requestOpenCode: openCodeRequest });
         if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'generado', title: 'Plan generado, aún sin guardar', message: 'Tu plan está listo para revisar y guardar.', dbQuery, textSql }); } catch {}

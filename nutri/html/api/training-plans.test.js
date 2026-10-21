@@ -1,6 +1,21 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { deleteTrainingPlan, readTrainingPlans, saveTrainingPlan, validateTrainingPlan } = require('./training-plans.js');
+const { deleteTrainingPlan, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan, validateTrainingPlan } = require('./training-plans.js');
+
+test('previous training plan is summarized as a bounded list', () => {
+  const summary = summarizeTrainingPlan({
+    createdAt: '2026-10-15', goals: 'Ganar fuerza',
+    macros: { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 },
+    content: '# Rutina\n- Sentadilla 3x8\n- Press 3x8',
+  });
+  assert.deepEqual(summary, [
+    'Fecha: 2026-10-15',
+    'Objetivos: Ganar fuerza',
+    'Macros de reposo: proteína=140, carbohidratos=220, grasas=65, calorías kcal=2000',
+    'Puntos principales: Rutina | Sentadilla 3x8 | Press 3x8',
+  ]);
+  assert.equal(summarizeTrainingPlan(null), null);
+});
 
 test('saved training plan is owned by the authenticated user and records its UTC creation date', async () => {
   let sql;

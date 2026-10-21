@@ -1,5 +1,22 @@
 const macroFields = ['proteinas_g', 'carbohidratos_g', 'grasas_g', 'calorias_kcal'];
 
+function summarizeTrainingPlan(plan) {
+  if (!plan) return null;
+  const clean = (value) => String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
+  const labels = { proteinas_g: 'proteína', carbohidratos_g: 'carbohidratos', grasas_g: 'grasas', calorias_kcal: 'calorías kcal' };
+  const summary = [
+    plan.createdAt && `Fecha: ${clean(plan.createdAt)}`,
+    plan.goals && `Objetivos: ${clean(plan.goals)}`,
+    `Macros de reposo: ${macroFields.map((key) => `${labels[key]}=${plan.macros?.[key] ?? 'no disponible'}`).join(', ')}`,
+  ].filter(Boolean);
+  const points = String(plan.content ?? '').split(/\r?\n/)
+    .filter((line) => /^\s*(?:#{1,4}\s+|[-*]\s+|\d+[.)]\s+)/.test(line))
+    .map((line) => clean(line.replace(/^\s*(?:#{1,4}\s+|[-*]\s+|\d+[.)]\s+)/, '').replace(/[`*_>#]/g, '')))
+    .filter(Boolean).slice(0, 8);
+  if (points.length) summary.push(`Puntos principales: ${points.join(' | ')}`);
+  return summary;
+}
+
 function validateTrainingPlan({ userId, goals, plan, macros }) {
   const id = String(userId);
   const objectives = typeof goals === 'string' ? goals.trim() : '';
@@ -38,4 +55,4 @@ async function deleteTrainingPlan({ userId, planId, dbQuery }) {
   return result.split(/\s+/).at(-1) === '1';
 }
 
-module.exports = { deleteTrainingPlan, readTrainingPlans, saveTrainingPlan, validateTrainingPlan };
+module.exports = { deleteTrainingPlan, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan, validateTrainingPlan };
