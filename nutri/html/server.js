@@ -259,6 +259,11 @@ function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_S
     }
     catch { response.writeHead(400).end(); return; }
 
+    if (pathname === '/healthz') {
+      response.writeHead(request.method === 'GET' ? 200 : 405).end();
+      return;
+    }
+
     if (pathname.startsWith('/api/auth/')) {
       if (!['POST'].includes(request.method)) { response.writeHead(405, { Allow: 'POST' }).end(); return; }
       if (!sameOrigin(request)) { authError(response, 403, 'Solicitud no permitida.'); return; }

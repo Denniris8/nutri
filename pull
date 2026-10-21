@@ -6,7 +6,21 @@ before=$(git -C "$root" rev-parse HEAD)
 git -C "$root" pull --ff-only
 after=$(git -C "$root" rev-parse HEAD)
 # MySQL never needs recreation for migrations; Nutri applies them on startup.
-docker compose --project-directory "$root/nutri" -f "$root/nutri/docker-compose.yml" up -d --force-recreate nutri
+compose_nutri() {
+  docker compose --project-directory "$root/nutri" -f "$root/nutri/docker-compose.yml" "$@"
+}
+
+nutri_container=$(compose_nutri ps --all -q nutri)
+nutri_health=missing
+if [ -n "$nutri_container" ]; then
+  nutri_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$nutri_container")
+fi
+
+if ! git -C "$root" diff --quiet "$before" "$after" -- nutri/ garmin-connect-mcp/ || [ "$nutri_health" = unhealthy ]; then
+  compose_nutri up -d --build --force-recreate nutri
+else
+  compose_nutri up -d --build nutri
+fi
 
 if ! git -C "$root" diff --quiet "$before" "$after" -- tunnel/; then
   docker compose --project-directory "$root/tunnel" -f "$root/tunnel/docker-compose.yml" up -d --build --force-recreate
