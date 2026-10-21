@@ -1,7 +1,7 @@
 {
   "model": {
-    "providerID": "nvidia",
-    "modelID": "z-ai/glm-5.3-flash"
+    "providerID": "openai",
+    "modelID": "gpt-6-luna"
   },
   "agent": "plan",
   "variant": null,
