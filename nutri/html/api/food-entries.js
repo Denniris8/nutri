@@ -608,6 +608,7 @@ SELECT LAST_INSERT_ID();`);
     }
     statements.push(resolveNotificationsSql({ userId, category: 'comida', textSql }));
     if (!suppressNotification) statements.push(notificationInsertSql({ userId, category: 'comida', state: 'guardado', title: 'Comida guardada', message: confirmation, referenceId: append || updating ? destinationId : entryId, textSql }));
+    statements.push(`DELETE old FROM registros_comida_interacciones old JOIN (SELECT registro_comida_id,MIN(CASE WHEN role='user' THEN id END) first_user_id,MAX(CASE WHEN role='user' THEN id END) last_user_id,MAX(CASE WHEN role='assistant' THEN id END) last_assistant_id FROM registros_comida_interacciones WHERE registro_comida_id=${destinationId} GROUP BY registro_comida_id) retained ON retained.registro_comida_id=old.registro_comida_id WHERE old.id NOT IN (retained.first_user_id,retained.last_user_id,retained.last_assistant_id)`);
     statements.push('COMMIT');
     await dbQuery(`${statements.join(';')};`);
     traceFoodSession(trace, 'items_saved', { itemCount: items.length, appended: append });
