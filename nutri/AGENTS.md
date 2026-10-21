@@ -1,5 +1,5 @@
 # AGENTS
-
+0  antes de cada cambio revisa git pull
 1 - Usa siempre slill Ponytail en modo ultra para crear [función/componente]. Resuélvelo con la menor cantidad de líneas de código posible utilizando únicamente la biblioteca estándar de [lenguaje]. Aplica filosofía estricta YAGNI.
 2 - Cuando refactorices o limpies revisa el bloque de código usando la skill ponytail review. Quiero que apliques Ponytail full para eliminar sobreingeniería, abstracciones redundantes y patrones de diseño innecesarios. Devuélveme la versión más directa y limpia.
 3 - Este archivo es la fuente canónica de comportamiento del agente para `nutri_app`.

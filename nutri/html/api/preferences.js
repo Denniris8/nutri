@@ -96,7 +96,7 @@ COMMIT;`);
 async function readPreferences({ userId, dbQuery }) {
   const id = String(userId);
   if (!/^\d+$/.test(id)) throw new Error('invalid_user_id');
-  const raw = await dbQuery(`SELECT JSON_OBJECT('deviceMode',p.modo_dispositivo,'patronAlimentario',p.patron_alimentario,'nutritionDayStart',p.nutrition_day_start,'nutritionDayEnd',p.nutrition_day_end,'preferredFoods',p.alimentos_preferidos,'avoidedFoods',p.alimentos_evitar,'allergiesStatus',h.estado_alergias,'allergiesDetails',h.alergias_detalle,'medicationsStatus',h.estado_medicamentos,'medicationsDetails',h.medicamentos_detalle,'garminConnected',EXISTS(SELECT 1 FROM credenciales_integracion_usuario c WHERE c.usuario_id=p.usuario_id AND c.proveedor=\'garmin\')) FROM preferencias_usuario p JOIN perfil_salud_usuario h ON h.usuario_id=p.usuario_id WHERE p.usuario_id=${id} LIMIT 1;`);
+   const raw = await dbQuery(`SELECT JSON_OBJECT('deviceMode',p.modo_dispositivo,'patronAlimentario',p.patron_alimentario,'nutritionDayStart',p.nutrition_day_start,'nutritionDayEnd',p.nutrition_day_end,'timezone',p.zona_horaria,'preferredFoods',p.alimentos_preferidos,'avoidedFoods',p.alimentos_evitar,'allergiesStatus',h.estado_alergias,'allergiesDetails',h.alergias_detalle,'medicationsStatus',h.estado_medicamentos,'medicationsDetails',h.medicamentos_detalle,'garminConnected',EXISTS(SELECT 1 FROM credenciales_integracion_usuario c WHERE c.usuario_id=p.usuario_id AND c.proveedor=\'garmin\')) FROM preferencias_usuario p JOIN perfil_salud_usuario h ON h.usuario_id=p.usuario_id WHERE p.usuario_id=${id} LIMIT 1;`);
   return raw ? JSON.parse(raw) : null;
 }
 

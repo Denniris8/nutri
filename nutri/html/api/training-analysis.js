@@ -1,4 +1,4 @@
-const { createHash } = require('node:crypto');
+const { createHash, randomUUID } = require('node:crypto');
 const path = require('node:path');
 const { readFile } = require('node:fs/promises');
 const { openCodeRequest, getFoodSessionDefaults } = require('./opencode-food.js');
@@ -7,6 +7,7 @@ const { parseTrainingSavedTime } = require('./training-entries.js');
 const permissions = [{ permission: '*', pattern: '*', action: 'deny' }];
 // El ID vive solo en memoria del servidor; el cliente nunca elige ni recibe una sesión reutilizable.
 const sessions = new Map();
+const pendingPlanSessions = new Map();
 const locks = new Map();
 const trainingPromptPath = path.resolve(__dirname, '../../comportamiento-sesion-entrenamientos.md');
 const trainingPlanPromptPath = path.resolve(__dirname, '../../comportamiento-sesion-plan.md');
@@ -156,18 +157,38 @@ async function prepareTrainingSession({ userId, requestOpenCode = openCodeReques
   const id = String(userId);
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta autenticada no válida.'), { status: 400 });
   return withUserLock(id, async () => {
-    await deleteTrainingSession({ userId: id, requestOpenCode });
+    await deleteTrainingSession({ userId: id, requestOpenCode, alreadyLocked: true });
     return openTrainingSession(id, await readConfig(), requestOpenCode);
   });
 }
 
-async function deleteTrainingSession({ userId, requestOpenCode = openCodeRequest }) {
+async function deleteTrainingSession({ userId, requestOpenCode = openCodeRequest, alreadyLocked = false }) {
   const id = String(userId);
-  const cached = sessions.get(id);
-  if (!cached) return;
-  const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(cached.id)}`);
-  if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) throw new Error('No se pudo eliminar la sesión OpenCode de entrenamiento.');
-  sessions.delete(id);
+  const remove = async () => {
+    const cached = sessions.get(id);
+    if (!cached) return;
+    const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(cached.id)}`);
+    if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) throw new Error('No se pudo eliminar la sesión OpenCode de entrenamiento.');
+    sessions.delete(id);
+  };
+  return alreadyLocked ? remove() : withUserLock(id, remove);
+}
+
+async function closePendingPlanSession(userId, requestOpenCode, runId) {
+  const pending = pendingPlanSessions.get(userId);
+  if (!pending || runId && pending.runId !== runId) return false;
+  const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(pending.sessionId)}`);
+  if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) {
+    throw Object.assign(new Error('No se pudo cerrar la sesión del plan.'), { code: 'TRAINING_PLAN_SESSION_CLEANUP' });
+  }
+  pendingPlanSessions.delete(userId);
+  return true;
+}
+
+async function deleteTrainingPlanSession({ userId, runId, requestOpenCode = openCodeRequest }) {
+  const id = String(userId);
+  if (!/^\d+$/.test(id) || runId != null && typeof runId !== 'string') return false;
+  return withUserLock(id, () => closePendingPlanSession(id, requestOpenCode, runId));
 }
 
 async function generateTrainingPlan({ userId, goals, context, requestOpenCode = openCodeRequest, readConfig = getFoodSessionDefaults }) {
@@ -181,39 +202,49 @@ async function generateTrainingPlan({ userId, goals, context, requestOpenCode = 
   const systemPrompt = await readTrainingPlanPrompt();
   const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
   const fingerprint = createHash('sha256').update(JSON.stringify({ userId: id, scope: 'training-plan', model: config.model, agent: config.agent, variant: config.variant })).digest('hex');
-  let created;
-  try {
-    created = await requestOpenCode('POST', '/session', {
-      title: 'Plan de entrenamiento',
-      ...(config.agent ? { agent: config.agent } : {}),
-      ...(model ? { model: { id: model.modelID, providerID: model.providerID, ...(config.variant ? { variant: config.variant } : {}) } } : {}),
-      permission: permissions,
-      metadata: { trainingPlanUserId: id, trainingPlanConfigSha256: fingerprint },
-    }, config.requestTimeoutMs);
-  } catch {
-    throw Object.assign(new Error('No se pudo abrir la sesión para crear el plan.'), { code: 'TRAINING_PLAN_SESSION_OPEN' });
-  }
-  const sessionId = created.data?.id;
-  if (created.status < 200 || created.status >= 300 || !/^ses_[A-Za-z0-9_-]{4,120}$/.test(sessionId || '')) {
-    throw Object.assign(new Error('No se pudo abrir la sesión para crear el plan.'), { code: 'TRAINING_PLAN_SESSION_OPEN' });
-  }
-  try {
-    const result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
-      system: systemPrompt,
-      tools: {},
-      ...(model ? { model } : {}),
-      ...(config.agent ? { agent: config.agent } : {}),
-      ...(config.variant ? { variant: config.variant } : {}),
-      parts: [{ type: 'text', text: JSON.stringify({ goals: text, context }) }],
-    }, config.requestTimeoutMs);
-    if (result.status < 200 || result.status >= 300) throw new Error('OpenCode no pudo generar el plan.');
-    return parseTrainingPlanReply(result.data?.parts || []);
-  } finally {
+  return withUserLock(id, async () => {
+    await closePendingPlanSession(id, requestOpenCode);
+    let created;
     try {
-      const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(sessionId)}`, undefined, config.requestTimeoutMs);
-      if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) throw new Error();
-    } catch { throw Object.assign(new Error('No se pudo cerrar la sesión temporal del plan.'), { code: 'TRAINING_PLAN_SESSION_CLEANUP' }); }
-  }
+      created = await requestOpenCode('POST', '/session', {
+        title: 'Plan de entrenamiento',
+        ...(config.agent ? { agent: config.agent } : {}),
+        ...(model ? { model: { id: model.modelID, providerID: model.providerID, ...(config.variant ? { variant: config.variant } : {}) } } : {}),
+        permission: permissions,
+        metadata: { trainingPlanUserId: id, trainingPlanConfigSha256: fingerprint },
+      }, config.requestTimeoutMs);
+    } catch {
+      throw Object.assign(new Error('No se pudo abrir la sesión para crear el plan.'), { code: 'TRAINING_PLAN_SESSION_OPEN' });
+    }
+    const sessionId = created.data?.id;
+    if (created.status < 200 || created.status >= 300 || !/^ses_[A-Za-z0-9_-]{4,120}$/.test(sessionId || '')) {
+      throw Object.assign(new Error('No se pudo abrir la sesión para crear el plan.'), { code: 'TRAINING_PLAN_SESSION_OPEN' });
+    }
+    let retained = false;
+    try {
+      const result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
+        system: systemPrompt,
+        tools: {},
+        ...(model ? { model } : {}),
+        ...(config.agent ? { agent: config.agent } : {}),
+        ...(config.variant ? { variant: config.variant } : {}),
+        parts: [{ type: 'text', text: JSON.stringify({ goals: text, context }) }],
+      }, config.requestTimeoutMs);
+      if (result.status < 200 || result.status >= 300) throw new Error('OpenCode no pudo generar el plan.');
+      const plan = parseTrainingPlanReply(result.data?.parts || []);
+      const runId = randomUUID();
+      pendingPlanSessions.set(id, { sessionId, runId });
+      retained = true;
+      return { ...plan, runId };
+    } finally {
+      if (!retained) {
+        try {
+          const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(sessionId)}`, undefined, config.requestTimeoutMs);
+          if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) throw new Error();
+        } catch { throw Object.assign(new Error('No se pudo cerrar la sesión temporal del plan.'), { code: 'TRAINING_PLAN_SESSION_CLEANUP' }); }
+      }
+    }
+  });
 }
 
-module.exports = { analyzeTraining, deleteTrainingSession, generateTrainingPlan, parseTrainingPlanReply, prepareTrainingSession };
+module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, parseTrainingPlanReply, prepareTrainingSession };

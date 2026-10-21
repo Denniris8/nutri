@@ -24,13 +24,16 @@
     <div class="error" id="errorBox" aria-live="polite"></div>
 
     <section class="dashboard-view" id="todayView" data-dashboard-view="today" aria-labelledby="todayTitle">
-      <section class="day-context panel" aria-label="Día seleccionado">
+      <section class="day-context panel" aria-label="Día nutricional seleccionado">
         <div class="day-context-heading">
-          <label for="daySelect">Día seleccionado</label>
+          <div>
+            <label for="daySelect">Día nutricional</label>
+            <small class="hint">Sigue el horario configurado en Preferencias.</small>
+          </div>
         </div>
         <div class="day-navigation">
           <button id="previousDayButton" class="button-muted day-nav-button" type="button" aria-label="Día anterior" title="Día anterior">‹</button>
-          <input id="daySelect" type="date" aria-label="Seleccionar día">
+          <input id="daySelect" type="date" aria-label="Seleccionar día nutricional">
           <button id="nextDayButton" class="button-muted day-nav-button" type="button" aria-label="Día siguiente" title="Día siguiente">›</button>
         </div>
         <div class="day-context-meta">
@@ -52,7 +55,7 @@
       <div class="macro-section-heading">
         <h2>Objetivos y consumo de hoy</h2>
       </div>
-      <section class="cards" id="macroCards" aria-label="Macros consumidos en el día seleccionado" aria-live="polite"></section>
+      <section class="cards" id="macroCards" aria-label="Macros consumidos en el día nutricional seleccionado" aria-live="polite"></section>
       <section class="panel panel-pad training-energy-summary" aria-labelledby="trainingEnergySummaryTitle">
         <div class="section-head"><div><h2 id="trainingEnergySummaryTitle">Gasto y balance parcial</h2><p>El balance usa el metabolismo basal y el ejercicio registrado; no equivale al gasto total diario.</p></div></div>
         <div id="trainingEnergySummaryValues" class="training-energy-summary-values"></div>
@@ -413,7 +416,7 @@
         <div class="training-plan-actions">
           <button id="sendTrainingPlanGoals" type="button">Enviar mensaje</button>
           <button id="saveTrainingPlan" type="button" title="Guardar el plan generado" disabled hidden>Guardar</button>
-          <button id="cancelTrainingPlanDialog" class="button-muted" type="button">Cerrar</button>
+          <button id="cancelTrainingPlanDialog" class="button-muted" type="button">Cancelar</button>
         </div>
       </div>
     </div>
@@ -557,6 +560,6 @@
     </div>
   </dialog>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
-  <script src="/onboarding-flow.js?v=training-plan-session-failure-1" defer></script>
+  <script src="/onboarding-flow.js?v=chat-food-date-1" defer></script>
 </body>
 </html>

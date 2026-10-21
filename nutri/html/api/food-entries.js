@@ -49,6 +49,67 @@ function formatFoodTime(hour, minute) {
   return `${hour % 12 || 12}:${String(minute).padStart(2, '0')} ${hour < 12 ? 'a. m.' : 'p. m.'}`;
 }
 
+function previousDate(date) {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() - 1);
+  return value.toISOString().slice(0, 10);
+}
+
+function chatFoodDate(text, timezone) {
+  const normalized = String(text).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const dates = [];
+  const add = (year, month, day) => {
+    const value = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const parsed = new Date(`${value}T00:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) throw Object.assign(new Error('La fecha indicada en el chat no es válida.'), { status: 400 });
+    dates.push(value);
+  };
+  for (const match of normalized.matchAll(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g)) add(+match[1], +match[2], +match[3]);
+  for (const match of normalized.matchAll(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b/g)) add(+match[3], +match[2], +match[1]);
+  const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  const currentYear = Number(new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric' }).format(new Date()));
+  for (const match of normalized.matchAll(/\b(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(?:\s+de\s+(\d{4}))?\b/g)) {
+    const year = +(match[3] || currentYear);
+    add(year, months.indexOf(match[2]) + 1, +match[1]);
+  }
+  const todayParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
+  const today = `${todayParts.year}-${todayParts.month}-${todayParts.day}`;
+  if (/\banteayer\b/.test(normalized)) dates.push(previousDate(previousDate(today)));
+  else if (/\bayer\b/.test(normalized)) dates.push(previousDate(today));
+  else if (/\bhoy\b/.test(normalized)) dates.push(today);
+  const unique = [...new Set(dates)];
+  if (unique.length > 1) throw Object.assign(new Error('Indica una sola fecha para guardar la comida.'), { status: 400 });
+  return unique[0] || null;
+}
+
+function earlyFoodDayChoice(question, answer) {
+  if (!/¿Esta comida pertenece al día nutricional seleccionado(?:\s*\([^)]*\))? o al anterior\?/i.test(String(question || ''))) return null;
+  const text = String(answer).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (/\b(anterior|dia anterior|ayer)\b/.test(text)) return 'anterior';
+  if (/\b(actual|seleccionado|este dia|hoy)\b/.test(text)) return 'actual';
+  return null;
+}
+
+function previousDaySaveAnswer(question, answer) {
+  if (!/¿La guardo en el día nutricional anterior .*11:59:59 p\. m\./i.test(String(question || ''))) return null;
+  const text = String(answer).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\./g, '');
+  if (/\b(?:11:59:59\s*p\s*m|23:59:59)\b/.test(text)) return { confirmed: true, time: { hours: [23], minute: 59 }, lastSecond: true };
+  const time = parseFoodTime(answer);
+  if (time && !time.invalid && !time.ambiguous && time.hours.length === 1) return { confirmed: true, time, lastSecond: false };
+  if (/\b(si|confirmo|confirmar|correcto|de acuerdo|asi esta bien)\b/.test(text)) return { confirmed: true, time: { hours: [23], minute: 59 }, lastSecond: true };
+  return { confirmed: false };
+}
+
+function confirmedFoodDate(question, answer, timezone, previousSaveAnswer) {
+  const normalizedQuestion = String(question || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const normalizedAnswer = String(answer || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  const confirmsSaving = /\b(?:guardar|guardo|guardarla|guardemos)\b/.test(normalizedQuestion)
+    && /\b(?:dia|fecha)\b/.test(normalizedQuestion)
+    && (previousSaveAnswer?.confirmed || /^\s*(?:si|confirmo|correcto|de acuerdo|claro|adelante)\b/.test(normalizedAnswer));
+  if (!confirmsSaving) return null;
+  try { return chatFoodDate(question, timezone); } catch { return null; }
+}
+
 function localDateTimeToUtc(fecha, hour, minute, timezone) {
   const [year, month, day] = fecha.split('-').map(Number);
   const wallTime = Date.UTC(year, month - 1, day, hour, minute);
@@ -235,6 +296,20 @@ async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, r
   let entryId;
   let stage = 'draft';
   try {
+    const preferenceWindow = await dbQuery(`SELECT TIME_FORMAT(nutrition_day_start,'%H:%i'),zona_horaria FROM preferencias_usuario WHERE usuario_id=${userId} LIMIT 1;`);
+    const [nutritionDayStart = '00:00', preferenceTimezone = ''] = (preferenceWindow || '').split('\t');
+    const [startHour, startMinute] = nutritionDayStart.split(':').map(Number);
+    const nutritionDayStartMinutes = Number.isFinite(startHour) && Number.isFinite(startMinute) ? startHour * 60 + startMinute : null;
+    if (preferenceTimezone) entry.timezone = preferenceTimezone;
+    const existingDraftDate = await dbQuery(`SELECT DATE_FORMAT(fecha_consumo,'%Y-%m-%d') FROM registros_comidas WHERE usuario_id=${userId} AND request_id=${textSql(entry.requestId)} AND estado='borrador_chat' LIMIT 1;`);
+    const requestedChatDate = chatFoodDate(entry.descripcion, entry.timezone);
+    if (requestedChatDate) {
+      entry.fecha = requestedChatDate;
+      if (existingDraftDate && existingDraftDate !== requestedChatDate) {
+        await dbQuery(`UPDATE registros_comidas SET fecha_consumo=${textSql(requestedChatDate)},registro_comida_destino_id=NULL,pregunta_pendiente=NULL WHERE usuario_id=${userId} AND request_id=${textSql(entry.requestId)} AND estado='borrador_chat';`);
+        entry.targetEntryId = null;
+      }
+    } else if (existingDraftDate) entry.fecha = existingDraftDate;
     const appended = await dbQuery(`SELECT JSON_OBJECT('entryId',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d')) FROM registros_comida_interacciones i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND i.request_id=${textSql(entry.requestId)} LIMIT 1;`);
     if (appended) {
       const prior = JSON.parse(appended);
@@ -265,7 +340,18 @@ SELECT LAST_INSERT_ID();`);
     }
     await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'user', content: entry.descripcion });
     const asksTimeChoice = /Hay varias comidas a esa hora|¿Te refieres a las .*a\. m\. o p\. m\./i.test(saved.question || '');
-    const requestedTime = parseFoodTime(entry.descripcion) || (asksTimeChoice ? parseFoodTime(await readFoodUserText({ entryId, dbQuery })) : null);
+    const asksDayChoice = /¿Esta comida pertenece al día nutricional seleccionado(?:\s*\([^)]*\))? o al anterior\?/i.test(saved.question || '');
+    const asksPreviousDayConfirmation = /¿La guardo en el día nutricional anterior .*11:59:59 p\. m\./i.test(saved.question || '');
+    const priorUserText = asksTimeChoice || asksDayChoice || asksPreviousDayConfirmation ? await readFoodUserText({ entryId, dbQuery }) : '';
+    const requestedTime = parseFoodTime(entry.descripcion) || (priorUserText ? parseFoodTime(priorUserText) : null);
+    const dayChoice = asksDayChoice ? earlyFoodDayChoice(saved.question, entry.descripcion) : null;
+    const previousSaveAnswer = asksPreviousDayConfirmation ? previousDaySaveAnswer(saved.question, entry.descripcion) : null;
+    const confirmedDate = confirmedFoodDate(saved.question, entry.descripcion, entry.timezone, previousSaveAnswer);
+    if (confirmedDate && confirmedDate !== entry.fecha) {
+      await dbQuery(`UPDATE registros_comidas SET fecha_consumo=${textSql(confirmedDate)},registro_comida_destino_id=NULL WHERE id=${entryId} AND usuario_id=${userId} AND estado='borrador_chat';`);
+      entry.fecha = confirmedDate;
+      entry.targetEntryId = null;
+    }
     const dayMeals = (await readFoodEntries({ userId, fecha: entry.fecha, dbQuery, textSql })).filter((record) => record.state === 'completado').map((record) => {
       const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: entry.timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(record.createdAt)).map(({ type, value }) => [type, value]));
       return {
@@ -294,11 +380,15 @@ SELECT LAST_INSERT_ID();`);
     }
     let sessionId = await ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode, trace });
     stage = 'analysis';
-    const requestArgs = { sessionId, description: modelDescription, comidasDisponibles: mealsForModel, continuacionRegistro: Boolean(activeTarget), trace, requestOpenCode };
+    const requestArgs = { sessionId, description: modelDescription, comidasDisponibles: mealsForModel, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, inicioDiaNutricional: nutritionDayStart, trace, requestOpenCode };
     let parts = await withFoodSessionLock(userId, () => requestFoodDescription(requestArgs));
     stage = 'parse';
     let result;
-    try { result = normalizeFoodReply(parseFoodReply(parts)); }
+    const parseReply = (responseParts) => {
+      try { return normalizeFoodReply(parseFoodReply(responseParts)); }
+      catch (error) { if (error.code === 'FOOD_IDENTITY_REFUSAL') throw error; return null; }
+    };
+    try { result = parseReply(parts); }
     catch (error) {
       traceFoodSession(trace, 'reply_parse_failed', { partTypes: parts.map((part) => part.type) });
       if (error.code !== 'FOOD_IDENTITY_REFUSAL') throw error;
@@ -307,15 +397,35 @@ SELECT LAST_INSERT_ID();`);
       traceFoodSession(trace, 'identity_refusal_session_reset');
       sessionId = await ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode, trace });
       stage = 'analysis';
-        parts = await withFoodSessionLock(userId, () => requestFoodDescription({ sessionId, description: modelDescription, comidasDisponibles: mealsForModel, continuacionRegistro: Boolean(activeTarget), trace, requestOpenCode }));
+      parts = await withFoodSessionLock(userId, () => requestFoodDescription({ ...requestArgs, sessionId, description: modelDescription }));
       stage = 'parse';
-      try { result = normalizeFoodReply(parseFoodReply(parts)); }
-      catch (retryError) {
-        traceFoodSession(trace, 'reply_parse_failed', { partTypes: parts.map((part) => part.type), retry: true });
-        throw retryError;
+      result = parseReply(parts);
+    }
+    let items = Array.isArray(result?.items) ? result.items : [];
+    const getReplyIssues = () => [
+      ...(!['new', 'append', 'update'].includes(result?.action) ? ['action'] : []),
+      ...(!Array.isArray(result?.items) ? ['items'] : []),
+      ...(!Object.hasOwn(result || {}, 'clarificationQuestion') || result.clarificationQuestion != null && typeof result.clarificationQuestion !== 'string' ? ['clarificationQuestion'] : []),
+      ...items.flatMap((item, index) => foodItemIssues(item).map((issue) => `items[${index}].${issue}`)),
+    ];
+    let replyIssues = getReplyIssues();
+    for (let attempt = 1; attempt <= 3 && (replyIssues.length || (!items.length && !result?.clarificationQuestion)); attempt++) {
+      traceFoodSession(trace, 'reply_validation_retry', { issueCount: replyIssues.length || 1, attempt });
+      parts = await withFoodSessionLock(userId, () => requestFoodDescription({
+        ...requestArgs, sessionId, description: modelDescription,
+        retryFeedback: `FORMATO OBLIGATORIO: vuelve a analizar el mensaje original y responde únicamente con un objeto JSON válido, sin Markdown, bloques de código, comentarios ni texto fuera del objeto. Incluye action (new|append|update), targetEntryId (ID válido o null), items (array) y clarificationQuestion (cadena o null); cada alimento debe incluir todos los campos y macros requeridos por el prompt. Problemas detectados: ${replyIssues.length ? replyIssues.join(', ') : 'JSON ausente o ilegible'}. Corrige el formato completo; no inventes datos: si falta información, devuelve items vacíos y pregunta en clarificationQuestion.`,
+      }));
+      stage = 'parse';
+      result = parseReply(parts);
+      items = Array.isArray(result?.items) ? result.items : [];
+      replyIssues = getReplyIssues();
+      if (replyIssues.length || (!items.length && !result?.clarificationQuestion)) {
+        if (attempt < 3) continue;
+        stage = 'validation';
+        traceFoodSession(trace, 'reply_validation_failed', { stage, errorCode: 'FOOD_RESPONSE_INVALID_STRUCTURE', issueCount: replyIssues.length || 1, retries: attempt });
+        throw Object.assign(new Error('OpenCode no devolvió un formato válido después de varios intentos. No se guardaron los alimentos; vuelve a enviar el mensaje.'), { code: 'FOOD_RESPONSE_INVALID_STRUCTURE' });
       }
     }
-    const items = Array.isArray(result?.items) ? result.items : [];
     const assistantMessages = Array.isArray(result?.assistantMessages)
       ? result.assistantMessages.filter((message) => typeof message === 'string' && message.trim()
         && !/(?:a cu[aá]l comida|qu[eé] comida|which meal|no hay comidas guardadas|no existe una comida)/i.test(message)).map((message) => message.slice(0, 5000))
@@ -323,6 +433,8 @@ SELECT LAST_INSERT_ID();`);
     let clarification = result?.clarificationQuestion;
     const createsNew = result.action === 'new';
     let effectiveTime = requestedTime && !requestedTime.invalid && (!activeTarget || createsNew) ? requestedTime : null;
+    if (asksDayChoice && dayChoice === 'anterior') effectiveTime = requestedTime;
+    if (asksPreviousDayConfirmation && previousSaveAnswer?.confirmed) effectiveTime = previousSaveAnswer.time;
     let timeClarification = requestedTime?.invalid ? 'No pude interpretar la hora. Indícala como 2:02 p. m. o 14:02.' : null;
     if (!activeTarget && requestedTime?.ambiguous && matchedMeals.length !== 1) {
       const label = `${requestedTime.hours[0] % 12 || 12}${requestedTime.precision === 'minute' ? `:${String(requestedTime.minute).padStart(2, '0')}` : ''}`;
@@ -376,11 +488,42 @@ SELECT LAST_INSERT_ID();`);
     } else if (items.some((item) => item.targetItemId != null)) {
       clarification = 'No pude vincular la corrección a una comida activa. Vuelve a indicar cuál registro quieres ajustar.';
     }
+    if ((asksDayChoice && dayChoice === 'anterior') || (asksPreviousDayConfirmation && previousSaveAnswer?.confirmed)) {
+      appendTargetId = null;
+      updateTargetId = null;
+    }
     traceFoodSession(trace, 'food_destination_resolved', { explicitTime: Boolean(requestedTime && !requestedTime.invalid), resumedTarget: Boolean(activeTarget), candidateCount: matchedMeals.length, appended: Boolean(appendTargetId), updated: Boolean(updateTargetId) });
     let createdAt = null;
+    let savedDate = entry.fecha;
+    let savedDescription = asksDayChoice || asksPreviousDayConfirmation ? saved.description : entry.descripcion;
+    const isEarlyTime = requestedTime && !requestedTime.invalid && requestedTime.hours.length === 1
+      && requestedTime.hours[0] * 60 + requestedTime.minute >= 1 && requestedTime.hours[0] * 60 + requestedTime.minute <= 300;
+    if (asksDayChoice && !dayChoice) clarification = '¿Esta comida pertenece al día nutricional seleccionado o al anterior? Responde “actual” o “anterior”.';
+    if (isEarlyTime && !asksDayChoice && !asksPreviousDayConfirmation && !activeTarget) {
+      clarification = `¿Esta comida pertenece al día nutricional seleccionado (${entry.fecha}) o al anterior (${previousDate(entry.fecha)})?`;
+    }
+    if (asksDayChoice && dayChoice === 'anterior') {
+      clarification = `¿La guardo en el día nutricional anterior (${previousDate(entry.fecha)})? Sugiero dejarla a las 11:59:59 p. m. de ese día para sumar los macros y hacer los cálculos necesarios. Confirma o indica otra hora.`;
+    }
+    if (asksPreviousDayConfirmation && !previousSaveAnswer?.confirmed) {
+      clarification = `¿La guardo en el día nutricional anterior (${previousDate(entry.fecha)})? Sugiero dejarla a las 11:59:59 p. m. de ese día para sumar los macros y hacer los cálculos necesarios. Confirma o indica otra hora.`;
+    }
+    if (asksPreviousDayConfirmation && previousSaveAnswer?.confirmed) {
+      savedDate = confirmedDate || previousDate(entry.fecha);
+      savedDescription += ' [Hora indicada del día siguiente; se guardó en el día nutricional anterior para configurar los macros antes de dormir.]';
+    }
     if (effectiveTime && appendTargetId == null) {
       const hour = effectiveTime.hours.length === 1 ? effectiveTime.hours[0] : null;
-      createdAt = hour == null ? null : localDateTimeToUtc(entry.fecha, hour, effectiveTime.minute, entry.timezone);
+      const usePreviousDayTime = asksPreviousDayConfirmation && previousSaveAnswer?.confirmed;
+      const timeDate = usePreviousDayTime
+        ? new Date(`${savedDate}T00:00:00Z`)
+        : hour != null && nutritionDayStartMinutes != null && hour * 60 + effectiveTime.minute < nutritionDayStartMinutes
+          ? new Date(`${entry.fecha}T00:00:00Z`) : null;
+      if (timeDate) timeDate.setUTCDate(timeDate.getUTCDate() + 1);
+      const calendarDate = usePreviousDayTime ? savedDate : timeDate ? timeDate.toISOString().slice(0, 10) : entry.fecha;
+      createdAt = usePreviousDayTime
+        ? localDateTimeToUtc(calendarDate, effectiveTime.hours[0], effectiveTime.minute, entry.timezone)?.replace(/:00$/, previousSaveAnswer.lastSecond ? ':59' : ':00')
+        : hour == null ? null : localDateTimeToUtc(calendarDate, hour, effectiveTime.minute, entry.timezone);
       if (!createdAt) clarification = [clarification, 'Esa hora no existe en la fecha seleccionada por el cambio de horario. Confirma una hora válida.'].filter(Boolean).join(' ');
     }
     const itemIssues = items.map(foodItemIssues);
@@ -390,12 +533,19 @@ SELECT LAST_INSERT_ID();`);
       clarification = `¿Cuántos gramos aproximadamente consumiste de ${names}?`;
     }
     if (!clarification && !items.length && !invalidItems) clarification = '¿Cuántos gramos aproximadamente consumiste de cada alimento?';
-    traceFoodSession(trace, 'reply_validated', { itemCount: items.length, invalidItemCount: invalidItems, hasClarification: Boolean(clarification) });
     stage = 'validation';
-    if ((!items.length && !clarification) || invalidItems
-      || (clarification != null && (typeof clarification !== 'string' || clarification.length > 5000))) {
-      throw new Error('El asistente no devolvió alimentos y macros válidos.');
+    const invalidClarification = clarification != null && (typeof clarification !== 'string' || clarification.length > 5000);
+    const validationCode = !items.length && !clarification ? 'FOOD_RESPONSE_NO_ITEMS'
+      : invalidItems ? 'FOOD_RESPONSE_INVALID_ITEMS'
+        : invalidClarification ? 'FOOD_RESPONSE_INVALID_CLARIFICATION' : null;
+    if (validationCode) {
+      traceFoodSession(trace, 'reply_validation_failed', {
+        stage, errorCode: validationCode, itemCount: items.length, invalidItemCount: invalidItems,
+        hasClarification: Boolean(clarification), invalidClarification,
+      });
+      throw Object.assign(new Error('La respuesta del análisis no pasó la validación de alimentos.'), { code: validationCode });
     }
+    traceFoodSession(trace, 'reply_validated', { itemCount: items.length, invalidItemCount: invalidItems, hasClarification: Boolean(clarification) });
     stage = 'persistence';
     if (clarification) {
       const question = clarification.slice(0, 5000);
@@ -450,7 +600,7 @@ SELECT LAST_INSERT_ID();`);
       statements.push(`UPDATE registros_comidas SET estado='completado',pregunta_pendiente=NULL,energia_kcal=${total('energia_kcal')},energia_449_kcal=${total('energia_449_kcal')},proteina_g=${total('proteina_g')},carbohidratos_g=${total('carbohidratos_g')},grasa_g=${total('grasa_g')},fibra_g=${total('fibra_g')} WHERE id=${destinationId} AND usuario_id=${userId}`, `INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido,request_id) VALUES (${destinationId},'assistant',${textSql(confirmation)},${textSql(entry.requestId)})`, `DELETE FROM registros_comidas WHERE id=${entryId} AND usuario_id=${userId}`);
     } else {
       for (const message of assistantMessages) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(message)})`);
-      statements.push(`UPDATE registros_comidas SET estado='completado',registro_comida_destino_id=NULL,pregunta_pendiente=NULL${createdAt ? `,creado_en=${textSql(createdAt)}` : ''},energia_kcal=${total('energia_kcal')},energia_449_kcal=${total('energia_449_kcal')},proteina_g=${total('proteina_g')},carbohidratos_g=${total('carbohidratos_g')},grasa_g=${total('grasa_g')},fibra_g=${total('fibra_g')} WHERE id=${entryId} AND usuario_id=${userId}`, `INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(confirmation)})`);
+      statements.push(`UPDATE registros_comidas SET estado='completado',registro_comida_destino_id=NULL,pregunta_pendiente=NULL,fecha_consumo=${textSql(savedDate)},descripcion_original=${textSql(savedDescription)}${createdAt ? `,creado_en=${textSql(createdAt)}` : ''},energia_kcal=${total('energia_kcal')},energia_449_kcal=${total('energia_449_kcal')},proteina_g=${total('proteina_g')},carbohidratos_g=${total('carbohidratos_g')},grasa_g=${total('grasa_g')},fibra_g=${total('fibra_g')} WHERE id=${entryId} AND usuario_id=${userId}`, `INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(confirmation)})`);
     }
     statements.push(resolveNotificationsSql({ userId, category: 'comida', textSql }));
     if (!suppressNotification) statements.push(notificationInsertSql({ userId, category: 'comida', state: 'guardado', title: 'Comida guardada', message: confirmation, referenceId: append || updating ? destinationId : entryId, textSql }));
@@ -460,7 +610,7 @@ SELECT LAST_INSERT_ID();`);
     const messages = append || updating
       ? await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${destinationId} ORDER BY id;`).then((rows) => rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [])
       : await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`).then((rows) => rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : []);
-    const records = await readFoodEntries({ userId, fecha: entry.fecha, dbQuery, textSql });
+    const records = await readFoodEntries({ userId, fecha: savedDate, dbQuery, textSql });
     try {
       await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode, forgetOnError: true });
     }
@@ -473,7 +623,7 @@ SELECT LAST_INSERT_ID();`);
       try { await recordFoodError({ dbQuery, textSql, userId, trace, stage: 'session_cleanup', error }); }
       catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed' })); }
     }
-    json(response, 200, { state: 'completado', entryId: append || updating ? destinationId : entryId, requestId: entry.requestId, appended: append, updated: updating, records, messages: Array.isArray(messages) ? messages : [], message: confirmation });
+    json(response, 200, { state: 'completado', entryId: append || updating ? destinationId : entryId, fecha: savedDate, requestId: entry.requestId, appended: append, updated: updating, records, messages: Array.isArray(messages) ? messages : [], message: confirmation });
   } catch (error) {
     traceFoodSession(trace, 'save_failed', { entryId: entryId || null, stage, errorCode: safeOpenCodeErrorCode(error) });
     try { await recordFoodError({ dbQuery, textSql, userId, trace, stage, error, httpStatus: entryId ? 502 : 503 }); }

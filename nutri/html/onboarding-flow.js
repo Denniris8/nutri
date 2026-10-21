@@ -14,6 +14,24 @@ const notificationsButton = document.querySelector('#notificationsButton');
 const notificationsFilter = document.querySelector('#notificationsFilter');
 let notificationItems = [];
 
+let screenWakeLock = null;
+let screenWakeLockRequest = null;
+async function requestScreenWakeLock() {
+  if (!document.querySelector('#todayView') || !navigator.wakeLock || document.visibilityState !== 'visible' || screenWakeLock || screenWakeLockRequest) return;
+  screenWakeLockRequest = navigator.wakeLock.request('screen').then((sentinel) => {
+    screenWakeLock = sentinel;
+    sentinel.addEventListener('release', () => { if (screenWakeLock === sentinel) screenWakeLock = null; }, { once: true });
+    if (document.visibilityState !== 'visible') void sentinel.release();
+  }).catch(() => {}).finally(() => { screenWakeLockRequest = null; });
+  await screenWakeLockRequest;
+}
+if (document.querySelector('#todayView')) {
+  void requestScreenWakeLock();
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') void requestScreenWakeLock();
+  });
+}
+
 const trainingPlanGoalsInput = document.querySelector('#trainingPlanGoals');
 const trainingPlanSendButton = document.querySelector('#sendTrainingPlanGoals');
 const trainingPlanSaveButton = document.querySelector('#saveTrainingPlan');
@@ -25,6 +43,8 @@ const planLoading = document.querySelector('#planLoading');
 const planSummaryText = document.querySelector('#planSummaryText');
 const savedTrainingPlansList = document.querySelector('#savedTrainingPlans');
 let generatedTrainingPlan = null;
+let generatedTrainingPlanRunId = null;
+let trainingPlanSessionActive = false;
 let generatedTrainingGoals = null;
 let generatedTrainingMacros = null;
 let savedTrainingPlan = false;
@@ -32,6 +52,9 @@ let savedTrainingPlans = [];
 let savedTrainingPlansLoadId = 0;
 let trainingPlanTargets = null;
 let trainingPlanSessionReady = true;
+let trainingPlanGeneration = 0;
+let trainingPlanCancelPending = false;
+let trainingPlanSaving = false;
 
 const tmbExplanation = 'Tasa metabólica basal: energía estimada que el cuerpo utiliza en reposo. No equivale al gasto total diario ni a la meta de ingesta.';
 const mifflinExplanation = 'Mifflin-St Jeor es una ecuación que estima el metabolismo basal a partir de edad, sexo, estatura y peso compatibles; es una estimación, no una medición.';
@@ -209,8 +232,38 @@ trainingPlanTrigger?.addEventListener('click', () => {
   trainingPlanDialog?.showModal();
   trainingPlanGoalsInput?.focus();
 });
-document.querySelector('#closeTrainingPlanDialog')?.addEventListener('click', () => trainingPlanDialog?.close());
-document.querySelector('#cancelTrainingPlanDialog')?.addEventListener('click', () => trainingPlanDialog?.close());
+async function cancelTrainingPlan() {
+  if (trainingPlanSaving) { notifyApp('Espera a que termine el guardado del plan antes de cancelar.', 'info'); return; }
+  if (trainingPlanCancelPending) return;
+  const hasSession = trainingPlanSessionActive || Boolean(generatedTrainingPlanRunId) || !planLoading.hidden;
+  if (!hasSession) { trainingPlanDialog?.close(); return; }
+  if (!await confirmRecordDelete('Al cancelar se eliminará la sesión actual de creación del plan. ¿Deseas continuar?')) return;
+  const generation = ++trainingPlanGeneration;
+  trainingPlanCancelPending = true;
+  trainingPlanTrigger.disabled = true;
+  trainingPlanSendButton.disabled = true;
+  trainingPlanSaveButton.disabled = true;
+  try {
+    const response = await fetch('/api/training-plan/session', { method: 'DELETE', credentials: 'same-origin' });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || 'No se pudo eliminar la sesión del plan.');
+    if (generation !== trainingPlanGeneration) return;
+    generatedTrainingPlan = generatedTrainingPlanRunId = generatedTrainingGoals = generatedTrainingMacros = null;
+    trainingPlanSessionActive = false;
+    planLoading.hidden = true;
+    trainingPlanDialog?.close();
+    notifyApp('Sesión de creación del plan eliminada.', 'success');
+  } catch (error) { trainingPlanSessionActive = true; notifyApp(error.message, 'error'); }
+  finally {
+    trainingPlanCancelPending = false;
+    trainingPlanTrigger.disabled = false;
+    trainingPlanSendButton.disabled = !trainingPlanSessionReady;
+    trainingPlanSaveButton.disabled = !generatedTrainingPlan || savedTrainingPlan;
+  }
+}
+document.querySelector('#closeTrainingPlanDialog')?.addEventListener('click', cancelTrainingPlan);
+document.querySelector('#cancelTrainingPlanDialog')?.addEventListener('click', cancelTrainingPlan);
+trainingPlanDialog?.addEventListener('cancel', (event) => { event.preventDefault(); void cancelTrainingPlan(); });
 trainingPlanDialog?.addEventListener('close', () => trainingPlanTrigger?.focus());
 
 trainingPlanSendButton?.addEventListener('click', async () => {
@@ -222,12 +275,14 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     return;
   }
   trainingPlanSendButton.disabled = true;
+  const generation = ++trainingPlanGeneration;
   trainingPlanGoalsInput.disabled = true;
   trainingPlanSaveButton.hidden = true;
   trainingPlanSaveButton.disabled = true;
   trainingPlanSaveButton.textContent = 'Guardar';
   trainingPlanSaveButton.title = 'Guardar el plan generado';
   generatedTrainingPlan = null;
+  generatedTrainingPlanRunId = null;
   generatedTrainingGoals = null;
   generatedTrainingMacros = null;
   savedTrainingPlan = false;
@@ -245,8 +300,11 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo generar el plan.');
+    trainingPlanSessionActive = true;
+    if (generation !== trainingPlanGeneration) return;
     appendTrainingPlanMessage('assistant', result.plan);
     generatedTrainingPlan = result.plan;
+    generatedTrainingPlanRunId = result.runId;
     generatedTrainingGoals = goals;
     generatedTrainingMacros = result.macros;
     setTrainingPlanTargets(generatedTrainingMacros);
@@ -258,6 +316,7 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     notifyApp('Plan generado. Solo aparece en esta vista y no se guarda.', 'success');
     await notifyResultIfHidden(trainingPlanDialog, 'plan', 'generado', 'Plan generado, aún sin guardar', 'Tu plan está listo para revisar y guardar.');
   } catch (error) {
+    if (generation !== trainingPlanGeneration) return;
     const sessionFailed = error.message === 'No se pudo abrir la sesión para crear el plan.';
     if (sessionFailed) {
       trainingPlanSessionReady = false;
@@ -279,17 +338,20 @@ trainingPlanSendButton?.addEventListener('click', async () => {
 
 trainingPlanSaveButton?.addEventListener('click', async () => {
   if (!generatedTrainingPlan || !generatedTrainingGoals || !generatedTrainingMacros || savedTrainingPlan) return;
+  trainingPlanSaving = true;
   trainingPlanSaveButton.disabled = true;
   notifyApp('Guardando el plan de entrenamiento.', 'info');
   try {
     const response = await fetch('/api/training-plans', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros, suppressNotification: true }),
+      body: JSON.stringify({ goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros, runId: generatedTrainingPlanRunId, suppressNotification: true }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo guardar el plan.');
     const savedAt = new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(result.createdAt));
     savedTrainingPlan = true;
+    trainingPlanSessionActive = false;
+    generatedTrainingPlanRunId = null;
     setTrainingPlanTargets(generatedTrainingMacros);
     savedTrainingPlans = [{ id: result.id, createdAt: result.createdAt, goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros }, ...savedTrainingPlans.filter((plan) => plan.id !== result.id)].slice(0, 3);
     renderSavedTrainingPlans();
@@ -305,7 +367,7 @@ trainingPlanSaveButton?.addEventListener('click', async () => {
     appendTrainingPlanMessage('error', error.message || 'No se pudo guardar el plan.');
     notifyApp(error.message || 'No se pudo guardar el plan.', 'error');
     await notifyResultIfHidden(trainingPlanDialog, 'plan', 'error', 'No se pudo guardar el plan', 'Intenta guardar el plan nuevamente.');
-  }
+  } finally { trainingPlanSaving = false; }
 });
 
 function confirmRecordDelete(message) {
@@ -1196,7 +1258,10 @@ const trainingDescriptionFields = document.querySelector('#trainingDescriptionFi
 let trainingOpenGeneration = 0;
 let trainingSessionReady = false;
 let trainingSessionUiInitialized = false;
+let trainingSessionPreparing = false;
+let trainingOpenCodeSessionActive = false;
 let trainingPending = false;
+let trainingSaving = false;
 let trainingSavedAt = null;
 let trainingGarminConnected = false;
 const trainingModeStorageKey = 'nutriTrainingMode';
@@ -1229,6 +1294,7 @@ async function showGarminTrainingSync(generation) {
   } catch {}
 }
 async function prepareTrainingSessionUi(generation) {
+  trainingSessionPreparing = true;
   trainingAnalyzeButton.disabled = true;
   trainingInput.disabled = true;
   trainingLoading.hidden = false;
@@ -1241,6 +1307,7 @@ async function prepareTrainingSessionUi(generation) {
     if (!response.ok) throw new Error(result.error || 'No se pudo preparar la sesión de entrenamiento.');
     if (generation !== trainingOpenGeneration) return;
     trainingSessionReady = true;
+    trainingOpenCodeSessionActive = true;
     trainingFeedback.textContent = 'Sesión lista.';
     trainingFeedback.classList.remove('food-session-error');
     notifyApp(trainingFeedback.textContent, 'success');
@@ -1251,6 +1318,7 @@ async function prepareTrainingSessionUi(generation) {
     trainingFeedback.classList.add('food-session-error');
     notifyApp(trainingFeedback.textContent, 'error');
   } finally {
+    if (generation === trainingOpenGeneration) trainingSessionPreparing = false;
     if (generation === trainingOpenGeneration) {
       trainingSessionUiInitialized = trainingSessionReady;
       trainingLoading.hidden = true;
@@ -1264,6 +1332,8 @@ trainingTrigger?.addEventListener('click', () => {
   if (trainingPending || trainingSessionUiInitialized) { trainingDialog?.showModal(); return; }
   trainingSessionUiInitialized = true;
   const generation = ++trainingOpenGeneration;
+  trainingAnalyzeButton.disabled = true;
+  trainingInput.disabled = true;
   trainingSessionReady = false;
   trainingSavedAt = null;
   trainingInput.value = '';
@@ -1317,8 +1387,35 @@ syncGarminTrainingButton?.addEventListener('click', async () => {
     notifyApp(trainingFeedback.textContent, 'error');
   } finally { syncGarminTrainingButton.disabled = false; }
 });
-document.querySelector('#closeTrainingModal')?.addEventListener('click', () => trainingDialog?.close());
-document.querySelector('#cancelTrainingModal')?.addEventListener('click', () => trainingDialog?.close());
+async function cancelTrainingDialog() {
+  if (trainingSaving) { notifyApp('Espera a que termine el guardado antes de cancelar.', 'info'); return; }
+  if (!trainingOpenCodeSessionActive && !trainingSessionPreparing && !trainingPending) { trainingDialog?.close(); return; }
+  if (!await confirmRecordDelete('Al cancelar se eliminará la sesión actual de registro de entrenamiento. ¿Deseas continuar?')) return;
+  const generation = ++trainingOpenGeneration;
+  try {
+    const response = await fetch('/api/training/session', { method: 'DELETE', credentials: 'same-origin' });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || 'No se pudo eliminar la sesión de entrenamiento.');
+    trainingSessionReady = trainingSessionUiInitialized = trainingSessionPreparing = false;
+    trainingOpenCodeSessionActive = false;
+    trainingPending = false;
+    trainingSavedAt = null;
+    trainingDialog?.close();
+    notifyApp('Sesión de entrenamiento eliminada.', 'success');
+  } catch (error) {
+    if (generation === trainingOpenGeneration) {
+      trainingSessionPreparing = false;
+      trainingSessionReady = true;
+      trainingOpenCodeSessionActive = true;
+      trainingAnalyzeButton.disabled = false;
+      trainingInput.disabled = false;
+      notifyApp(error.message, 'error');
+    }
+  }
+}
+document.querySelector('#closeTrainingModal')?.addEventListener('click', cancelTrainingDialog);
+document.querySelector('#cancelTrainingModal')?.addEventListener('click', cancelTrainingDialog);
+trainingDialog?.addEventListener('cancel', (event) => { event.preventDefault(); void cancelTrainingDialog(); });
 trainingDialog?.addEventListener('close', () => trainingTrigger?.focus());
 function appendTrainingMessage(role, content) {
   const bubble = document.createElement('div');
@@ -1358,6 +1455,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo analizar el entrenamiento.');
     if (generation !== trainingOpenGeneration) return;
+    trainingOpenCodeSessionActive = true;
     const analysis = result.analysis;
     if (analysis.stepsSaved) {
       const stepsMessage = `${new Intl.NumberFormat('es-MX').format(analysis.stepsSaved.stepsCount)} pasos guardados para ${analysis.stepsSaved.date}.`;
@@ -1394,6 +1492,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     }
     trainingLoadingText.textContent = 'Guardando entrenamiento…';
     trainingFeedback.textContent = 'Guardando el entrenamiento…';
+    trainingSaving = true;
     const nutritionDate = dayInput?.value || localDate();
     const saveResponse = await fetch('/api/training-entries', {
       method: 'POST', credentials: 'same-origin', headers: {
@@ -1403,6 +1502,8 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     });
     const saved = await saveResponse.json();
     if (!saveResponse.ok) throw new Error(saved.error || 'No se pudo guardar el entrenamiento.');
+    trainingSaving = false;
+    trainingOpenCodeSessionActive = false;
     await loadTrainingEntries(nutritionDate);
     trainingSavedAt = null;
     trainingFeedback.textContent = saved.savedAt ? `Entrenamiento analizado y guardado a las ${saved.savedAt}.` : 'Entrenamiento analizado y guardado.';
@@ -1416,6 +1517,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     notifyApp(trainingFeedback.textContent, 'error');
     await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'error', 'No se pudo completar el entrenamiento', trainingFeedback.textContent);
   } finally {
+    trainingSaving = false;
     trainingPending = false;
     trainingTrigger.setAttribute('aria-busy', 'false');
     document.querySelector('#trainingButtonLoading').hidden = true;
@@ -1437,6 +1539,9 @@ let foodRequestId = '';
 let foodTargetEntryId = null;
 let foodPending = false;
 let foodSessionReady = false;
+let foodSessionPreparing = false;
+let foodOpenCodeSessionActive = false;
+let foodSessionGeneration = 0;
 let foodAudioContext;
 
 function unlockFoodAudio() {
@@ -1532,14 +1637,18 @@ async function restoreFoodDraft(feedback) {
 }
 
 document.querySelector('#registerFoodButton')?.addEventListener('click', async (event) => {
+  await nutritionDayReady;
+  if (foodSessionPreparing && foodDialog.open) return;
   foodTrigger = event.currentTarget;
   const feedback = document.querySelector('#foodEntryFeedback');
   const foodLoading = document.querySelector('#foodLoading');
   const foodChatThread = document.querySelector('#foodChatThread');
   const description = document.querySelector('#foodDescription');
   const saveButton = document.querySelector('#saveFoodButton');
+  const generation = foodPending ? foodSessionGeneration : ++foodSessionGeneration;
   if (!foodPending) {
     foodSessionReady = false;
+    foodSessionPreparing = true;
     description.disabled = true;
     feedback.classList.remove('food-session-error');
   }
@@ -1554,14 +1663,18 @@ document.querySelector('#registerFoodButton')?.addEventListener('click', async (
   notifyApp('Preparando la sesión de comida…', 'info');
   try {
     await restoreFoodDraft(feedback);
+    if (generation !== foodSessionGeneration) return;
     const response = await fetch('/api/food/session', { method: 'POST', credentials: 'same-origin' });
     if (!response.ok) throw new Error((await response.json()).error || 'No se pudo preparar una sesión nueva de comida.');
+    if (generation !== foodSessionGeneration) return;
     foodSessionReady = true;
+    foodOpenCodeSessionActive = true;
     notifyApp('Sesión de comida lista.', 'success');
     description.disabled = false;
     saveButton.disabled = false;
     description.focus();
   } catch (error) {
+    if (generation !== foodSessionGeneration) return;
     foodSessionReady = false;
     description.disabled = true;
     saveButton.disabled = true;
@@ -1569,18 +1682,47 @@ document.querySelector('#registerFoodButton')?.addEventListener('click', async (
     feedback.classList.add('food-session-error');
     notifyApp(feedback.textContent, 'error');
   } finally {
+    if (generation === foodSessionGeneration) foodSessionPreparing = false;
     foodLoading.hidden = true;
     foodChatThread.hidden = !document.querySelector('#foodChatMessages').children.length;
     saveButton.disabled = !foodSessionReady;
   }
 });
-const closeFoodDialog = () => foodDialog.close();
+async function closeFoodDialog() {
+  const description = document.querySelector('#foodDescription');
+  const saveButton = document.querySelector('#saveFoodButton');
+  if (foodPending) { notifyApp('Espera a que termine el registro antes de cancelar.', 'info'); return; }
+  if (!foodOpenCodeSessionActive && !foodSessionPreparing) { foodDialog.close(); return; }
+  if (!await confirmRecordDelete('Al cancelar se eliminará la sesión actual de registro de comida. ¿Deseas continuar?')) return;
+  const generation = ++foodSessionGeneration;
+  foodSessionReady = foodSessionPreparing = false;
+  try {
+    const response = await fetch('/api/food/session', { method: 'DELETE', credentials: 'same-origin' });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || 'No se pudo eliminar la sesión de comida.');
+    foodRequestId = '';
+    foodTargetEntryId = null;
+    foodEntryDate = '';
+    foodOpenCodeSessionActive = false;
+    foodDialog.close();
+    notifyApp('Sesión de comida eliminada.', 'success');
+  } catch (error) {
+    if (generation === foodSessionGeneration) {
+      foodSessionReady = foodOpenCodeSessionActive = true;
+      description.disabled = false;
+      saveButton.disabled = false;
+      notifyApp(error.message, 'error');
+    }
+  }
+}
 document.querySelector('#closeFoodDialog')?.addEventListener('click', closeFoodDialog);
 document.querySelector('#cancelFoodEntry')?.addEventListener('click', closeFoodDialog);
+foodDialog?.addEventListener('cancel', (event) => { event.preventDefault(); void closeFoodDialog(); });
 foodDialog?.addEventListener('close', () => foodTrigger?.focus());
 foodForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (foodPending || !foodSessionReady) return;
+  await nutritionDayReady;
   const feedback = document.querySelector('#foodEntryFeedback');
   const saveButton = document.querySelector('#saveFoodButton');
   const foodLoading = document.querySelector('#foodLoading');
@@ -1628,6 +1770,7 @@ foodForm?.addEventListener('submit', async (event) => {
     pendingMessage.remove();
     renderFoodChat(result.messages || []);
     if (result.state === 'requiere_aclaracion') {
+      foodOpenCodeSessionActive = true;
       foodRequestId = result.requestId;
       foodEntryDate = foodDate();
       foodTargetEntryId = result.targetEntryId ?? null;
@@ -1639,6 +1782,12 @@ foodForm?.addEventListener('submit', async (event) => {
       await notifyResultIfHidden(foodDialog, 'comida', 'requiere_respuesta', 'Comida: falta una aclaración', result.question || result.message, result.entryId);
     } else {
       if (result.appended) { await audioReady; playFoodAddedSound(); }
+      if (result.fecha && result.fecha !== foodDate()) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('date', result.fecha);
+        navigateWithNotice(result.message || 'Comida guardada en el día nutricional anterior.', `${url.pathname}${url.search}${url.hash}`);
+        return;
+      }
       await loadFoodEntries(foodDate());
       foodRequestId = createFoodRequestId();
       foodEntryDate = foodDate();
@@ -1743,25 +1892,27 @@ if (dayInput) {
     const date = new Date(`${value}T00:00:00Z`);
     return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value;
   };
-  const localToday = () => {
-    const date = new Date();
-    return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-  };
-  const requestedDate = validDate(params.get('date') || '') ? params.get('date') : localToday();
+  const todayInTimezone = (timezone) => new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date()).reduce((parts, { type, value }) => (parts[type] = value, parts), {});
+  const requestedDate = validDate(params.get('date') || '') ? params.get('date') : '';
   dayInput.value = requestedDate;
   nutritionDayReady = fetch('/api/onboarding/preferences', { credentials: 'same-origin' }).then(async (response) => {
     if (!response.ok) return;
     const { preferences } = await response.json();
+    const now = todayInTimezone(preferences?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone);
+    const today = `${now.year}-${now.month}-${now.day}`;
+    if (dayInput.value && dayInput.value !== today) return;
+    dayInput.value = today;
     const [hour, minute] = String(preferences?.nutritionDayStart || '').split(':').map(Number);
-    if (dayInput.value !== localToday() || !Number.isFinite(hour) || !Number.isFinite(minute)) return;
-    const now = new Date();
-    if (now.getHours() * 60 + now.getMinutes() >= hour * 60 + minute) return;
-    now.setDate(now.getDate() - 1);
-    dayInput.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    if (!Number.isFinite(hour) || !Number.isFinite(minute) || Number(now.hour) * 60 + Number(now.minute) >= hour * 60 + minute) return;
+    const previous = new Date(`${dayInput.value}T12:00:00Z`);
+    previous.setUTCDate(previous.getUTCDate() - 1);
+    dayInput.value = previous.toISOString().slice(0, 10);
     const url = new URL(window.location.href);
     url.searchParams.set('date', dayInput.value);
     history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
-  }).catch(() => {});
+  }).catch(() => { if (!dayInput.value) dayInput.value = new Date().toISOString().slice(0, 10); });
   const navigateDate = (offset = 0) => {
     if (offset) {
       const date = new Date(`${dayInput.value}T12:00:00`);
@@ -2007,7 +2158,7 @@ function renderFoodEntries(records) {
       clarification.textContent = `Aclaración guardada: ${record.clarifications.join(' · ')}`;
       card.append(clarification);
     }
-    if (!record.items?.length) {
+    if (!record.items?.length || record.description?.includes('[Hora indicada del día siguiente;')) {
       const description = document.createElement('p');
       description.textContent = record.description;
       card.append(description);

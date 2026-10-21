@@ -1,7 +1,9 @@
 - 2026-10-20 23:11 CST — Dashboard móvil: reordenado “Día seleccionado” en una columna, con selector de fecha a todo lo ancho y métricas separadas en bloques para evitar que se amontonen en pantallas estrechas. No se ejecutaron pruebas.
 - 2026-10-20 23:13 CST — Perfil de cuenta: convertido en opción de la pestaña “Más” que abre un modal, siguiendo el patrón de las demás opciones; el perfil se vuelve a cargar al abrirlo y se puede cerrar con botón o Escape.
+- 2026-10-21 10:30 CST — Sesiones OpenCode: entrenamiento ya cerraba su sesión tras guardar exitosamente; para planes, ahora se conserva la sesión después de generar y se elimina tras guardar el plan, con referencia opaca validada en el servidor y registro de fallos de limpieza. Al generar otro plan se limpia el borrador de sesión anterior. No se ejecutaron pruebas.
 - 2026-10-21 10:14 CST — Configuración de sesiones OpenCode: cambiado el modelo explícito a `openai/gpt-6-luna`, confirmado activo en el catálogo.
 - 2026-10-21 10:39 CST — Guardado de comidas: la resolución de alertas ahora compara categoría y estado como bytes exactos; elimina la dependencia de collations al persistir transacciones entre tablas `utf8mb4_0900_ai_ci` y `utf8mb4_unicode_ci`, causa probable del MySQL 1267. No se ejecutaron pruebas.
+- 2026-10-21 09:22 CST — Dashboard: solicitado el bloqueo de pantalla Screen Wake Lock mientras el dashboard está visible y renovado al volver a la pestaña; la falta de soporte o permiso no interrumpe la app. No se ejecutaron pruebas.
 - 2026-10-20 19:55 CST — Dashboard: deshabilitado el zoom de pellizco mediante viewport en acceso, dashboard, preferencias y términos. Esto reduce accesibilidad; navegadores con zoom accesible pueden ignorarlo.
 - 2026-10-20 19:40 CST — Flujo de comidas: cambiado el agente OpenCode `build` por el agente integrado de solo lectura `plan`; la huella de configuración hará que la app renueve la sesión de comidas.
 - 2026-10-20 19:32 CST — Registro de comidas: alineado el modelo explícito con el default global de OpenCode `nvidia/z-ai/glm-5.3-flash`, disponible en el catálogo del servicio.
@@ -11,6 +13,45 @@
 - 2026-10-20 10:53 CST — Docker Compose: añadido el punto de montaje `garmin-connect-mcp/` al proyecto; Docker no podía crear el destino anidado bajo `/app:ro` y el contenedor de la app no arrancaba.
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
+
+- 2026-10-21 14:43 CST — Confirmación de fecha propuesta en comida: al responder afirmativamente a una pregunta de guardado que incluye fecha explícita, el servidor mueve el borrador a esa fecha y lo desvincula de cualquier comida previa; el selector ya no sustituye la fecha confirmada. No se ejecutaron pruebas.
+
+- 2026-10-21 14:32 CST — Validación de respuesta de OpenCode en comidas: si JSON o campos no cumplen el contrato, el servidor reenvía la instrucción reforzada hasta tres intentos adicionales; macros incompletos no se inventan y no se guarda nada si persiste el formato inválido. No se ejecutaron pruebas.
+
+- 2026-10-21 14:25 CST — Registro de comidas: una fecha explícita del chat prevalece sobre el selector en formatos ISO, DD/MM/AAAA, DD-MM-AAAA, “DD de mes” y hoy/ayer/anteayer; fechas ambiguas o inválidas se rechazan en vez de guardar silenciosamente en otro día. No se ejecutaron pruebas.
+- 2026-10-21 14:32 CST — Borradores de comida: si el usuario indica una fecha explícita distinta durante una aclaración, se actualiza `fecha_consumo` y se desvincula el borrador de la comida destino anterior; sin fecha explícita, se conserva la fecha del borrador. No se ejecutaron pruebas.
+
+- 2026-10-21 14:18 CST — Cancelación de comidas, entrenamientos y planes: los botones de cancelar/cerrar y Escape piden confirmación cuando hay sesión OpenCode activa; al confirmar la eliminan desde el servidor y muestran error sin cerrar si falla. No se ejecutaron pruebas.
+
+- 2026-10-21 14:25 CST — Confirmación de comida de madrugada: la sugerencia de guardado a las 23:59:59 ahora explica que permite sumar macros y realizar los cálculos necesarios.
+
+- 2026-10-21 14:20 CST — Confirmación de guardado nocturno: después de elegir el día anterior, el chat ahora pregunta si guardar allí y propone las 23:59:59; solo guarda tras confirmación o una hora alternativa inequívoca. No se ejecutaron pruebas.
+
+- 2026-10-21 14:12 CST — Respuesta de comidas inválida: el prompt ahora define un contrato JSON estricto y el servidor reintenta una vez en la misma sesión, indicando solo los nombres de campos inválidos; si el segundo intento falla, conserva el error seguro y no persiste alimentos inválidos. No se ejecutaron pruebas.
+
+- 2026-10-21 14:05 CST — Corrección de día anterior: al elegir “anterior” en una aclaración de madrugada, el servidor ya no permite que OpenCode anexe los alimentos al día seleccionado y conserva la hora para fijar `creado_en` a las 23:59:59; guarda el registro nuevo en la fecha anterior. No se ejecutaron pruebas.
+
+- 2026-10-21 13:59 CST — Comidas de madrugada: el prompt solicita elegir día nutricional para horas 00:01–05:00; “anterior” guarda el registro al día previo a las 23:59:59 con nota visible y el dashboard abre la fecha guardada. No se ejecutaron pruebas.
+
+- 2026-10-21 11:52 CST — Registro de comidas: revertida la reasignación automática de fecha basada en la hora actual; `fecha_consumo` vuelve a depender del día nutricional seleccionado. Se conserva la conversión de hora explícita a calendario según preferencias y zona horaria. No se ejecutaron pruebas.
+
+- 2026-10-21 11:26 CST — Día nutricional: el formulario de comidas ahora espera a que carguen las preferencias antes de mostrar o enviar la fecha; evita registrar con la fecha calendario provisional durante la inicialización. Cache-busting del script actualizado. No se ejecutaron pruebas.
+
+- 2026-10-21 11:24 CST — Corrección de día nutricional antes de la hora de inicio: el servidor ahora corrige al día anterior si recibe la fecha calendario actual antes del inicio guardado, aun si llega por un selector/URL obsoleto; el dashboard normaliza también la fecha actual explícita. No se ejecutaron pruebas.
+
+- 2026-10-21 11:22 CST — Comidas: documentado que una hora previa al inicio nutricional, como 1:00 a. m. en una ventana 9:00 a. m.–2:00 a. m., se registra en el siguiente día calendario y se agrupa en el día nutricional anterior. No se ejecutaron pruebas.
+
+- 2026-10-21 11:10 CST — Registro de comidas: las horas anteriores al inicio de preferencias se guardan en el día calendario siguiente y siguen agrupadas en el día nutricional seleccionado; se usa la zona horaria guardada del usuario. No se ejecutaron pruebas.
+
+- 2026-10-21 11:08 CST — Dashboard: renombrado “Día seleccionado” a “Día nutricional” y añadido texto breve que lo vincula con el horario configurado en Preferencias; actualizadas etiquetas accesibles. No se ejecutaron pruebas.
+
+- 2026-10-21 11:06 CST — Sesiones de comidas: el servidor ahora verifica contra OpenCode las sesiones en caché; si una fue eliminada externamente y responde 404, descarta la referencia obsoleta y crea una sesión nueva antes de enviar el mensaje. No se ejecutaron pruebas.
+
+- 2026-10-21 11:04 CST — Prompt canónico de comidas: detallado el flujo para consultar y escalar macros con webfetch, priorizar etiquetas oficiales o USDA FoodData Central, verificar variante/unidad y registrar procedencia sin inventar fuentes. No se ejecutaron pruebas.
+
+- 2026-10-21 11:02 CST — Registro de comidas: los fallos de validación de OpenCode ahora distinguen respuesta sin alimentos, elementos inválidos y aclaración inválida mediante códigos seguros; trazas guardan solo conteos e indicadores, nunca el contenido de la respuesta. No se ejecutaron pruebas.
+
+- 2026-10-21 11:00 CST — Selector de día: fecha inicial ahora se calcula usando la zona horaria y hora de inicio nutricional de preferencias; las fechas seleccionadas explícitamente se conservan. No se ejecutaron pruebas.
 
 ## 2026-10-20
 
