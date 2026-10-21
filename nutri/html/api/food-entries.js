@@ -369,9 +369,9 @@ SELECT LAST_INSERT_ID();`);
     const activeTarget = continuationTarget || pendingTarget;
     const matchedMeals = activeTarget ? [activeTarget] : requestedTime && !requestedTime.invalid
       ? dayMeals.filter((meal) => requestedTime.hours.includes(meal.hour24) && (requestedTime.precision === 'hour' || requestedTime.minute === meal.minute))
-      : [];
+      : dayMeals;
     if (requestedTime?.ambiguous && matchedMeals.length === 1) requestedTime.hours = [matchedMeals[0].hour24];
-    const mealsForModel = activeTarget || requestedTime && !requestedTime.invalid ? matchedMeals : [];
+    const mealsForModel = matchedMeals;
     let modelDescription = entry.descripcion;
     if (identityRefusal) {
       modelDescription = await readFoodConversationText({ entryId, dbQuery, fallback: entry.descripcion });
@@ -441,8 +441,9 @@ SELECT LAST_INSERT_ID();`);
       timeClarification = `¿Te refieres a las ${label} a. m. o p. m.?`;
       effectiveTime = null;
     }
-    if (!activeTarget && matchedMeals.length > 1 && !timeClarification) {
-      timeClarification = `Hay varias comidas a esa hora. ¿A cuál deseas ${result.action === 'update' ? 'corregir' : 'agregar alimentos'}? ${matchedMeals.map((meal) => `${meal.hora}: ${(meal.alimentos || []).join(', ') || meal.descripcion}`).join('; ')}`;
+    if (!activeTarget && matchedMeals.length > 1 && !timeClarification
+      && (result.action === 'update' || requestedTime && !requestedTime.invalid)) {
+      timeClarification = `Hay varias comidas${requestedTime ? ' a esa hora' : ' guardadas este día'}. ¿A cuál deseas ${result.action === 'update' ? 'corregir' : 'agregar alimentos'}? ${matchedMeals.map((meal) => `${meal.hora}: ${(meal.alimentos || []).join(', ') || meal.descripcion}`).join('; ')}`;
     }
     if (!requestedTime && !activeTarget && result.action !== 'update' && clarification && /(?:a qu[eé] hora|hora.*consumiste|cu[aá]ndo.*comida)/i.test(clarification)) clarification = null;
     if (result.action !== 'update' && clarification && /(?:a cu[aá]l comida|qu[eé] comida|which meal|no hay comidas guardadas|no existe una comida)/i.test(clarification)) clarification = null;
@@ -460,7 +461,7 @@ SELECT LAST_INSERT_ID();`);
       else if (!createsNew) clarification = '¿Quieres agregar alimentos a esta comida o corregir un alimento existente?';
     } else if (!clarification && result.action === 'update') {
       updateTargetId = selectedMeal?.id || null;
-      if (updateTargetId == null) clarification = 'Indica la hora de la comida que quieres corregir.';
+      if (updateTargetId == null) clarification = 'No pude identificar una sola comida guardada para corregir. Indica cuál por alimento, hora o fecha.';
     } else if (!clarification && !timeClarification && (requestedTime && !requestedTime.invalid || pendingTarget)) {
       appendTargetId = selectedMeal?.id || null;
     }

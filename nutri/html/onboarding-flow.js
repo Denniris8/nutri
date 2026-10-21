@@ -13,6 +13,20 @@ const notificationsBadge = document.querySelector('#notificationsBadge');
 const notificationsButton = document.querySelector('#notificationsButton');
 const notificationsFilter = document.querySelector('#notificationsFilter');
 let notificationItems = [];
+const sessionExpiredMessage = 'La sesión expiró. Inicia sesión de nuevo.';
+let redirectingToLogin = false;
+const fetchWithSessionRedirect = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const response = await fetchWithSessionRedirect(...args);
+  if (response.status === 401 && location.pathname !== '/login.html' && !redirectingToLogin) {
+    const message = await response.clone().json().then((data) => data.error).catch(() => '');
+    if (message === sessionExpiredMessage) {
+      redirectingToLogin = true;
+      navigateWithNotice(message, '/login.html');
+    }
+  }
+  return response;
+};
 
 let screenWakeLock = null;
 let screenWakeLockRequest = null;
@@ -522,7 +536,7 @@ function navigateWithNotice(message, url) {
 document.querySelector('#appNoticeClose')?.addEventListener('click', () => appNoticeDialog.hidePopover());
 try {
   const pendingNotice = sessionStorage.getItem('nutriAppNotice');
-  if (pendingNotice) { sessionStorage.removeItem('nutriAppNotice'); notifyApp(pendingNotice, 'success'); }
+  if (pendingNotice) { sessionStorage.removeItem('nutriAppNotice'); notifyApp(pendingNotice, pendingNotice === sessionExpiredMessage ? 'error' : 'success'); }
 } catch {}
 
 if (loginForm) {
