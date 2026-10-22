@@ -37,7 +37,7 @@ class Element {
 
 function loadFlow(search = '', fetchOverride) {
   const ids = [
-    'loginForm', 'loginCelular', 'loginPassword', 'registerForm', 'errorMessage', 'cancelRegister',
+    'loginForm', 'loginCountryCode', 'loginCelular', 'loginPassword', 'registerForm', 'errorMessage', 'cancelRegister',
     'registerName', 'registerCountryCode', 'registerCelular', 'registerPassword', 'registerHeight',
     'confirmPassword', 'registerAge', 'registerSex', 'preferencesForm', 'dietPattern', 'formError',
     'cancelPreferences',
@@ -56,6 +56,7 @@ function loadFlow(search = '', fetchOverride) {
     'appNoticeDialog', 'appNoticeText', 'foodButtonLoading', 'editUnitSystem',
   ];
   const elements = Object.fromEntries(ids.map((id) => [`#${id}`, new Element()]));
+  elements['#loginCountryCode'].selectedOptions = [{ dataset: { dialCode: '+52' } }];
   elements['#testDataNotice'].hidden = true;
   const modeButtons = ['login', 'register'].map((mode) => {
     const button = new Element();
@@ -88,7 +89,7 @@ function loadFlow(search = '', fetchOverride) {
 
 test('registration sends measured height and preferences proceeds directly to terms', async () => {
   const { elements, modeButtons, destinations, requests } = loadFlow();
-  assert.equal(elements['#loginCelular'].value, '+52 0000000000');
+  assert.equal(elements['#loginCelular'].value, '0000000000');
   assert.equal(elements['#loginPassword'].value, 'Demo-Prueba-2026!');
   modeButtons[1].dispatch('click');
   assert.equal(elements['#loginForm'].hidden, true);
@@ -141,6 +142,8 @@ test('registration requires identity fields and keeps country code separate from
   assert.match(form, /<select id="registerSex"[\s\S]*?value="masculino"[\s\S]*?value="femenino"/);
   assert.match(form, /<select id="registerCountryCode"[\s\S]*?value="MX" data-dial-code="\+52"/);
   assert.match(form, /<input id="registerCelular"[^>]*type="tel"/);
+  assert.match(html, /<select id="loginCountryCode"[\s\S]*?value="MX" data-dial-code="\+52"/);
+  assert.match(html, /<input id="loginCelular"[^>]*autocomplete="tel-national"/);
 });
 
 test('calendar-day preferences no longer expose interval controls', () => {

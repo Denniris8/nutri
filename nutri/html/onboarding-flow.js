@@ -540,7 +540,7 @@ try {
 } catch {}
 
 if (loginForm) {
-  document.querySelector('#loginCelular').value = '+52 0000000000';
+  document.querySelector('#loginCelular').value = '0000000000';
   document.querySelector('#loginPassword').value = demoPassword;
 }
 
@@ -576,7 +576,10 @@ loginForm?.addEventListener('submit', async (event) => {
   try {
     const response = await fetch('/api/auth/login', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phone: document.querySelector('#loginCelular').value, password: document.querySelector('#loginPassword').value }),
+      body: JSON.stringify({
+        phone: `${document.querySelector('#loginCountryCode').selectedOptions[0].dataset.dialCode}${document.querySelector('#loginCelular').value.replace(/\D/g, '')}`,
+        password: document.querySelector('#loginPassword').value,
+      }),
     });
     if (!response.ok) {
       const result = await response.json();

@@ -27,6 +27,11 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-22 14:54 CST — Aplicación: añadida versión central en `VERSION` y visible en la sección “Más”; el servidor inserta ese valor al servir el dashboard. `VERSION` queda en 0.1.1 conforme a la regla de incrementar PATCH por commit. No se ejecutaron pruebas.
+
+- 2026-10-22 12:32 CST — Acceso: separado el código internacional del teléfono también en inicio de sesión; se compone el número E.164 (+código y dígitos nacionales) antes de enviarlo. No se ejecutaron pruebas.
+- 2026-10-22 14:54 CST — AGENTS: añadida la regla de actualizar `VERSION` incrementando PATCH en cada commit de la app y mantener sincronizada la versión visible. No se ejecutaron pruebas.
+
 - 2026-10-21 14:43 CST — Confirmación de fecha propuesta en comida: al responder afirmativamente a una pregunta de guardado que incluye fecha explícita, el servidor mueve el borrador a esa fecha y lo desvincula de cualquier comida previa; el selector ya no sustituye la fecha confirmada. No se ejecutaron pruebas.
 
 - 2026-10-21 14:32 CST — Validación de respuesta de OpenCode en comidas: si JSON o campos no cumplen el contrato, el servidor reenvía la instrucción reforzada hasta tres intentos adicionales; macros incompletos no se inventan y no se guarda nada si persiste el formato inválido. No se ejecutaron pruebas.

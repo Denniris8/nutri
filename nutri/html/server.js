@@ -22,6 +22,7 @@ const scrypt = promisify(scryptCallback);
 const sessionCookie = 'nutri_session';
 const sessionSeconds = 8 * 60 * 60;
 const termsVersion = 1;
+const appVersion = readFileSync(path.join(__dirname, '..', 'VERSION'), 'utf8').trim();
 const bodyLimit = 32768;
 const loginLimit = 10;
 const registrationLimit = 5;
@@ -1106,7 +1107,8 @@ SELECT JSON_OBJECT('days',${days},'current',JSON_OBJECT(
       }
     }
     try {
-      const body = await readFile(path.join(__dirname, files.get(pathname)));
+      let body = await readFile(path.join(__dirname, files.get(pathname)));
+      if (pathname === '/dashboard_nutricional.html') body = Buffer.from(body.toString().replace('__APP_VERSION__', appVersion));
       response.writeHead(200, { 'Content-Type': contentTypes[path.extname(files.get(pathname))], 'Content-Length': body.length, 'Cache-Control': 'no-store' });
       response.end(request.method === 'HEAD' ? undefined : body);
     } catch { response.writeHead(500).end('Internal server error'); }
