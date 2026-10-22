@@ -17,6 +17,7 @@ import { Bot, InlineKeyboard } from 'grammy';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { isAllowedChat, parseAllowedChatIds } from './access-control.js';
+import { apiHelp, apiRequest } from './nutrition-api.js';
 
 // ------------------------------ Configuracion -------------------------------
 const BOT_TOKEN = (process.env.BOT_TOKEN || '').trim();
@@ -29,6 +30,8 @@ const PERMISSION_MODE = (process.env.OPENCODE_PERMISSION_MODE || 'ask').toLowerC
 const TURN_TIMEOUT_MS = Number.parseInt(process.env.OPENCODE_TURN_TIMEOUT_MS || '900000', 10);
 const PERMISSION_TIMEOUT_MS = Number.parseInt(process.env.OPENCODE_PERMISSION_TIMEOUT_MS || '180000', 10);
 const FORM_TIMEOUT_MS = Number.parseInt(process.env.OPENCODE_FORM_TIMEOUT_MS || '300000', 10);
+const SSH_CONTROL_URL = process.env.SSH_CONTROL_URL || 'http://127.0.0.1:8765/ssh';
+const SSH_CONTROL_TOKEN = process.env.SSH_CONTROL_TOKEN || '';
 
 const DATA_DIR = process.env.BOT_DATA_DIR || '/app/data';
 const SESSIONS_FILE = `${DATA_DIR}/sessions.json`;
@@ -451,6 +454,7 @@ bot.command('start', (ctx) =>
       '/hoy — resumen nutricional de hoy\n' +
       '/objetivos — recalcular objetivos\n' +
       '/comida — registrar comida\n' +
+      '/dashboard — rutas de la API Nutri\n' +
       '/help — esta ayuda',
     {
       reply_markup: new InlineKeyboard()
@@ -460,9 +464,95 @@ bot.command('start', (ctx) =>
   )
 );
 bot.command('help', (ctx) => ctx.reply(
-  'Comandos: /start, /nueva (sesión nueva), /stop (interrumpir), /sesion (info), /ping, /hoy (resumen de hoy), /objetivos (recalcular objetivos), /comida (registrar comida).'
+  'Comandos: /start, /nueva, /stop, /sesion, /ping, /hoy, /objetivos, /comida, /dashboard o /api (API Nutri), /ssh [on|off].'
 ));
 bot.command('ping', (ctx) => ctx.reply('pong'));
+
+const pendingApiActions = new Map();
+async function openApiDashboard(ctx) {
+  const input = (ctx.match || '').trim();
+  if (!input) return ctx.reply(apiHelp());
+  const match = input.match(/^(GET|POST|DELETE)\s+(\/api\/\S*)(?:\s+([\s\S]+))?$/i);
+  if (!match) return ctx.reply('Uso: /api <GET|POST|DELETE> /api/ruta [JSON]. Envía /api para ver rutas.');
+  const [, rawMethod, path, rawPayload] = match;
+  const method = rawMethod.toUpperCase();
+  if (method === 'GET' && rawPayload) return ctx.reply('GET no acepta cuerpo JSON.');
+  let payload;
+  if (rawPayload) {
+    try { payload = JSON.parse(rawPayload); }
+    catch { return ctx.reply('El cuerpo debe ser JSON válido.'); }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return ctx.reply('El cuerpo JSON debe ser un objeto.');
+  }
+  const action = { method, path, payload };
+  if (method !== 'GET') {
+    pendingApiActions.set(ctx.chat.id, action);
+    return ctx.reply(`Confirmar ${method} ${path}?`, {
+      reply_markup: new InlineKeyboard().text('Confirmar', 'nutri-api:confirm').text('Cancelar', 'nutri-api:cancel'),
+    });
+  }
+  try { await sendLong(ctx.chat.id, await apiRequest(method, path)); }
+  catch (error) { await ctx.reply(`Error API Nutri: ${error.message}`); }
+}
+bot.command('api', openApiDashboard);
+bot.command('dashboard', (ctx) => ctx.reply(apiHelp()));
+
+bot.callbackQuery(/^nutri-api:(confirm|cancel)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  const action = pendingApiActions.get(ctx.chat.id);
+  pendingApiActions.delete(ctx.chat.id);
+  if (ctx.match[1] === 'cancel' || !action) return ctx.editMessageText('Acción cancelada o vencida.');
+  await ctx.editMessageText(`Ejecutando ${action.method} ${action.path}…`);
+  try { await sendLong(ctx.chat.id, await apiRequest(action.method, action.path, action.payload), ctx.callbackQuery.message.message_id); }
+  catch (error) { await ctx.reply(`Error API Nutri: ${error.message}`); }
+});
+
+async function sshControl(method, state) {
+  if (!SSH_CONTROL_TOKEN) throw new Error('SSH_CONTROL_TOKEN no está configurado');
+  const response = await fetch(state ? `${SSH_CONTROL_URL}/${state}` : SSH_CONTROL_URL, {
+    method,
+    headers: { authorization: `Bearer ${SSH_CONTROL_TOKEN}` },
+    signal: AbortSignal.timeout(5000),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+  return result.state;
+}
+
+bot.command('ssh', async (ctx) => {
+  const action = (ctx.match || '').trim().toLowerCase();
+  if (!action) {
+    try {
+      await ctx.reply(`SSH está ${await sshControl('GET') === 'on' ? 'encendido' : 'apagado'}.`);
+    } catch (error) {
+      await ctx.reply(`No pude consultar SSH: ${error.message}`);
+    }
+    return;
+  }
+  if (action === 'off') {
+    await ctx.reply('⚠️ Apagar SSH puede cortar tu conexión remota. ¿Confirmas?', {
+      reply_markup: new InlineKeyboard().text('Apagar SSH', 'ssh:off').text('Cancelar', 'ssh:cancel'),
+    });
+    return;
+  }
+  if (action !== 'on') return ctx.reply('Uso: /ssh [on|off]');
+  try {
+    const state = await sshControl('POST', 'on');
+    await ctx.reply(`SSH ${state === 'on' ? 'encendido' : 'apagado'}.`);
+  } catch (error) {
+    await ctx.reply(`No pude cambiar SSH: ${error.message}`);
+  }
+});
+
+bot.callbackQuery(/^ssh:(off|cancel)$/, async (ctx) => {
+  await ctx.answerCallbackQuery();
+  if (ctx.match[1] === 'cancel') return ctx.editMessageText('Operación cancelada.');
+  try {
+    const state = await sshControl('POST', 'off');
+    await ctx.editMessageText(`SSH ${state === 'on' ? 'encendido' : 'apagado'}.`);
+  } catch (error) {
+    await ctx.editMessageText(`No pude cambiar SSH: ${error.message}`);
+  }
+});
 
 // Limpia esperas activas de un chat (permisos y formularios pendientes)
 async function clearWaiters(chatId) {

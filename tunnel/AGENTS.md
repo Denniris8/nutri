@@ -1,5 +1,5 @@
 # Reglas de `tunnel`
-
+- No puedes modificar nada que no esté en este proyecto
 - Este directorio contiene solo el túnel público del dashboard; el destino predeterminado del contenedor es `http://127.0.0.1:8080` y Compose usa `network_mode: host`.
 - Configura `BOT_TOKEN` desde `../grammy/.env` y `NOTIFY_CHAT_IDS` desde `tunnel/.env`. No escribas ni registres secretos en este archivo, scripts o logs versionados.
 - `notify-tunnel.sh` inicia Cloudflare Quick Tunnel, espera hasta 60 segundos por una URL `trycloudflare.com` y la notifica a los chats configurados. Si `cloudflared` termina, `restart: always` inicia un proceso nuevo y puede generar otra URL.

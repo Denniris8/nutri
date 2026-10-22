@@ -1,0 +1,17 @@
+[Unit]
+Description=Local SSH control API for Telegram bot
+After=network.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/ssh-control.env
+ExecStart=/usr/bin/python3 /usr/local/bin/ssh_control.py
+Restart=on-failure
+User=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
