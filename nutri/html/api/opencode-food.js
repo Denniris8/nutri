@@ -105,7 +105,7 @@ async function requestOpenCodePrompt(service, sessionId, body, timeoutMs) {
 }
 
 async function recordFoodError({ dbQuery, textSql, userId, trace, stage, error, httpStatus = null, action = 'POST /api/food-entries', route = '/api/food-entries', method = 'POST' }) {
-  const failure = trace?.events.find((item) => item.event.endsWith('_failed'));
+  const failure = trace?.events.slice().reverse().find((item) => item.event.endsWith('_failed'));
   const event = failure?.event || 'save_failed';
   const errorText = typeof error?.message === 'string' ? error.message : '';
   const mysqlError = errorText.match(/\bERROR\s+(\d+)\s+\(([A-Z0-9]{5})\)/);
@@ -120,6 +120,7 @@ async function recordFoodError({ dbQuery, textSql, userId, trace, stage, error, 
     message_failed: 'OpenCode no completó el análisis del registro de comida.',
     reply_parse_failed: 'La respuesta del análisis no pudo convertirse en datos válidos.',
     reply_validation_failed: 'La respuesta del análisis no pasó la validación de alimentos.',
+    draft_candidate_persistence_failed: 'No se pudo guardar un candidato de alimento en el borrador; la aclaración se conservó.',
     session_cleanup_failed: 'No se pudo limpiar la sesión OpenCode de comidas.',
   }[event] || (stage === 'persistence' ? 'No se pudieron guardar los alimentos analizados.' : 'Falló el registro de comida.');
   const upstreamStatus = [failure?.upstreamHttpStatus, failure?.httpStatus]
@@ -173,16 +174,17 @@ async function request(service, method, endpoint, body, timeoutMs = 120000) {
       let text = '';
       response.setEncoding('utf8');
       response.on('data', (chunk) => { text += chunk; });
-      response.on('aborted', () => reject(Object.assign(new Error('OpenCode response was interrupted.'), { code: 'ECONNRESET' })));
-      response.on('error', reject);
+      response.on('aborted', () => { clearTimeout(timeout); reject(Object.assign(new Error('OpenCode response was interrupted.'), { code: 'ECONNRESET' })); });
+      response.on('error', (error) => { clearTimeout(timeout); reject(error); });
       response.on('end', () => {
+        clearTimeout(timeout);
         let data = null;
         if (text) { try { data = JSON.parse(text); } catch {} }
         resolve({ status: response.statusCode || 0, data: data?.data ?? data });
       });
     });
-    request.setTimeout(timeoutMs, () => request.destroy(Object.assign(new Error('OpenCode request timed out.'), { code: 'TIMEOUT' })));
-    request.on('error', reject);
+    const timeout = setTimeout(() => request.destroy(Object.assign(new Error('OpenCode request timed out.'), { code: 'TIMEOUT' })), timeoutMs);
+    request.on('error', (error) => { clearTimeout(timeout); reject(error); });
     request.end(body === undefined ? undefined : JSON.stringify(body));
   });
 }
@@ -341,13 +343,13 @@ async function deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode = op
   });
 }
 
-async function requestFoodDescription({ sessionId, description, comidasDisponibles = [], continuacionRegistro = false, diaNutricional, inicioDiaNutricional, retryFeedback, config, trace, requestOpenCode = openCodeRequest }) {
+async function requestFoodDescription({ sessionId, description, comidasDisponibles = [], alimentosPendientes = [], continuacionRegistro = false, diaNutricional, retryFeedback, config, trace, requestOpenCode = openCodeRequest }) {
   config ||= await readFoodSessionConfig();
   const system = await readFoodSystemPrompt(config.maxFoodItems);
   const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
   const startedAt = Date.now();
   traceFoodSession(trace, 'message_sent', { stage: 'separar_alimentos', session: shortSessionId(sessionId), enabledTools: ['webfetch'] });
-  const requestContext = { description, ...(diaNutricional ? { diaNutricional, inicioDiaNutricional } : {}), ...(retryFeedback ? { correccionFormato: retryFeedback } : {}), ...(comidasDisponibles.length ? { comidasDisponibles } : {}), ...(continuacionRegistro ? { continuacionRegistro: true } : {}) };
+  const requestContext = { description, ...(diaNutricional ? { diaNutricional } : {}), ...(retryFeedback ? { correccionFormato: retryFeedback } : {}), ...(comidasDisponibles.length ? { comidasDisponibles } : {}), ...(alimentosPendientes.length ? { alimentosPendientes } : {}), ...(continuacionRegistro ? { continuacionRegistro: true } : {}) };
   let result;
   try {
     result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {

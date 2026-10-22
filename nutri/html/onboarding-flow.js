@@ -737,14 +737,6 @@ for (const [status, label, details, value] of [
   if (select) toggleDetails(status, label, details, value);
 }
 
-function setClock(prefix, time) {
-  if (!time) return;
-  const [hour24, minute] = time.slice(0, 5).split(':').map(Number);
-  document.querySelector(`#${prefix}Hour`).value = String(hour24 % 12 || 12);
-  document.querySelector(`#${prefix}Minute`).value = String(minute);
-  document.querySelector(`#${prefix}Period`).value = hour24 < 12 ? 'AM' : 'PM';
-}
-
 if (preferencesForm && preferencesEditMode) {
   const saveButton = document.querySelector('#savePreferencesButton');
   let loaded = false;
@@ -770,8 +762,6 @@ if (preferencesForm && preferencesEditMode) {
     if (garminSaved) document.querySelector('#integrationCredentialsNote').textContent = 'Cuenta Garmin ya guardada y verificada.';
     updateGarminButton();
     showGarminCredentials();
-    setClock('nutritionDayStart', saved.nutritionDayStart);
-    setClock('nutritionDayEnd', saved.nutritionDayEnd);
     toggleDetails('allergiesStatus', 'allergiesDetailsLabel', 'allergiesDetails', 'registradas');
     toggleDetails('medicationsStatus', 'medicationsDetailsLabel', 'medicationsDetails', 'registrados');
     document.querySelector('#testDataNotice').hidden = true;
@@ -781,12 +771,6 @@ if (preferencesForm && preferencesEditMode) {
     notifyApp(document.querySelector('#formError').textContent, 'error');
   }).finally(() => { saveButton.disabled = !loaded; });
 } else if (preferencesForm && !document.querySelector('#dietPattern').value) {
-  document.querySelector('#nutritionDayStartHour').value = '9';
-  document.querySelector('#nutritionDayStartMinute').value = '0';
-  document.querySelector('#nutritionDayStartPeriod').value = 'AM';
-  document.querySelector('#nutritionDayEndHour').value = '2';
-  document.querySelector('#nutritionDayEndMinute').value = '0';
-  document.querySelector('#nutritionDayEndPeriod').value = 'AM';
   document.querySelector('#deviceModeManual').checked = true;
   showGarminCredentials();
   document.querySelector('#dietPattern').value = 'sin_preferencia';
@@ -819,10 +803,6 @@ preferencesForm?.addEventListener('submit', async (event) => {
         allergiesDetails: document.querySelector('#allergiesDetails').value,
         medicationsStatus: document.querySelector('#medicationsStatus').value,
         medicationsDetails: document.querySelector('#medicationsDetails').value,
-        nutritionWindow: {
-          start: Object.fromEntries(['Hour', 'Minute', 'Period'].map((part) => [part.toLowerCase(), document.querySelector(`#nutritionDayStart${part}`).value])),
-          end: Object.fromEntries(['Hour', 'Minute', 'Period'].map((part) => [part.toLowerCase(), document.querySelector(`#nutritionDayEnd${part}`).value])),
-        },
         ...(garminDeviceOption.checked && garminProof ? {
           garminEmail: document.querySelector('#integrationUsername').value.trim(),
           garminPassword: document.querySelector('#integrationPassword').value,
@@ -978,8 +958,6 @@ document.querySelector('#morePreferencesButton')?.addEventListener('click', asyn
       ? 'Tu cuenta Garmin ya está guardada.' : 'Prueba la cuenta antes de guardar. Las credenciales se almacenan cifradas.';
     showEditGarminCredentials();
     updateEditGarminState();
-    setClock('editNutritionStart', preferences.nutritionDayStart);
-    setClock('editNutritionEnd', preferences.nutritionDayEnd);
     toggleDetails('editAllergiesStatus', 'editAllergiesDetailsLabel', 'editAllergiesDetails', 'registradas');
     toggleDetails('editMedicationsStatus', 'editMedicationsDetailsLabel', 'editMedicationsDetails', 'registrados');
     feedback.textContent = '';
@@ -1014,10 +992,6 @@ preferencesEditForm?.addEventListener('submit', async (event) => {
         allergiesDetails: document.querySelector('#editAllergiesDetails').value,
         medicationsStatus: document.querySelector('#editMedicationsStatus').value,
         medicationsDetails: document.querySelector('#editMedicationsDetails').value,
-        nutritionWindow: {
-          start: Object.fromEntries(['Hour', 'Minute', 'Period'].map((part) => [part.toLowerCase(), document.querySelector(`#editNutritionStart${part}`).value])),
-          end: Object.fromEntries(['Hour', 'Minute', 'Period'].map((part) => [part.toLowerCase(), document.querySelector(`#editNutritionEnd${part}`).value])),
-        },
         ...(document.querySelector('#editDeviceModeGarmin').checked && editGarminProof ? {
           garminEmail: document.querySelector('#editGarminUsername').value.trim(),
           garminPassword: document.querySelector('#editGarminPassword').value,
@@ -1668,7 +1642,7 @@ async function restoreFoodDraft(feedback) {
 }
 
 document.querySelector('#registerFoodButton')?.addEventListener('click', async (event) => {
-  await nutritionDayReady;
+  await calendarDayReady;
   if (foodSessionPreparing && foodDialog.open) return;
   foodTrigger = event.currentTarget;
   const feedback = document.querySelector('#foodEntryFeedback');
@@ -1753,7 +1727,7 @@ foodDialog?.addEventListener('close', () => foodTrigger?.focus());
 foodForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   if (foodPending || !foodSessionReady) return;
-  await nutritionDayReady;
+  await calendarDayReady;
   const feedback = document.querySelector('#foodEntryFeedback');
   const saveButton = document.querySelector('#saveFoodButton');
   const foodLoading = document.querySelector('#foodLoading');
@@ -1816,7 +1790,7 @@ foodForm?.addEventListener('submit', async (event) => {
       if (result.fecha && result.fecha !== foodDate()) {
         const url = new URL(window.location.href);
         url.searchParams.set('date', result.fecha);
-        navigateWithNotice(result.message || 'Comida guardada en el día nutricional anterior.', `${url.pathname}${url.search}${url.hash}`);
+        navigateWithNotice(result.message || 'Comida guardada en la fecha calendario anterior.', `${url.pathname}${url.search}${url.hash}`);
         return;
       }
       await loadFoodEntries(foodDate());
@@ -2120,7 +2094,7 @@ dashboardTabs.forEach((button) => button.addEventListener('click', () => {
   if (button.dataset.dashboardTab === 'progress') loadProgressNutrition();
 }));
 const dayInput = document.querySelector('#daySelect');
-let nutritionDayReady = Promise.resolve();
+let calendarDayReady = Promise.resolve();
 if (dayInput) {
   const params = new URLSearchParams(window.location.search || '');
   const validDate = (value) => {
@@ -2133,21 +2107,13 @@ if (dayInput) {
   }).formatToParts(new Date()).reduce((parts, { type, value }) => (parts[type] = value, parts), {});
   const requestedDate = validDate(params.get('date') || '') ? params.get('date') : '';
   dayInput.value = requestedDate;
-  nutritionDayReady = fetch('/api/onboarding/preferences', { credentials: 'same-origin' }).then(async (response) => {
+  calendarDayReady = fetch('/api/onboarding/preferences', { credentials: 'same-origin' }).then(async (response) => {
     if (!response.ok) return;
     const { preferences } = await response.json();
     const now = todayInTimezone(preferences?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone);
     const today = `${now.year}-${now.month}-${now.day}`;
     if (dayInput.value && dayInput.value !== today) return;
     dayInput.value = today;
-    const [hour, minute] = String(preferences?.nutritionDayStart || '').split(':').map(Number);
-    if (!Number.isFinite(hour) || !Number.isFinite(minute) || Number(now.hour) * 60 + Number(now.minute) >= hour * 60 + minute) return;
-    const previous = new Date(`${dayInput.value}T12:00:00Z`);
-    previous.setUTCDate(previous.getUTCDate() - 1);
-    dayInput.value = previous.toISOString().slice(0, 10);
-    const url = new URL(window.location.href);
-    url.searchParams.set('date', dayInput.value);
-    history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
   }).catch(() => { if (!dayInput.value) dayInput.value = new Date().toISOString().slice(0, 10); });
   const navigateDate = (offset = 0) => {
     if (offset) {
@@ -2441,7 +2407,7 @@ async function loadFoodEntries(date = document.querySelector('#daySelect')?.valu
   }
 }
 
-if (document.querySelector('#foodEntriesList')) nutritionDayReady.then(() => loadFoodEntries());
+if (document.querySelector('#foodEntriesList')) calendarDayReady.then(() => loadFoodEntries());
 
 async function loadDailySteps(date = dayInput?.value || localDate()) {
   const count = document.querySelector('#dailyStepsCount');
@@ -2463,7 +2429,7 @@ async function loadDailySteps(date = dayInput?.value || localDate()) {
   } finally { count.removeAttribute('aria-busy'); }
 }
 
-if (document.querySelector('#dailyStepsCount')) nutritionDayReady.then(() => loadDailySteps());
+if (document.querySelector('#dailyStepsCount')) calendarDayReady.then(() => loadDailySteps());
 
 async function loadTrainingEntries(date = dayInput?.value || localDate()) {
   const list = document.querySelector('#trainingEntriesList');
@@ -2499,7 +2465,7 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
     if (!records.length) {
       const empty = document.createElement('div');
       empty.className = 'empty';
-       empty.textContent = 'No hay entrenamientos registrados para este día nutricional.';
+       empty.textContent = 'No hay entrenamientos registrados para esta fecha.';
       list.append(empty);
       return;
     }
@@ -2579,7 +2545,7 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
   }
 }
 
-if (document.querySelector('#trainingEntriesList')) nutritionDayReady.then(() => loadTrainingEntries());
+if (document.querySelector('#trainingEntriesList')) calendarDayReady.then(() => loadTrainingEntries());
 
 async function loadAccountProfile() {
   const form = document.querySelector('#accountProfileForm');

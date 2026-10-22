@@ -13,8 +13,8 @@
 
 ## Reportes automáticos programados
 
-- **Resumen diario 01:59**: resumen del día nutricional vigente (kcal vs objetivo, macros, eventos).
-- **Resumen diario 17:00**: el mismo resumen del día nutricional vigente.
+- **Resumen diario 01:59**: resumen del día calendario vigente según la zona horaria de la cuenta (kcal vs objetivo, macros, eventos).
+- **Resumen diario 17:00**: el mismo resumen del día calendario vigente.
 - **Reporte semanal (domingo 20:00)**: promedio de kcal consumidas, adherencia a objetivos, días de fuerza vs consumo, y cambio de peso semanal según biométricos.
 - **Alerta de sueño/gym (diaria 10:00)**: si Garmin muestra entrenamiento ayer y sueño < 6 h, emitir alerta corta de recuperación.
 

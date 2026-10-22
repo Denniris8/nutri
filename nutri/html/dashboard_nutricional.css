@@ -636,4 +636,6 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
 @media (max-width: 380px) {
   .cards { grid-template-columns: 1fr !important; }
   .day-context-meta { grid-template-columns: 1fr; }
+  .day-navigation { grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 6px; }
+  .day-nav-button { min-width: 44px; }
 }

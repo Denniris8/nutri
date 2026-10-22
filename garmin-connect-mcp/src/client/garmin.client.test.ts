@@ -32,7 +32,7 @@ function monthAgo(): string {
   return now.toISOString().split('T')[0]!;
 }
 
-describe('GarminClient (live API)', () => {
+describe.skipIf(!email || !password)('GarminClient (live API)', () => {
   let client: GarminClient;
 
   beforeAll(() => {

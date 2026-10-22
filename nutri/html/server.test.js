@@ -6,7 +6,6 @@ const { createServer, signJwt } = require('./server.js');
 const { validateBiometric } = require('./api/biometrics.js');
 const { ensureFoodOpenCodeSession, openCodeRequest, requestFoodDescription, getFoodSessionDefaults } = require('./api/opencode-food.js');
 const { saveFoodEntry } = require('./api/food-entries.js');
-const { toMysqlTime } = require('./api/preferences.js');
 
 const demo = {
   name: 'Usuario de prueba', countryIso: 'MX', phone: '0000000000',
@@ -148,15 +147,17 @@ test('plicometer API validates and saves records for the authenticated account',
   });
 });
 
-test('food save logs the raw OpenCode response without returning it to the page', async () => {
+test('food save rejects an invalid OpenCode response without exposing it to the page', async () => {
   const queries = [];
   let storedSession = '';
+  let sent;
   const description = '100g frijoles negros cocidos';
   const rawReply = [{ type: 'text', text: '{"items":[{"name":"frijoles negros"}]}' }];
   await withServer(async (sql) => {
     queries.push(sql);
     if (sql.includes('SELECT s.usuario_id')) return '27';
     if (sql.includes('SELECT session_id FROM sesiones_comidas_opencode')) return storedSession;
+    if (sql.includes("SELECT JSON_OBJECT('state',estado")) return JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-13', description, question: null, targetEntryId: null });
     const sessionInsert = sql.match(/INSERT INTO sesiones_comidas_opencode[^]*?VALUES \(27,CONVERT\(0x([a-f\d]+) USING utf8mb4\)\)/i);
     if (sessionInsert) { storedSession = Buffer.from(sessionInsert[1], 'hex').toString(); return ''; }
     if (sql.includes('INSERT INTO registros_comidas(')) return '61';
@@ -166,13 +167,19 @@ test('food save logs the raw OpenCode response without returning it to the page'
     const saved = await post(base + '/api/food-entries', {
       requestId: '123e4567-e89b-42d3-a456-426614174000', fecha: '2026-10-13', descripcion: description,
     }, { Cookie: cookie });
-    assert.equal(saved.status, 200);
+    assert.equal(saved.status, 502);
     const result = await saved.json();
     assert.equal(result.entryId, '61');
-    assert.equal(result.message, 'Descripción enviada a OpenCode.');
+    assert.match(result.message, /formato válido/);
     assert.equal(result.reply, undefined);
     assert.equal(result.trace, undefined);
     assert.equal(storedSession, 'ses_private_food');
+    assert.equal(sent.route, '/session/ses_private_food/message');
+    assert.deepEqual(sent.body.tools, { webfetch: true });
+    assert.equal(typeof sent.body.system, 'string');
+    assert.match(sent.body.system, /`items` \(máximo \d+\)/);
+    assert.ok(JSON.stringify(sent.body).includes(description));
+    assert.equal(sent.body.format, undefined);
 
     const empty = await post(base + '/api/food-entries', { fecha: '2026-10-13', descripcion: '  ' }, { Cookie: cookie });
     assert.equal(empty.status, 400);
@@ -180,13 +187,7 @@ test('food save logs the raw OpenCode response without returning it to the page'
     openCodeRequest: async (method, route, body) => {
       if (method === 'GET') return { status: 200, data: { id: route.split('/').at(-1) } };
       if (route === '/session') return { status: 201, data: { id: 'ses_private_food' } };
-      assert.equal(route, '/session/ses_private_food/message');
-      assert.deepEqual(body.tools, {});
-      assert.equal(typeof body.system, 'string');
-      assert.match(body.system, /Separa la descripción en hasta \d+ alimentos/);
-      assert.ok(body.system.length < 1000);
-      assert.ok(JSON.stringify(body).includes(description));
-      assert.equal(body.format, undefined);
+      sent = { route, body };
       return { status: 200, data: { parts: rawReply } };
     },
   });
@@ -196,8 +197,8 @@ test('food save logs the raw OpenCode response without returning it to the page'
 test('food day query returns only authenticated user records for the selected date', async () => {
   const queries = [];
   const records = [
-    { id: 1, fecha: '2026-10-13', createdAt: '2026-10-13T12:10:00Z', state: 'pendiente', description: '100 g de avena' },
-    { id: 2, fecha: '2026-10-13', createdAt: '2026-10-13T18:30:00Z', state: 'pendiente', description: '2 huevos' },
+    { id: 1, fecha: '2026-10-13', createdAt: '2026-10-13T12:10:00Z', state: 'pendiente', description: '100 g de avena', items: [], clarifications: [] },
+    { id: 2, fecha: '2026-10-13', createdAt: '2026-10-13T18:30:00Z', state: 'pendiente', description: '2 huevos', items: [], clarifications: [] },
   ];
   await withServer(async (sql) => {
     queries.push(sql);
@@ -387,8 +388,7 @@ test('food request sends the current description and returns OpenCode parts unch
       return { status: 200, data: { parts: [{ type: 'text', text: '{"items":[],"clarificationQuestion":"Aclara la cantidad."}' }] } };
     },
   });
-  assert.ok(sent.system.length < 1000);
-  assert.match(sent.system, /Devuelve siempre los cinco macros como números/);
+  assert.match(sent.system, /macros:\{energyKcal,proteinG,carbohydrateG,fatG,fiberG\}/);
   assert.match(sent.system, /macroStatus:"estimado"/);
   assert.equal(sent.format, undefined);
   assert.deepEqual(JSON.parse(sent.parts[0].text), { description: '150 g de pollo cocido' });
@@ -469,11 +469,12 @@ test('OpenCode HTTP waits for delayed headers without Undici headers timeout', a
   });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
-  const envKeys = ['OPENCODE_SERVICE_FILE', 'OPENCODE_BASE_URL', 'OPENCODE_PORT', 'OPENCODE_PASSWORD', 'OPENCODE_SERVER_PASSWORD', 'OPENCODE_AUTO_START'];
+  const envKeys = ['OPENCODE_SERVICE_FILE', 'OPENCODE_SERVICE_PROXY_URL', 'OPENCODE_BASE_URL', 'OPENCODE_PORT', 'OPENCODE_PASSWORD', 'OPENCODE_SERVER_PASSWORD', 'OPENCODE_AUTO_START'];
   const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
   const originalFetch = global.fetch;
   delete process.env.OPENCODE_SERVICE_FILE;
   process.env.OPENCODE_BASE_URL = `http://127.0.0.1:${server.address().port}`;
+  process.env.OPENCODE_SERVICE_PROXY_URL = process.env.OPENCODE_BASE_URL;
   process.env.OPENCODE_AUTO_START = 'false';
   delete process.env.OPENCODE_PASSWORD;
   delete process.env.OPENCODE_SERVER_PASSWORD;
@@ -531,11 +532,11 @@ test('OpenCode food sessions are private per authenticated user and reused on re
   const requestOpenCode = async (method, route, body) => {
     const id = route.split('/').at(-1);
     if (method === 'GET') return { status: 200, data: openCodeSessions.get(id) };
-    if (method === 'PATCH') { assert.deepEqual(body.permission, [{ permission: '*', pattern: '*', action: 'deny' }]); return { status: 200, data: true }; }
+      if (method === 'PATCH') { assert.deepEqual(body.permission, [{ permission: '*', pattern: '*', action: 'deny' }, { permission: 'webfetch', pattern: '*', action: 'allow' }]); return { status: 200, data: true }; }
     if (method === 'DELETE') { openCodeSessions.delete(id); return { status: 200, data: true }; }
     created += 1;
     assert.equal(body.title, 'Registro de comidas');
-    assert.deepEqual(body.permission, [{ permission: '*', pattern: '*', action: 'deny' }]);
+    assert.deepEqual(body.permission, [{ permission: '*', pattern: '*', action: 'deny' }, { permission: 'webfetch', pattern: '*', action: 'allow' }]);
     const sessionId = `ses_private${created}`;
     openCodeSessions.set(sessionId, { id: sessionId, metadata: body.metadata });
     return { status: 201, data: { id: sessionId } };
@@ -637,7 +638,7 @@ test('food session belongs to the authenticated user and reuses only that user s
     openCodeSessions.set(sessionId, { id: sessionId, metadata: body.metadata });
     return { status: 201, data: { id: sessionId } };
   } });
-  assert.ok(requests.filter((request) => ['POST', 'PATCH'].includes(request.method)).every(({ body }) => body.permission.every((rule) => rule.action === 'deny')));
+  assert.ok(requests.filter((request) => ['POST', 'PATCH'].includes(request.method)).every(({ body }) => body.permission.some((rule) => rule.permission === 'webfetch' && rule.action === 'allow')));
 });
 
 test('food description remains saved when OpenCode is unavailable', async () => {
@@ -655,7 +656,7 @@ test('food description remains saved when OpenCode is unavailable', async () => 
       requestId: '123e4567-e89b-42d3-a456-426614174000', fecha: '2026-10-13', descripcion: 'Pollo 150 g',
     }, { Cookie: cookie });
     assert.equal(response.status, 502);
-    assert.match((await response.json()).message, /quedó guardada/);
+    assert.match((await response.json()).message, /quedó guardado/);
     assert.ok(queries.some((sql) => sql.includes('INSERT INTO registros_comidas')));
   }, { openCodeRequest: async () => { throw new Error('OpenCode unavailable'); } });
 });
@@ -718,7 +719,7 @@ test('registration creates a hashed user and grants a revocable JWT session', as
     }
     if (sql.includes('SELECT s.usuario_id')) return '27';
     if (sql.startsWith('SELECT EXISTS(')) return `${Number(preferencesSaved && healthSaved)}\t${Number(termsAccepted)}`;
-    if (sql.includes('FROM preferencias_usuario p JOIN perfil_salud_usuario')) return JSON.stringify({ deviceMode: 'ninguno', patronAlimentario: 'vegetariano', nutritionDayStart: '00:00:00', nutritionDayEnd: '13:30:00', allergiesStatus: 'sin_informacion', medicationsStatus: 'sin_informacion' });
+    if (sql.includes('FROM preferencias_usuario p JOIN perfil_salud_usuario')) return JSON.stringify({ deviceMode: 'ninguno', patronAlimentario: 'vegetariano', timezone: 'America/Mexico_City', allergiesStatus: 'sin_informacion', medicationsStatus: 'sin_informacion' });
     if (sql.startsWith('SELECT JSON_OBJECT(')) return JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: 1600, restingMetabolismSource: 'mifflin' });
     if (sql.startsWith('SELECT COALESCE(JSON_ARRAYAGG')) return JSON.stringify([{ measuredAt: '2026-10-13 09:00:00', source: 'bia', weightKg: 75, bodyAge: 30, bodyFatPct: 20, restingMetabolismKcal: 1600, visceralFat: 7, bmi: 24.5, musclePct: 35, notes: null }]);
     if (sql.includes('INSERT INTO preferencias_usuario')) { preferencesSaved = true; healthSaved = true; return ''; }
@@ -747,7 +748,6 @@ test('registration creates a hashed user and grants a revocable JWT session', as
       deviceMode: 'ninguno', patronAlimentario: 'vegetariano',
       preferredFoods: 'pescado', avoidedFoods: '', allergiesStatus: 'sin_informacion', allergiesDetails: '',
       medicationsStatus: 'sin_informacion', medicationsDetails: '',
-      nutritionWindow: { start: { hour: 12, minute: 0, period: 'AM' }, end: { hour: 1, minute: 30, period: 'PM' } },
     }, {
       Cookie: cookie.split(';')[0], 'X-Client-Timezone': 'America/Mexico_City',
     });
@@ -755,8 +755,7 @@ test('registration creates a hashed user and grants a revocable JWT session', as
     const preferenceSql = queries.find((sql) => sql.includes('INSERT INTO preferencias_usuario') && sql.includes('ON DUPLICATE KEY'));
     assert.ok(preferenceSql);
     assert.doesNotMatch(preferenceSql, /America\/Mexico_City|vegetariano/);
-    assert.match(preferenceSql, /00:00:00/);
-    assert.match(preferenceSql, /13:30:00/);
+    assert.doesNotMatch(preferenceSql, /nutrition_day_(?:start|end)/);
     assert.match(queries.find((sql) => sql.includes('INSERT INTO usuarios')) || '', /estatura_cm/);
 
     const dashboardAfterPreferences = await fetch(base + '/dashboard_nutricional.html', { headers: { Cookie: cookie }, redirect: 'manual' });
@@ -772,7 +771,7 @@ test('registration creates a hashed user and grants a revocable JWT session', as
     const termsHtml = await termsPage.text();
     assert.match(termsHtml, /id="acceptTermsButton"/);
     assert.match(termsHtml, /id="rejectTermsButton"/);
-    assert.match(termsHtml, /id="termsContent"><\/div>/);
+    assert.match(termsHtml, /id="termsContent"[\s\S]*Uso del dashboard/);
     const acceptance = await post(base + '/api/terms/decision', { decision: 'accepted' }, { Cookie: cookie.split(';')[0] });
     assert.equal(acceptance.status, 200);
     assert.ok(queries.some((sql) => sql.includes('dashboard_terms_decisions')));
@@ -810,29 +809,13 @@ test('registration creates a hashed user and grants a revocable JWT session', as
       deviceMode: 'ninguno', patronAlimentario: 'vegano',
       preferredFoods: '', avoidedFoods: '', allergiesStatus: 'sin_informacion', allergiesDetails: '',
       medicationsStatus: 'sin_informacion', medicationsDetails: '',
-      nutritionWindow: { start: { hour: 9, minute: 0, period: 'AM' }, end: { hour: 10, minute: 0, period: 'PM' } },
     }, {
       Cookie: cookie.split(';')[0], 'X-Client-Timezone': 'No/Such_Zone',
     });
     assert.equal(invalidTimezone.status, 400);
     assert.equal(queries.filter((sql) => sql.includes('INSERT INTO preferencias_usuario')).length, 1);
 
-    const invalidClock = await post(base + '/api/onboarding/preferences', {
-      deviceMode: 'ninguno', patronAlimentario: 'vegano',
-      preferredFoods: '', avoidedFoods: '', allergiesStatus: 'sin_informacion', allergiesDetails: '',
-      medicationsStatus: 'sin_informacion', medicationsDetails: '',
-      nutritionWindow: { start: { hour: 13, minute: 0, period: 'PM' }, end: { hour: 10, minute: 0, period: 'PM' } },
-    }, { Cookie: cookie.split(';')[0], 'X-Client-Timezone': 'America/Mexico_City' });
-    assert.equal(invalidClock.status, 400);
-    assert.equal(queries.filter((sql) => sql.includes('INSERT INTO preferencias_usuario')).length, 1);
   });
-});
-
-test('12-hour clock converts midnight, noon and PM to MySQL TIME', () => {
-  assert.equal(toMysqlTime({ hour: '12', minute: '00', period: 'AM' }), '00:00:00');
-  assert.equal(toMysqlTime({ hour: '12', minute: '15', period: 'PM' }), '12:15:00');
-  assert.equal(toMysqlTime({ hour: '1', minute: '30', period: 'PM' }), '13:30:00');
-  assert.equal(toMysqlTime({ hour: '0', minute: '30', period: 'AM' }), null);
 });
 
 test('biometric validation requires weight and keeps optional BIA fields source-bound', () => {
@@ -869,7 +852,7 @@ test('login accepts the stored password and logout revokes the session', async (
       assert.match(cookie, /HttpOnly/);
       assert.match(cookie, /SameSite=Strict/);
       assert.match(cookie, /Secure/);
-      assert.match(queries.find((sql) => sql.includes('INSERT INTO dashboard_sessions')) || '', /INTERVAL 8 HOUR/);
+      assert.match(queries.find((sql) => sql.includes('INSERT INTO dashboard_sessions')) || '', /INTERVAL 28800 SECOND/);
       const logout = await post(base + '/api/auth/logout', {}, { Cookie: cookie });
       assert.equal(logout.status, 200);
       assert.match(queries.join('\n'), /UPDATE dashboard_sessions/);
@@ -905,8 +888,8 @@ test('login persists failed credential buckets and logs no credential data', asy
   }, async (base) => {
     const response = await post(base + '/api/auth/login', { phone, password: 'wrong-password-123' });
     assert.equal(response.status, 401);
-    const audit = queries.find((sql) => sql.includes('login_failed')) || '';
-    assert.match(audit, /AUTH_INVALID_CREDENTIALS/);
+    const audit = queries.find((sql) => sql.includes('INSERT INTO errores_aplicacion')) || '';
+    assert.ok(audit.includes(Buffer.from('AUTH_INVALID_CREDENTIALS').toString('hex')));
     assert.doesNotMatch(audit, /wrong-password-123|522222222222/);
     assert.ok(queries.some((sql) => sql.includes('auth_login_rate_limits') && sql.includes('UNHEX(')));
   });
@@ -983,5 +966,68 @@ test('registration rejects invalid origins and invalid fields before database ac
     const unsupportedSex = await post(base + '/api/auth/register', { ...demo, sex: 'otro' });
     assert.equal(unsupportedSex.status, 400);
     assert.equal(calls, 0);
+  });
+});
+
+test('authenticated user can generate and save a training plan through the API', async () => {
+  const queries = [];
+  const requests = [];
+  const disclosure = 'Las metas de calorías y carbohidratos se ajustan según los entrenamientos registrados para el día seleccionado.';
+  const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
+  const plan = `[Datos Registrados]\nEdad: 32 años; sexo masculino; estatura 175 cm.\n[Estimaciones Calculadas]\nMacros estimados.\n[Supuestos Adoptados]\nDisponibilidad asumida.\n${disclosure}`;
+  let saveRequest;
+  await withServer(async (sql) => {
+    queries.push(sql);
+    if (sql.includes('SELECT s.usuario_id')) return '27';
+    if (sql.includes("SELECT JSON_OBJECT('accountName'")) return JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null });
+    if (sql.includes("SELECT JSON_OBJECT('age',edad)")) return JSON.stringify({ age: 32 });
+    if (sql.includes("SELECT JSON_OBJECT('age',(SELECT edad")) return JSON.stringify({
+      age: 32, hasWeight: false,
+      bodyFacts: { bmi: false, bodyFatPct: false, musclePct: false, visceralFat: false, bodyAge: false, restingMetabolismKcal: false },
+      plicometryFacts: { tricepsMm: false, bicepsMm: false, subescapularMm: false, suprailiacoMm: false, abdominalMm: false, musloAnteriorMm: false, pantorrillaMm: false },
+    });
+    if (sql.includes('JSON_ARRAYAGG')) return '[]';
+    if (sql.includes('INSERT INTO planes_entrenamiento')) return JSON.stringify({ id: 5, requestId: saveRequest.runId, createdAt: '2026-10-22T17:00:00Z', goals: saveRequest.goals, plan: saveRequest.plan, macros: saveRequest.macros, inserted: true });
+    if (sql.includes('FROM planes_entrenamiento')) return '';
+    return '';
+  }, async (base) => {
+    const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
+    const generatedResponse = await post(base + '/api/training-plan', { goals: 'Ganar fuerza', suppressNotification: true }, { Cookie: cookie });
+    assert.equal(generatedResponse.status, 200);
+    const generated = await generatedResponse.json();
+    assert.equal(generated.plan, plan);
+    assert.deepEqual(generated.macros, macros);
+    assert.match(generated.runId, /^[0-9a-f-]{36}$/i);
+
+    saveRequest = { runId: generated.runId, goals: 'Ganar fuerza', plan: generated.plan, macros: generated.macros, suppressNotification: true };
+    const savedResponse = await post(base + '/api/training-plans', saveRequest, { Cookie: cookie });
+    assert.equal(savedResponse.status, 201);
+    const saved = await savedResponse.json();
+    assert.equal(saved.id, 5);
+    assert.equal(saved.requestId, generated.runId);
+    assert.equal(saved.inserted, true);
+    assert.ok(queries.some((sql) => sql.includes('INSERT INTO planes_entrenamiento') && sql.includes('usuario_id=27')));
+    assert.deepEqual(requests, [
+      { method: 'POST', endpoint: '/session' },
+      { method: 'POST', endpoint: '/session/ses_plan123/message' },
+      { method: 'DELETE', endpoint: '/session/ses_plan123' },
+    ]);
+  }, {
+    openCodeRequest: async (method, endpoint, body) => {
+      requests.push({ method, endpoint });
+      if (method === 'POST' && endpoint === '/session') {
+        assert.equal(body.metadata.trainingPlanUserId, '27');
+        assert.equal(body.permission[0].action, 'deny');
+        return { status: 201, data: { id: 'ses_plan123' } };
+      }
+      if (method === 'POST') {
+        assert.deepEqual(JSON.parse(body.parts[0].text), { goals: 'Ganar fuerza', context: {
+          profile: { age: 32, sex: 'masculino', heightCm: 175, restingMetabolismKcal: null, restingMetabolismSource: null },
+          preferences: null, biometricRecords: [], plicometricRecords: [], previousTrainingPlanSummary: null,
+        } });
+        return { status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({ macros_objetivo: macros, plan_markdown: plan }) }] } };
+      }
+      return { status: 204, data: null };
+    },
   });
 });

@@ -185,6 +185,11 @@ async function readFoodUserText({ entryId, dbQuery }) {
   return rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row).content).join('\n') : '';
 }
 
+async function readDraftFoodItems({ entryId, userId, dbQuery }) {
+  const rows = await dbQuery(`SELECT JSON_OBJECT('sourceText',i.fragmento_original,'name',i.nombre_alimento,'quantityText',i.cantidad_texto,'quantityGrams',i.cantidad_g,'macroBasis',i.base_macros,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente,'macros',JSON_OBJECT('energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g,'fiberG',i.fibra_g)) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.id=${entryId} AND e.usuario_id=${userId} AND e.estado='borrador_chat' ORDER BY i.id;`);
+  return rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [];
+}
+
 async function saveFoodInteraction({ dbQuery, textSql, entryId, role, content }) {
   const previous = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id DESC LIMIT 1;`);
   if (previous) {
@@ -267,9 +272,23 @@ function foodItemIssues(item) {
   if (!['per_100g', 'per_portion'].includes(item?.macroBasis)) issues.push('macroBasis');
   if (!['estimado', 'declarado'].includes(item?.macroStatus)) issues.push('macroStatus');
   if (!['declarado_usuario', 'webfetch', 'opencode_estimado'].includes(item?.macroSource)) issues.push('macroSource');
-  if (!item?.macros || !['energyKcal', 'proteinG', 'carbohydrateG', 'fatG', 'fiberG'].every((key) => Number.isFinite(item.macros[key]) && item.macros[key] >= 0 && item.macros[key] <= 99999999.99)) issues.push('macros');
+  const macros = item?.macros;
+  if (!macros || !['energyKcal', 'proteinG', 'carbohydrateG', 'fatG'].every((key) => Number.isFinite(macros[key]) && macros[key] >= 0 && macros[key] <= 99999999.99)
+      || macros.fiberG != null && (!Number.isFinite(macros.fiberG) || macros.fiberG < 0 || macros.fiberG > 99999999.99)) issues.push('macros');
   if (item?.quantityGrams != null && (!Number.isFinite(item.quantityGrams) || item.quantityGrams <= 0 || item.quantityGrams > 9999999.999)) issues.push('quantityGrams');
   if (item?.quantityText != null && (typeof item.quantityText !== 'string' || item.quantityText.length > 100)) issues.push('quantityText');
+  const referenceGrams = Number.isFinite(item?.quantityGrams) && item.quantityGrams > 0 ? item.quantityGrams : item?.macroBasis === 'per_100g' ? 100 : null;
+  if (macros && referenceGrams != null
+      && ['proteinG', 'carbohydrateG', 'fatG', 'fiberG'].some((key) => macros[key] != null
+        && macros[key] * (item.macroBasis === 'per_100g' && Number.isFinite(item.quantityGrams) ? item.quantityGrams / 100 : 1) > referenceGrams * 1.05)) issues.push('macro_unit_bounds');
+  const factor = item?.macroBasis === 'per_100g' && Number.isFinite(item.quantityGrams) ? item.quantityGrams / 100 : 1;
+  const energy = macros?.energyKcal * factor;
+  if (referenceGrams != null && Number.isFinite(energy) && energy > referenceGrams * 9.5) issues.push('energy_unit_bounds');
+  if (macros && macros.fiberG != null && Number.isFinite(macros.energyKcal)
+      && ['proteinG', 'carbohydrateG', 'fatG'].every((key) => Number.isFinite(macros[key]))) {
+    const expected = (4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG) * factor;
+    if (Math.abs(energy - expected) > Math.max(25, energy * 0.25, macros.fiberG * factor * 2)) issues.push('energy_4_4_9_mismatch');
+  }
   if (item?.targetItemId != null && !/^[1-9]\d*$/.test(String(item.targetItemId))) issues.push('targetItemId');
   if (item?.macroSource === 'webfetch') {
     if (typeof item.sourceName !== 'string' || !item.sourceName.trim() || item.sourceName.length > 255) issues.push('sourceName');
@@ -282,6 +301,36 @@ function foodItemIssues(item) {
 
 function validFoodItem(item) {
   return foodItemIssues(item).length === 0;
+}
+
+function explicitFoodMasses(description) {
+  return [...String(description).matchAll(/(?:^|[^\d])(\d+(?:[.,]\d+)?)\s*(kg|kilogramos?|gr|g|gramos?)\b/gi)]
+    .map((match) => Number(match[1].replace(',', '.')) * (/^(?:kg|kilogramos?)$/i.test(match[2]) ? 1000 : 1))
+    .filter((grams) => Number.isFinite(grams) && grams > 0 && grams <= 9999999.999);
+}
+
+function applyExplicitGrams(items, description, allowUniqueMissing = false) {
+  const missing = items.filter((item) => item && item.quantityGrams == null);
+  const amounts = explicitFoodMasses(description);
+  if ((items.length === 1 || allowUniqueMissing) && missing.length === 1 && amounts.length === 1) {
+    const grams = amounts[0];
+    missing[0].quantityGrams = grams;
+    missing[0].quantityText ||= `${grams} g`;
+  }
+  return items;
+}
+
+function isQuantityQuestion(text) {
+  return /(?:cu[aá]ntos gramos|cantidad en gramos|peso aproximado)/i.test(String(text || ''));
+}
+
+function pendingFoodItemSql(entryId, item, textSql) {
+  const macros = item.macros;
+  const value = (field) => field == null ? 'NULL' : textSql(field);
+  const energy449 = 4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG;
+  const method = item.macroSource === 'webfetch' ? 'webfetch' : item.macroSource === 'opencode_estimado' ? 'opencode_estimado' : 'declarado_usuario';
+  const fields = [entryId, textSql(item.sourceText), textSql(item.name.trim()), value(item.sourceName), value(item.sourceUrl), value(item.sourceQuote), value(item.quantityText), item.quantityGrams == null ? 'NULL' : item.quantityGrams, textSql(item.macroSource), textSql(method), textSql(item.macroBasis), textSql(item.macroStatus), macros.energyKcal, energy449, macros.proteinG, macros.carbohydrateG, macros.fatG, value(macros.fiberG)];
+  return `INSERT INTO registros_comida_items(registro_comida_id,fragmento_original,nombre_alimento,nombre_fuente_web,url_fuente_web,cita_fuente,cantidad_texto,cantidad_g,fuente_macros,metodo_energia,base_macros,estado_macros,energia_kcal,energia_449_kcal,proteina_g,carbohidratos_g,grasa_g,fibra_g) VALUES (${fields.join(',')})`;
 }
 
 async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, requestOpenCode }) {
@@ -299,10 +348,7 @@ async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, r
   let committedConfirmation;
   let stage = 'draft';
   try {
-    const preferenceWindow = await dbQuery(`SELECT TIME_FORMAT(nutrition_day_start,'%H:%i'),zona_horaria FROM preferencias_usuario WHERE usuario_id=${userId} LIMIT 1;`);
-    const [nutritionDayStart = '00:00', preferenceTimezone = ''] = (preferenceWindow || '').split('\t');
-    const [startHour, startMinute] = nutritionDayStart.split(':').map(Number);
-    const nutritionDayStartMinutes = Number.isFinite(startHour) && Number.isFinite(startMinute) ? startHour * 60 + startMinute : null;
+    const preferenceTimezone = await dbQuery(`SELECT zona_horaria FROM preferencias_usuario WHERE usuario_id=${userId} LIMIT 1;`);
     if (preferenceTimezone) entry.timezone = preferenceTimezone;
     const existingDraftDate = await dbQuery(`SELECT DATE_FORMAT(fecha_consumo,'%Y-%m-%d') FROM registros_comidas WHERE usuario_id=${userId} AND request_id=${textSql(entry.requestId)} AND estado='borrador_chat' LIMIT 1;`);
     const requestedChatDate = chatFoodDate(entry.descripcion, entry.timezone);
@@ -341,6 +387,7 @@ SELECT LAST_INSERT_ID();`);
       await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'user', content: saved.description });
       await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'assistant', content: saved.question });
     }
+    const pendingFoodItems = saved.question ? await readDraftFoodItems({ entryId, userId, dbQuery }) : [];
     await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'user', content: entry.descripcion });
     const asksTimeChoice = /Hay varias comidas a esa hora|¿Te refieres a las .*a\. m\. o p\. m\./i.test(saved.question || '');
     const asksDayChoice = /¿Esta comida pertenece al día nutricional seleccionado(?:\s*\([^)]*\))? o al anterior\?/i.test(saved.question || '');
@@ -383,7 +430,7 @@ SELECT LAST_INSERT_ID();`);
     }
     let sessionId = await ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode, trace });
     stage = 'analysis';
-    const requestArgs = { sessionId, description: modelDescription, comidasDisponibles: mealsForModel, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, inicioDiaNutricional: nutritionDayStart, trace, requestOpenCode };
+    const requestArgs = { sessionId, description: modelDescription, comidasDisponibles: mealsForModel, alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
     let parts = await withFoodSessionLock(userId, () => requestFoodDescription(requestArgs));
     stage = 'parse';
     let result;
@@ -404,29 +451,33 @@ SELECT LAST_INSERT_ID();`);
       stage = 'parse';
       result = parseReply(parts);
     }
-    let items = Array.isArray(result?.items) ? result.items : [];
+    const pendingMasses = explicitFoodMasses(entry.descripcion);
+    const answeredPendingQuantity = isQuantityQuestion(saved.question) && pendingMasses.length === 1;
+    let items = applyExplicitGrams(Array.isArray(result?.items) ? result.items : [], entry.descripcion, answeredPendingQuantity);
+    if (result) result.items = items;
     const getReplyIssues = () => [
       ...(!['new', 'append', 'update'].includes(result?.action) ? ['action'] : []),
       ...(!Array.isArray(result?.items) ? ['items'] : []),
       ...(!Object.hasOwn(result || {}, 'clarificationQuestion') || result.clarificationQuestion != null && typeof result.clarificationQuestion !== 'string' ? ['clarificationQuestion'] : []),
       ...items.flatMap((item, index) => foodItemIssues(item).map((issue) => `items[${index}].${issue}`)),
+      ...(answeredPendingQuantity && (!items.length || items.some((item) => item.quantityGrams == null)) ? ['quantityGrams'] : []),
     ];
     let replyIssues = getReplyIssues();
-    for (let attempt = 1; attempt <= 3 && (replyIssues.length || (!items.length && !result?.clarificationQuestion)); attempt++) {
+    for (let attempt = 1; attempt <= 1 && (replyIssues.length || (!items.length && !result?.clarificationQuestion)); attempt++) {
       traceFoodSession(trace, 'reply_validation_retry', { issueCount: replyIssues.length || 1, attempt });
       parts = await withFoodSessionLock(userId, () => requestFoodDescription({
         ...requestArgs, sessionId, description: modelDescription,
-        retryFeedback: `FORMATO OBLIGATORIO: vuelve a analizar el mensaje original y responde únicamente con un objeto JSON válido, sin Markdown, bloques de código, comentarios ni texto fuera del objeto. Incluye action (new|append|update), targetEntryId (ID válido o null), items (array) y clarificationQuestion (cadena o null); cada alimento debe incluir todos los campos y macros requeridos por el prompt. Problemas detectados: ${replyIssues.length ? replyIssues.join(', ') : 'JSON ausente o ilegible'}. Corrige el formato completo; no inventes datos: si falta información, devuelve items vacíos y pregunta en clarificationQuestion.`,
+        retryFeedback: `ÚNICO REINTENTO: corrige la respuesta completa en JSON según estos problemas: ${replyIssues.length ? replyIssues.join(', ') : 'JSON ausente o ilegible'}. Mantén el formato y los alimentos pendientes del contexto. Si ya respondieron una cantidad, refleja el valor convertido a gramos en quantityGrams y recalcula macros; no vuelvas a preguntar lo ya contestado. No inventes datos; pregunta solo por la información que aún falte.`,
       }));
       stage = 'parse';
       result = parseReply(parts);
-      items = Array.isArray(result?.items) ? result.items : [];
+      items = applyExplicitGrams(Array.isArray(result?.items) ? result.items : [], entry.descripcion, answeredPendingQuantity);
+      if (result) result.items = items;
       replyIssues = getReplyIssues();
       if (replyIssues.length || (!items.length && !result?.clarificationQuestion)) {
-        if (attempt < 3) continue;
         stage = 'validation';
         traceFoodSession(trace, 'reply_validation_failed', { stage, errorCode: 'FOOD_RESPONSE_INVALID_STRUCTURE', issueCount: replyIssues.length || 1, retries: attempt });
-        throw Object.assign(new Error('OpenCode no devolvió un formato válido después de varios intentos. No se guardaron los alimentos; vuelve a enviar el mensaje.'), { code: 'FOOD_RESPONSE_INVALID_STRUCTURE' });
+        throw Object.assign(new Error('OpenCode no devolvió un formato válido tras un reintento. No se guardaron los alimentos; vuelve a enviar el mensaje.'), { code: 'FOOD_RESPONSE_INVALID_STRUCTURE' });
       }
     }
     const assistantMessages = Array.isArray(result?.assistantMessages)
@@ -434,6 +485,11 @@ SELECT LAST_INSERT_ID();`);
         && !/(?:a cu[aá]l comida|qu[eé] comida|which meal|no hay comidas guardadas|no existe una comida)/i.test(message)).map((message) => message.slice(0, 5000))
       : [];
     let clarification = result?.clarificationQuestion;
+    if (isQuantityQuestion(saved.question) && pendingMasses.length > 1 && items.some((item) => item.quantityGrams == null)) {
+      const names = pendingFoodItems.filter((item) => item.quantityGrams == null).map((item) => item.name).join(', ');
+      clarification = `Mencionaste varias cantidades (${pendingMasses.join(' g, ')} g). Indica cuál corresponde a cada alimento${names ? `: ${names}` : ''}, por ejemplo “lentejas 150g”.`;
+    }
+    if (answeredPendingQuantity && isQuantityQuestion(clarification) && items.length && items.every((item) => item.quantityGrams != null)) clarification = null;
     const createsNew = result.action === 'new';
     let effectiveTime = requestedTime && !requestedTime.invalid && (!activeTarget || createsNew) ? requestedTime : null;
     if (asksDayChoice && dayChoice === 'anterior') effectiveTime = requestedTime;
@@ -510,24 +566,19 @@ SELECT LAST_INSERT_ID();`);
       clarification = `¿Esta comida pertenece al día nutricional seleccionado (${entry.fecha}) o al anterior (${previousDate(entry.fecha)})?`;
     }
     if (asksDayChoice && dayChoice === 'anterior') {
-      clarification = `¿La guardo en el día nutricional anterior (${previousDate(entry.fecha)})? Sugiero dejarla a las 11:59:59 p. m. de ese día para sumar los macros y hacer los cálculos necesarios. Confirma o indica otra hora.`;
+      clarification = `¿La guardo en el día nutricional anterior (${previousDate(entry.fecha)})? Sugiero dejarla a las 11:59:59 p. m. para mantenerla dentro de esa fecha. Confirma o indica otra hora.`;
     }
     if (asksPreviousDayConfirmation && !previousSaveAnswer?.confirmed) {
-      clarification = `¿La guardo en el día nutricional anterior (${previousDate(entry.fecha)})? Sugiero dejarla a las 11:59:59 p. m. de ese día para sumar los macros y hacer los cálculos necesarios. Confirma o indica otra hora.`;
+      clarification = `¿La guardo en el día nutricional anterior (${previousDate(entry.fecha)})? Sugiero dejarla a las 11:59:59 p. m. para mantenerla dentro de esa fecha. Confirma o indica otra hora.`;
     }
     if (asksPreviousDayConfirmation && previousSaveAnswer?.confirmed) {
       savedDate = confirmedDate || previousDate(entry.fecha);
-      savedDescription += ' [Hora indicada del día siguiente; se guardó en el día nutricional anterior para configurar los macros antes de dormir.]';
+      savedDescription += ' [Se guardó explícitamente en la fecha calendario anterior.]';
     }
     if (effectiveTime && appendTargetId == null) {
       const hour = effectiveTime.hours.length === 1 ? effectiveTime.hours[0] : null;
       const usePreviousDayTime = asksPreviousDayConfirmation && previousSaveAnswer?.confirmed;
-      const timeDate = usePreviousDayTime
-        ? new Date(`${savedDate}T00:00:00Z`)
-        : hour != null && nutritionDayStartMinutes != null && hour * 60 + effectiveTime.minute < nutritionDayStartMinutes
-          ? new Date(`${entry.fecha}T00:00:00Z`) : null;
-      if (timeDate) timeDate.setUTCDate(timeDate.getUTCDate() + 1);
-      const calendarDate = usePreviousDayTime ? savedDate : timeDate ? timeDate.toISOString().slice(0, 10) : entry.fecha;
+      const calendarDate = usePreviousDayTime ? savedDate : entry.fecha;
       createdAt = usePreviousDayTime
         ? localDateTimeToUtc(calendarDate, effectiveTime.hours[0], effectiveTime.minute, entry.timezone)?.replace(/:00$/, previousSaveAnswer.lastSecond ? ':59' : ':00')
         : hour == null ? null : localDateTimeToUtc(calendarDate, hour, effectiveTime.minute, entry.timezone);
@@ -566,6 +617,16 @@ SELECT LAST_INSERT_ID();`);
       if (!suppressNotification) statements.push(notificationInsertSql({ userId, category: 'comida', state: 'requiere_respuesta', title: 'Comida: falta una aclaración', message: question, referenceId: entryId, textSql }));
       statements.push('COMMIT');
       await dbQuery(`${statements.join(';')};`);
+      for (const item of items) {
+        if (foodItemIssues(item).length) continue;
+        try {
+          await dbQuery(`${pendingFoodItemSql(entryId, item, textSql)};`);
+        } catch (error) {
+          traceFoodSession(trace, 'draft_candidate_persistence_failed', { stage: 'persistence', errorCode: safeOpenCodeErrorCode(error) });
+          try { await recordFoodError({ dbQuery, textSql, userId, trace, stage: 'persistence', error }); }
+          catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed' })); }
+        }
+      }
       const messages = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`);
       json(response, 200, { state: 'requiere_aclaracion', entryId, requestId: entry.requestId, targetEntryId: clarificationTargetId, question, messages: messages ? messages.split(/\r?\n/).map((row) => JSON.parse(row)) : [], message: question });
       return;
@@ -669,4 +730,4 @@ SELECT LAST_INSERT_ID();`);
   }
 }
 
-module.exports = { deleteFoodEntry, localDateTimeToUtc, normalizeFoodReply, parseFoodReply, parseFoodTime, readFoodEntries, readPendingFoodDraft, saveFoodEntry, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, deleteFoodEntry, foodItemIssues, localDateTimeToUtc, normalizeFoodReply, parseFoodReply, parseFoodTime, readFoodEntries, readPendingFoodDraft, saveFoodEntry, validateFoodEntry, validFoodItem };

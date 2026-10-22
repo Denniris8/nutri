@@ -1,6 +1,6 @@
 const { randomUUID } = require('node:crypto');
 const { localDateTimeToUtc, parseFoodTime } = require('./food-entries.js');
-const { nextDate, nutritionDateForSelection, nutritionWindowRange, readNutritionWindow } = require('./nutrition-window.js');
+const { calendarDayRange, readCalendarTimezone } = require('./calendar-day.js');
 const { addNotification, resolveNotificationsSql } = require('./notifications.js');
 
 function parseTrainingSavedTime(description) {
@@ -14,7 +14,7 @@ function parseTrainingSavedTime(description) {
   };
 }
 
-function requestedTrainingTime(description, date, timezone, savedAt, window) {
+function requestedTrainingTime(description, date, timezone, savedAt) {
   const time = savedAt ? { status: 'specified', value: savedAt } : parseTrainingSavedTime(description);
   if (time.status === 'invalid') throw Object.assign(new Error('La hora indicada no es válida.'), { status: 400 });
   if (time.status === 'ambiguous') throw Object.assign(new Error('Aclara si la hora fue a. m. o p. m., o usa formato de 24 horas.'), { status: 400 });
@@ -22,9 +22,8 @@ function requestedTrainingTime(description, date, timezone, savedAt, window) {
   if (time.status === 'none' && !date) return null;
   const now = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
   const [hour, minute] = (time.status === 'none' ? `${now.hour}:${now.minute}` : time.value).split(':').map(Number);
-  const nutritionDate = date || new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
-  const targetDate = window && hour * 60 + minute < window.startHour * 60 + window.startMinute ? nextDate(nutritionDate) : nutritionDate;
-  const createdAt = localDateTimeToUtc(targetDate, hour, minute, timezone);
+  const calendarDate = date || new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  const createdAt = localDateTimeToUtc(calendarDate, hour, minute, timezone);
   if (!createdAt) throw Object.assign(new Error('La hora no existe en la fecha seleccionada por el cambio de horario.'), { status: 400 });
   return createdAt;
 }
@@ -196,16 +195,15 @@ async function saveTrainingEntry({ response, data, userId, dbQuery, textSql, jso
   if (nutritionDate !== null && (typeof nutritionDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(nutritionDate)
     || Number.isNaN(new Date(`${nutritionDate}T00:00:00Z`).getTime())
     || new Date(`${nutritionDate}T00:00:00Z`).toISOString().slice(0, 10) !== nutritionDate)) {
-    json(response, 400, { error: 'La fecha nutricional no es válida.' }); return;
+    json(response, 400, { error: 'La fecha calendario no es válida.' }); return;
   }
   let entry;
   try { entry = validateTrainingEntry(data); }
   catch (error) { json(response, error.status || 400, { error: error.message }); return; }
   let createdAt;
   try {
-    const window = await readNutritionWindow(userId, dbQuery, timezone);
-    const selectedDate = nutritionDate ? nutritionDateForSelection(nutritionDate, window) : null;
-    createdAt = requestedTrainingTime(entry.description, selectedDate, window.timezone, entry.savedAt, window);
+    const calendarTimezone = await readCalendarTimezone(userId, dbQuery, timezone);
+    createdAt = requestedTrainingTime(entry.description, nutritionDate, calendarTimezone, entry.savedAt);
   }
   catch (error) { json(response, error.status || 400, { error: error.message }); return; }
   const traceId = randomUUID();
@@ -252,8 +250,8 @@ async function readTrainingEntries({ userId, dbQuery, date, timezone }) {
     let end;
     try {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) throw new Error();
-      const window = await readNutritionWindow(id, dbQuery, timezone);
-      ({ start, end } = nutritionWindowRange(nutritionDateForSelection(date, window), window));
+      const calendarTimezone = await readCalendarTimezone(id, dbQuery, timezone);
+      ({ start, end } = calendarDayRange(date, calendarTimezone));
     } catch { throw Object.assign(new Error('La fecha o zona horaria no es válida.'), { status: 400 }); }
     dateFilter = ` AND creado_en>='${start}' AND creado_en<'${end}'`;
   }

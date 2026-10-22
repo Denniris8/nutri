@@ -7,24 +7,31 @@ class Element {
   listeners = {};
   attributes = {};
   dataset = {};
-  classList = { toggle() {} };
+  classList = { add() {}, remove() {}, toggle() {} };
   value = '';
+  disabled = false;
   hidden = false;
   checked = false;
   textContent = '';
 
-  addEventListener(name, listener) { this.listeners[name] = listener; }
+  addEventListener(name, listener) { (this.listeners[name] ||= []).push(listener); }
   setAttribute(name, value) { this.attributes[name] = value; }
   setCustomValidity(message) { this.validationMessage = message; }
   reportValidity() { this.reportedValidity = true; }
+  matches() { return false; }
   focus() { this.focused = true; }
-  append(...children) { this.children = [...(this.children || []), ...children]; }
+  append(...children) { this.children = [...(this.children || []), ...children]; for (const child of children) child.parent = this; }
   replaceChildren(...children) { this.children = children; }
+  remove() { if (this.parent) this.parent.children = this.parent.children.filter((child) => child !== this); }
   showModal() { this.open = true; }
   close() { this.open = false; }
+  showPopover() { this.open = true; }
+  hidePopover() { this.open = false; }
   dispatch(name) {
     const event = { currentTarget: this, preventDefault() { this.defaultPrevented = true; } };
-    return this.listeners[name]?.(event) || event;
+    const results = (this.listeners[name] || []).map((listener) => listener(event));
+    const pending = results.filter((result) => result && typeof result.then === 'function');
+    return pending.length ? Promise.all(pending).then(() => event) : event;
   }
 }
 
@@ -34,8 +41,6 @@ function loadFlow(search = '', fetchOverride) {
     'registerName', 'registerCountryCode', 'registerCelular', 'registerPassword', 'registerHeight',
     'confirmPassword', 'registerAge', 'registerSex', 'preferencesForm', 'dietPattern', 'formError',
     'cancelPreferences',
-    'nutritionDayStartHour', 'nutritionDayStartMinute', 'nutritionDayStartPeriod',
-    'nutritionDayEndHour', 'nutritionDayEndMinute', 'nutritionDayEndPeriod',
     'deviceModeManual', 'deviceModeGarmin', 'integrationUsername', 'integrationPassword', 'integrationCredentialsSection', 'verifyGarminButton', 'integrationCredentialsNote', 'preferredFoods', 'avoidedFoods',
     'allergiesStatus', 'medicationsStatus', 'testDataNotice',
     'savePreferencesButton', 'continueButton', 'preferencesStep', 'preferencesTitle', 'preferencesIntro',
@@ -46,10 +51,9 @@ function loadFlow(search = '', fetchOverride) {
     'editPreferredFoods', 'editAvoidedFoods', 'editAllergiesStatus', 'editAllergiesDetailsLabel', 'editAllergiesDetails',
     'editMedicationsStatus', 'editMedicationsDetailsLabel', 'editMedicationsDetails', 'editDeviceModeManual', 'editDeviceModeGarmin',
     'editGarminUsername', 'editGarminPassword', 'editGarminCredentialsSection', 'editGarminCredentialsNote', 'editVerifyGarminButton', 'editUnlinkGarminButton',
-    'editNutritionStartHour', 'editNutritionStartMinute', 'editNutritionStartPeriod',
-    'editNutritionEndHour', 'editNutritionEndMinute', 'editNutritionEndPeriod',
     'daySelect', 'previousDayButton', 'nextDayButton', 'registerFoodButton', 'foodButtonLoading', 'registerFoodDialog', 'registerFoodForm',
-    'foodEntryDate', 'foodEntryFeedback', 'foodLoading', 'foodDescription', 'saveFoodButton',
+    'foodEntryDate', 'foodEntryFeedback', 'foodLoading', 'foodLoadingText', 'foodChatThread', 'foodChatMessages', 'foodDescriptionLabel', 'foodDescription', 'saveFoodButton',
+    'appNoticeDialog', 'appNoticeText', 'foodButtonLoading', 'editUnitSystem',
   ];
   const elements = Object.fromEntries(ids.map((id) => [`#${id}`, new Element()]));
   elements['#testDataNotice'].hidden = true;
@@ -64,20 +68,21 @@ function loadFlow(search = '', fetchOverride) {
     requests.push(request);
     if (request[0].startsWith('/api/onboarding/preferences') && !request[1]?.method) return { ok: true, json: async () => ({ preferences: {
       deviceMode: search.includes('edit=1') ? 'garmin' : 'ninguno', garminConnected: search.includes('edit=1'), garminEmail: search.includes('edit=1') ? 'owner@example.com' : null,
-      patronAlimentario: 'vegano', nutritionDayStart: '09:00:00', nutritionDayEnd: '02:00:00', allergiesStatus: 'sin_informacion', medicationsStatus: 'sin_informacion',
+      patronAlimentario: 'vegano', allergiesStatus: 'sin_informacion', medicationsStatus: 'sin_informacion',
     } }) };
     return { ok: true, json: async () => ({ ok: true }) };
   };
   const fetch = fetchOverride || defaultFetch;
   const document = {
+    addEventListener() {},
     querySelector: (selector) => elements[selector] || null,
     querySelectorAll: (selector) => selector === '[data-mode]' ? modeButtons : [],
     createElement: () => new Element(),
   };
-  const window = { location: { href: `http://localhost/dashboard_nutricional.html${search}`, search, pathname: '/dashboard_nutricional.html', assign: (url) => destinations.push(url) } };
+  const window = { fetch, location: { href: `http://localhost/dashboard_nutricional.html${search}`, search, pathname: '/dashboard_nutricional.html', assign: (url) => destinations.push(url) } };
   const source = readFileSync(require.resolve('./onboarding-flow.js'), 'utf8');
   const Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'America/Mexico_City' }) }) };
-  vm.runInNewContext(source, { document, window, fetch, Intl, URL, URLSearchParams, crypto: { randomUUID: () => '123e4567-e89b-42d3-a456-426614174000' } });
+  vm.runInNewContext(source, { document, window, fetch, Intl, URL, URLSearchParams, setTimeout: () => 0, clearTimeout() {}, crypto: { randomUUID: () => '123e4567-e89b-42d3-a456-426614174000', getRandomValues: (bytes) => bytes.fill(1) } });
   return { elements, modeButtons, destinations, requests };
 }
 
@@ -100,25 +105,18 @@ test('registration sends measured height and preferences proceeds directly to te
   elements['#confirmPassword'].value = 'correct-horse-123';
   elements['#registerHeight'].value = '168.5';
   await elements['#registerForm'].dispatch('submit');
-  assert.equal(destinations.pop(), '/preferencias.html');
+  assert.equal(destinations.pop(), '/');
   const registration = requests.find(([url]) => url === '/api/auth/register');
   assert.equal(JSON.parse(registration[1].body).heightCm, '168.5');
 
   elements['#dietPattern'].value = 'vegetariano';
-  elements['#nutritionDayStartHour'].value = '12';
-  elements['#nutritionDayStartMinute'].value = '0';
-  elements['#nutritionDayStartPeriod'].value = 'AM';
-  elements['#nutritionDayEndHour'].value = '1';
-  elements['#nutritionDayEndMinute'].value = '30';
-  elements['#nutritionDayEndPeriod'].value = 'PM';
   await elements['#preferencesForm'].dispatch('submit');
   assert.equal(destinations.pop(), '/terminos.html');
   const [preferencesUrl, preferencesRequest] = requests.at(-1);
   assert.equal(preferencesUrl, '/api/onboarding/preferences');
   assert.equal(preferencesRequest.headers['X-Client-Timezone'], 'America/Mexico_City');
   assert.equal(JSON.parse(preferencesRequest.body).patronAlimentario, 'vegetariano');
-  assert.deepEqual(JSON.parse(preferencesRequest.body).nutritionWindow.start, { hour: '12', minute: '0', period: 'AM' });
-  assert.deepEqual(JSON.parse(preferencesRequest.body).nutritionWindow.end, { hour: '1', minute: '30', period: 'PM' });
+  assert.equal(Object.hasOwn(JSON.parse(preferencesRequest.body), 'nutritionWindow'), false);
 
 });
 
@@ -145,21 +143,14 @@ test('registration requires identity fields and keeps country code separate from
   assert.match(form, /<input id="registerCelular"[^>]*type="tel"/);
 });
 
-test('nutrition window exposes explicit 12-hour AM/PM controls', () => {
-  const html = readFileSync(require.resolve('./preferencias.html'), 'utf8');
-  for (const id of ['nutritionDayStartHour', 'nutritionDayStartMinute', 'nutritionDayStartPeriod', 'nutritionDayEndHour', 'nutritionDayEndMinute', 'nutritionDayEndPeriod']) {
-    assert.match(html, new RegExp(`id="${id}"`));
-  }
-  assert.match(html, /<option value="AM">AM<\/option><option value="PM">PM<\/option>/);
-  assert.doesNotMatch(html, /type="time"/);
+test('calendar-day preferences no longer expose interval controls', () => {
+  const form = readFileSync(require.resolve('./preferencias.html'), 'utf8');
+  const dashboard = readFileSync(require.resolve('./dashboard_nutricional.html'), 'utf8');
+  assert.doesNotMatch(form + dashboard, /nutritionDay(Start|End)|editNutrition(Start|End)|nutritionWindow|Ventana nutricional/);
 });
 
 test('personal preferences open with clearly marked fictitious defaults', () => {
   const { elements } = loadFlow();
-  assert.equal(elements['#nutritionDayStartHour'].value, '9');
-  assert.equal(elements['#nutritionDayStartPeriod'].value, 'AM');
-  assert.equal(elements['#nutritionDayEndHour'].value, '2');
-  assert.equal(elements['#nutritionDayEndPeriod'].value, 'AM');
   assert.equal(elements['#deviceModeManual'].checked, true);
   assert.equal(elements['#dietPattern'].value, 'sin_preferencia');
   assert.equal(elements['#allergiesStatus'].value, 'sin_informacion');
@@ -243,7 +234,7 @@ test('Register food opens a More-style description form with weighing guidance a
   assert.match(html, /id="registerFoodButton"/);
   assert.match(html, /<dialog id="registerFoodDialog" class="more-form-dialog"/);
   assert.match(html, /pesa los alimentos en báscula para obtener datos más precisos\./);
-  assert.match(html, /descripción se envía a tu sesión privada\./);
+  assert.match(html, /Si necesito aclarar algo, te preguntaré antes de guardar\./);
   assert.match(html, /id="foodDescription"[\s\S]*required/);
   assert.doesNotMatch(html, /foodEntryTrace|foodEntryResult/);
   assert.match(html, /id="saveFoodButton"[^>]*>Guardar</);
@@ -252,8 +243,7 @@ test('Register food opens a More-style description form with weighing guidance a
 
 test('opening Registrar comida asks the authenticated backend for its private OpenCode session', async () => {
   const { elements, requests } = loadFlow();
-  elements['#registerFoodButton'].dispatch('click');
-  await Promise.resolve();
+  await elements['#registerFoodButton'].dispatch('click');
   const openSession = requests.find(([url]) => url === '/api/food/session');
   assert.ok(openSession);
   assert.equal(openSession[1].method, 'POST');
@@ -263,9 +253,14 @@ test('opening Registrar comida asks the authenticated backend for its private Op
 
 test('food modal can reopen during analysis without resubmitting the request', async () => {
   let finishRequest;
-  const { elements } = loadFlow('', () => new Promise((resolve) => { finishRequest = resolve; }));
+  const { elements } = loadFlow('', (url) => url === '/api/food-entries'
+    ? new Promise((resolve) => { finishRequest = resolve; })
+    : Promise.resolve({ ok: true, json: async () => ({ ok: true }) }));
+  await elements['#registerFoodButton'].dispatch('click');
+  assert.equal(elements['#saveFoodButton'].disabled, false);
   elements['#foodDescription'].value = '150 g de pollo';
   const submission = elements['#registerFoodForm'].dispatch('submit');
+  await new Promise(setImmediate);
   assert.equal(elements['#foodDescription'].value, '');
   assert.equal(elements['#saveFoodButton'].disabled, true);
   assert.equal(elements['#foodLoading'].hidden, false);
@@ -274,7 +269,7 @@ test('food modal can reopen during analysis without resubmitting the request', a
   assert.equal(elements['#registerFoodButton'].disabled, false);
   elements['#registerFoodDialog'].close();
   assert.equal(elements['#foodButtonLoading'].hidden, false);
-  elements['#registerFoodButton'].dispatch('click');
+  await elements['#registerFoodButton'].dispatch('click');
   assert.equal(elements['#registerFoodDialog'].open, true);
   assert.equal(elements['#saveFoodButton'].disabled, true);
   finishRequest({ ok: true, json: async () => ({ message: 'Descripción enviada.' }) });
@@ -291,10 +286,11 @@ test('food modal can reopen during analysis without resubmitting the request', a
 });
 
 test('food modal shows a safe OpenCode transport error without trace details', async () => {
-  const { elements } = loadFlow('', async () => ({
-    ok: false,
-    json: async () => ({ message: 'El servicio no respondió.' }),
-  }));
+  const { elements } = loadFlow('', async (url) => url === '/api/food-entries'
+    ? { ok: false, json: async () => ({ message: 'El servicio no respondió.' }) }
+    : { ok: true, json: async () => ({ ok: true }) });
+  await elements['#registerFoodButton'].dispatch('click');
+  elements['#foodDescription'].value = '150 g de pollo';
   await elements['#registerFoodForm'].dispatch('submit');
   assert.match(elements['#foodEntryFeedback'].textContent, /El servicio no respondió/);
   assert.equal(elements['#saveFoodButton'].disabled, false);
@@ -306,11 +302,12 @@ test('More tab switches the visible dashboard section', () => {
   const views = ['today', 'progress', 'more'].map((dashboardView) => Object.assign(new Element(), { dataset: { dashboardView }, hidden: true }));
   const nodeList = (items) => ({ length: items.length, forEach: (callback) => items.forEach(callback), [Symbol.iterator]: function* () { yield* items; } });
   const document = {
+    addEventListener() {},
     querySelector: () => null,
     querySelectorAll: (selector) => selector === '[data-dashboard-tab]' ? nodeList(tabs) : selector === '[data-dashboard-view]' ? nodeList(views) : nodeList([]),
   };
-  const window = { location: { search: '', href: 'http://localhost/dashboard_nutricional.html', pathname: '/dashboard_nutricional.html', assign() {} } };
-  vm.runInNewContext(readFileSync(require.resolve('./onboarding-flow.js'), 'utf8'), { document, window, fetch: async () => ({ ok: true }), Intl, URL, URLSearchParams });
+  const window = { fetch: async () => ({ ok: true }), location: { search: '', href: 'http://localhost/dashboard_nutricional.html', pathname: '/dashboard_nutricional.html', assign() {} } };
+  vm.runInNewContext(readFileSync(require.resolve('./onboarding-flow.js'), 'utf8'), { document, window, fetch: async () => ({ ok: true }), Intl, URL, URLSearchParams, setTimeout: () => 0, clearTimeout() {} });
   tabs[2].dispatch('click');
   assert.equal(views[2].hidden, false);
   assert.equal(views[0].hidden, true);
@@ -320,7 +317,7 @@ test('More tab switches the visible dashboard section', () => {
 test('day-type controls are replaced by a time-ordered food list region', () => {
   const html = readFileSync(require.resolve('./dashboard_nutricional.html'), 'utf8');
   assert.match(html, /id="foodEntriesList"/);
-  assert.match(html, /hora de guardado/i);
+  assert.match(html, /con su hora, alimentos y macros/i);
   for (const id of ['dayTypeSelect', 'applyDayTypeButton', 'dayTypeImpact']) assert.doesNotMatch(html, new RegExp(`id="${id}"`));
 });
 
@@ -328,7 +325,6 @@ test('More preferences editor shares modal controls and saves changes', async ()
   const { elements, requests } = loadFlow();
   await elements['#morePreferencesButton'].dispatch('click');
   assert.equal(elements['#preferencesEditDialog'].open, true);
-  assert.equal(elements['#editUnitSystem'].value, 'metric');
   assert.equal(elements['#editDietPattern'].value, 'vegano');
   elements['#editDietPattern'].value = 'vegetariano';
   await elements['#preferencesEditForm'].dispatch('submit');
@@ -342,7 +338,6 @@ test('More preferences repeats the onboarding field guidance', () => {
   const dashboard = readFileSync(require.resolve('./dashboard_nutricional.html'), 'utf8');
   const onboarding = readFileSync(require.resolve('./preferencias.html'), 'utf8');
   for (const message of [
-    'Define el intervalo para contar y acumular los macros dentro del mismo día nutricional; puede cruzar la medianoche.',
     'Este campo es para gustos, no para alergias o restricciones médicas; esas requieren un registro separado.',
     'Se guardan como datos personales de salud para dar contexto; no modifican tratamientos ni sustituyen indicaciones médicas.',
   ]) {

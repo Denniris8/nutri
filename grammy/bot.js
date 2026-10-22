@@ -16,15 +16,11 @@
 import { Bot, InlineKeyboard } from 'grammy';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
+import { isAllowedChat, parseAllowedChatIds } from './access-control.js';
 
 // ------------------------------ Configuracion -------------------------------
 const BOT_TOKEN = (process.env.BOT_TOKEN || '').trim();
-const ALLOWED_CHAT_IDS = new Set((process.env.ALLOWED_CHAT_IDS || '')
-  .split(',')
-  .map((v) => v.trim())
-  .filter((v) => /^-?\d+$/.test(v))
-  .map(Number)
-  .filter(Number.isSafeInteger));
+const ALLOWED_CHAT_IDS = parseAllowedChatIds(process.env.ALLOWED_CHAT_IDS);
 
 const SERVICE_FILE = process.env.OPENCODE_SERVICE_FILE || '/opencode-state/service.json';
 const PROJECT_DIR = process.env.OPENCODE_PROJECT_DIR || '/home/pcp/Desktop/app';
@@ -152,7 +148,7 @@ function state(chatId) {
 const bot = new Bot(BOT_TOKEN);
 
 bot.use(async (ctx, next) => {
-    if (ctx.chat && ALLOWED_CHAT_IDS.has(ctx.chat.id)) {
+    if (isAllowedChat(ctx.chat?.id, ALLOWED_CHAT_IDS)) {
     return next();
   }
   console.warn(`[grammy] Chat no autorizado ignorado: ${ctx.chat?.id}`);

@@ -3,16 +3,15 @@ const { mkdtemp, rm } = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { decryptGarminCredentials } = require('./integration-credentials.js');
-const { nutritionDateForSelection, nutritionWindowRange, readNutritionWindow } = require('./nutrition-window.js');
+const { calendarDayRange, readCalendarTimezone } = require('./calendar-day.js');
 const { localCalendarDate, saveDailySteps } = require('./training-entries.js');
 
 async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, secret }) {
   const row = await dbQuery(`SELECT p.modo_dispositivo,HEX(c.ciphertext),HEX(c.nonce),HEX(c.auth_tag),c.key_version FROM preferencias_usuario p JOIN credenciales_integracion_usuario c ON c.usuario_id=p.usuario_id AND c.proveedor='garmin' WHERE p.usuario_id=${userId} LIMIT 1;`);
   const [deviceMode, ciphertext, nonce, authTag, keyVersion] = row.split('\t');
   if (deviceMode !== 'garmin' || keyVersion !== '1') throw Object.assign(new Error('La cuenta Garmin no está vinculada.'), { status: 409 });
-  const window = await readNutritionWindow(userId, dbQuery, timezone);
-  const nutritionDate = nutritionDateForSelection(date, window);
-  const range = nutritionWindowRange(nutritionDate, window);
+  const calendarTimezone = await readCalendarTimezone(userId, dbQuery, timezone);
+  const range = calendarDayRange(date, calendarTimezone);
 
   let credentials;
   try { credentials = decryptGarminCredentials({ ciphertext, nonce, authTag }, secret); }
@@ -37,11 +36,10 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
     return await Promise.race([
       (async () => {
         await client.connect(transport);
-        const localDate = localCalendarDate(timezone);
-        const stepDates = [...new Set(window.endHour === 0 && window.endMinute === 0
-          ? [nutritionDate] : [nutritionDate, range.endDate])].filter((stepDate) => stepDate <= localDate);
+        const localDate = localCalendarDate(calendarTimezone);
+        const stepDates = [date].filter((stepDate) => stepDate <= localDate);
         const [result, stepResults] = await Promise.all([
-          client.callTool({ name: 'get_activities_by_date', arguments: { startDate: nutritionDate, endDate: range.endDate } }, undefined, { timeout: 40000 }),
+          client.callTool({ name: 'get_activities_by_date', arguments: { startDate: date, endDate: date } }, undefined, { timeout: 40000 }),
           Promise.all(stepDates.map(async (stepDate) => {
             try {
               const response = await client.callTool({ name: 'get_steps', arguments: { date: stepDate } }, undefined, { timeout: 40000 });

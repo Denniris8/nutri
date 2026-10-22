@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <meta name="theme-color" content="#101411">
   <title>Dashboard Nutricional</title>
-  <link rel="stylesheet" href="/dashboard_nutricional.css?v=46">
+  <link rel="stylesheet" href="/dashboard_nutricional.css?v=48">
   <link rel="stylesheet" href="/notifications.css">
 </head>
 <body>
@@ -28,12 +28,12 @@
         <div class="day-context-heading">
           <div>
             <label for="daySelect">Día nutricional</label>
-            <small class="hint">Sigue el horario configurado en Preferencias.</small>
+            <small class="hint">Los registros se agrupan por fecha calendario local.</small>
           </div>
         </div>
         <div class="day-navigation">
           <button id="previousDayButton" class="button-muted day-nav-button" type="button" aria-label="Día anterior" title="Día anterior">‹</button>
-          <input id="daySelect" type="date" aria-label="Seleccionar día nutricional">
+          <input id="daySelect" type="date" aria-label="Seleccionar fecha calendario">
           <button id="nextDayButton" class="button-muted day-nav-button" type="button" aria-label="Día siguiente" title="Día siguiente">›</button>
         </div>
         <div class="day-context-meta">
@@ -55,7 +55,7 @@
       <div class="macro-section-heading">
         <h2>Objetivos y consumo de hoy</h2>
       </div>
-      <section class="cards" id="macroCards" aria-label="Macros consumidos en el día nutricional seleccionado" aria-live="polite"></section>
+      <section class="cards" id="macroCards" aria-label="Macros consumidos en la fecha seleccionada" aria-live="polite"></section>
       <section class="panel panel-pad training-energy-summary" aria-labelledby="trainingEnergySummaryTitle">
         <div class="section-head"><div><h2 id="trainingEnergySummaryTitle">Gasto y balance parcial</h2><p>El balance usa el metabolismo basal y el ejercicio registrado; no equivale al gasto total diario.</p></div></div>
         <p class="training-energy-method">Las sesiones manuales se estiman como gasto neto. Garmin se muestra con las kcal reportadas por el dispositivo; la fuente no especifica aquí si son netas o brutas, por lo que ambas cifras se suman sin normalización.</p>
@@ -71,7 +71,7 @@
         <div id="foodEntriesList" class="meals" aria-live="polite" aria-busy="true"><div class="empty">Cargando alimentos guardados…</div></div>
       </details>
       <details class="panel panel-pad food-day-list" aria-labelledby="trainingEntriesTitle">
-        <summary class="collapsible-summary section-head"><div><h2 id="trainingEntriesTitle">Entrenamientos guardados</h2><p>Sesiones registradas del día nutricional seleccionado.</p></div></summary>
+        <summary class="collapsible-summary section-head"><div><h2 id="trainingEntriesTitle">Entrenamientos guardados</h2><p>Sesiones registradas en la fecha seleccionada.</p></div></summary>
         <div id="trainingEntriesList" class="meals" aria-live="polite" aria-busy="true"><div class="empty">Cargando entrenamientos guardados…</div></div>
       </details>
     </section>
@@ -144,7 +144,7 @@
         <button id="moreBiometricsButton" class="panel more-action" type="button"><strong>Registros biométricos</strong><span>Peso y composición corporal</span></button>
         <button id="morePlicometroButton" class="panel more-action" type="button"><strong>Registros de plicómetro</strong><span>Mediciones de pliegues</span></button>
         <button id="moreOptionsButton" class="panel more-action" type="button"><strong>Opciones</strong><span>Tema y preferencias de vista</span></button>
-        <button id="morePreferencesButton" class="panel more-action" type="button"><strong>Preferencias personales</strong><span>Alimentación, ventana nutricional y Garmin Connect</span></button>
+        <button id="morePreferencesButton" class="panel more-action" type="button"><strong>Preferencias personales</strong><span>Alimentación, fechas y Garmin Connect</span></button>
         <button id="logoutButton" class="panel more-action menu-logout-card" type="button"><strong>Cerrar sesión</strong><span>Salir de tu cuenta</span></button>
         <button id="deleteAccountButton" class="panel more-action menu-delete-card" type="button"><strong>Eliminar usuario</strong><span>Eliminar permanentemente tu cuenta y sus datos asociados</span></button>
       </section>
@@ -495,27 +495,6 @@
       </div>
     </div>
   </dialog>
-  <div class="modal" id="nutritionWindowModal" aria-hidden="true">
-    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="nutritionWindowModalTitle">
-      <div class="modal-head">
-        <div>
-          <h3 class="modal-title" id="nutritionWindowModalTitle">Ventana nutricional</h3>
-          <div class="modal-meta">Define cuándo empieza y termina tu día nutricional. Es la única fuente para agrupar tus comidas; el fin puede ser del día calendario siguiente.</div>
-        </div>
-        <button type="button" class="icon-close" id="closeNutritionWindowModal" aria-label="Cerrar">×</button>
-      </div>
-      <div class="modal-body">
-        <form id="nutritionWindowForm">
-          <label for="nutritionWindowStart">Inicio del día *</label>
-          <input id="nutritionWindowStart" type="time" required>
-          <label for="nutritionWindowEnd">Fin del día *</label>
-          <input id="nutritionWindowEnd" type="time" required>
-          <p id="nutritionWindowStatus" class="hint" role="status" aria-live="polite">Cargando tu ventana actual…</p>
-          <button type="submit">Guardar ventana</button>
-        </form>
-      </div>
-    </div>
-  </div>
   <dialog id="deleteAccountDialog" class="more-form-dialog" aria-labelledby="deleteAccountTitle">
     <header class="more-form-header"><div><h2 id="deleteAccountTitle">Eliminar usuario</h2><p>Se eliminarán tu cuenta y todos sus registros relacionados. Esta acción no se puede deshacer.</p></div><button id="closeDeleteAccount" class="icon-close" type="button" aria-label="Cerrar">×</button></header>
     <form id="deleteAccountForm" class="more-form-body">
@@ -547,15 +526,6 @@
           <button id="editUnlinkGarminButton" class="button-muted" type="button" hidden>Desvincular cuenta</button>
         </div>
       </fieldset>
-      <div class="form-grid-2">
-        <div><label for="editNutritionStartHour">Inicio · Hora (1–12)</label><input id="editNutritionStartHour" type="number" min="1" max="12" step="1" required></div>
-        <div><label for="editNutritionStartMinute">Inicio · Minutos</label><input id="editNutritionStartMinute" type="number" min="0" max="59" step="1" required></div>
-        <div><label for="editNutritionStartPeriod">Inicio · AM/PM</label><select id="editNutritionStartPeriod" required><option value="">Selecciona…</option><option value="AM">AM</option><option value="PM">PM</option></select></div>
-        <div><label for="editNutritionEndHour">Fin · Hora (1–12)</label><input id="editNutritionEndHour" type="number" min="1" max="12" step="1" required></div>
-        <div><label for="editNutritionEndMinute">Fin · Minutos</label><input id="editNutritionEndMinute" type="number" min="0" max="59" step="1" required></div>
-        <div><label for="editNutritionEndPeriod">Fin · AM/PM</label><select id="editNutritionEndPeriod" required><option value="">Selecciona…</option><option value="AM">AM</option><option value="PM">PM</option></select></div>
-      </div>
-      <p class="hint">Define el intervalo para contar y acumular los macros dentro del mismo día nutricional; puede cruzar la medianoche. Por ejemplo, de 9:00 AM a 2:00 AM del día siguiente.</p>
       <label for="editPreferredFoods">Alimentos o tipos de comida que prefieres (opcional)<textarea id="editPreferredFoods" maxlength="800" placeholder="Ej.: pescado, comidas sencillas"></textarea></label>
       <label for="editAvoidedFoods">Alimentos que prefieres evitar (opcional)<textarea id="editAvoidedFoods" maxlength="800" placeholder="Ej.: alimentos muy picantes"></textarea></label>
       <p class="hint">Este campo es para gustos, no para alergias o restricciones médicas; esas requieren un registro separado.</p>
@@ -584,6 +554,6 @@
     </div>
   </dialog>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
-  <script src="/onboarding-flow.js?v=progress-nutrition-2" defer></script>
+  <script src="/onboarding-flow.js?v=calendar-day-3" defer></script>
 </body>
 </html>

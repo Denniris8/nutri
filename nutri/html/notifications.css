@@ -1,4 +1,4 @@
-.app-notice { position: fixed; inset: 14px 12px auto; box-sizing: border-box; width: min(520px, calc(100vw - 24px)); max-width: none; margin: 0 auto; padding: 0; border: 1px solid var(--line, #64746a); border-radius: 14px; background: var(--panel, #17211b); color: var(--text, #edf2ee); box-shadow: 0 12px 36px #0005; }
+.app-notice { position: fixed; inset: 14px 12px auto; box-sizing: border-box; width: fit-content; max-width: calc(100vw - 24px); margin: 0 auto; padding: 0; border: 1px solid var(--line, #64746a); border-radius: 14px; background: var(--panel, #17211b); color: var(--text, #edf2ee); box-shadow: 0 12px 36px #0005; }
 .app-notice-row { display: flex; min-width: 0; align-items: center; gap: 16px; padding: 14px 16px; border-left: 4px solid #8bb5ff; }
 .app-notice[data-kind="success"] .app-notice-row { border-color: #64bd83; }
 .app-notice[data-kind="error"] .app-notice-row { border-color: #e77d74; }
