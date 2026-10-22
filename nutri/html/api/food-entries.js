@@ -294,6 +294,9 @@ async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, r
   const trace = { id: randomUUID(), events: [] };
   traceFoodSession(trace, 'save_received');
   let entryId;
+  let committed = false;
+  let committedEntryId;
+  let committedConfirmation;
   let stage = 'draft';
   try {
     const preferenceWindow = await dbQuery(`SELECT TIME_FORMAT(nutrition_day_start,'%H:%i'),zona_horaria FROM preferencias_usuario WHERE usuario_id=${userId} LIMIT 1;`);
@@ -572,10 +575,12 @@ SELECT LAST_INSERT_ID();`);
     const updating = updateTargetId != null;
     const destinationId = updating ? updateTargetId : append ? appendTargetId : entryId;
     const targetMeal = destinationId === entryId ? null : dayMeals.find((meal) => String(meal.id) === String(destinationId));
-    const confirmation = updating
+    const estimatedItems = items.filter((item) => item.macroStatus === 'estimado').length;
+    const confirmation = (updating
       ? `Se corrigieron alimentos de la comida de las ${targetMeal?.hora || 'la hora seleccionada'}.`
       : append ? `Alimentos añadidos a la comida de las ${targetMeal?.hora || 'la hora seleccionada'}.`
-      : `Registro completado: ${items.length} alimento${items.length === 1 ? '' : 's'} guardado${items.length === 1 ? '' : 's'}${createdAt && effectiveTime ? ` a las ${formatFoodTime(effectiveTime.hours[0], effectiveTime.minute)}` : ''}.`;
+      : `Registro completado: ${items.length} alimento${items.length === 1 ? '' : 's'} guardado${items.length === 1 ? '' : 's'}${createdAt && effectiveTime ? ` a las ${formatFoodTime(effectiveTime.hours[0], effectiveTime.minute)}` : ''}.`)
+      + (estimatedItems ? ` Incluye ${estimatedItems} alimento${estimatedItems === 1 ? '' : 's'} con macros estimados.` : '');
     let draftMessages = [];
     if (append || updating) {
       const messages = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`);
@@ -611,11 +616,24 @@ SELECT LAST_INSERT_ID();`);
     statements.push(`DELETE old FROM registros_comida_interacciones old JOIN (SELECT registro_comida_id,MIN(CASE WHEN role='user' THEN id END) first_user_id,MAX(CASE WHEN role='user' THEN id END) last_user_id,MAX(CASE WHEN role='assistant' THEN id END) last_assistant_id FROM registros_comida_interacciones WHERE registro_comida_id=${destinationId} GROUP BY registro_comida_id) retained ON retained.registro_comida_id=old.registro_comida_id WHERE old.id NOT IN (retained.first_user_id,retained.last_user_id,retained.last_assistant_id)`);
     statements.push('COMMIT');
     await dbQuery(`${statements.join(';')};`);
+    committed = true;
+    committedEntryId = destinationId;
+    committedConfirmation = confirmation;
     traceFoodSession(trace, 'items_saved', { itemCount: items.length, appended: append });
     const messages = append || updating
       ? await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${destinationId} ORDER BY id;`).then((rows) => rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [])
       : await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`).then((rows) => rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : []);
+    stage = 'verification';
     const records = await readFoodEntries({ userId, fecha: savedDate, dbQuery, textSql });
+    const persisted = records.find((record) => String(record.id) === String(destinationId) && record.state === 'completado');
+    const expectedItemCount = append ? (target?.items.length || 0) + items.length
+      : updating ? (target?.items.length || 0) + items.filter((item) => item.targetItemId == null).length : items.length;
+    const missingUpdatedItems = items.filter((item) => item.targetItemId != null)
+      .some((item) => !persisted?.items.some((savedItem) => String(savedItem.itemId) === String(item.targetItemId)));
+    if (!persisted || persisted.items.length !== expectedItemCount || missingUpdatedItems) {
+      throw Object.assign(new Error('food_entry_readback_mismatch'), { code: 'FOOD_PERSISTENCE_VERIFY_FAILED' });
+    }
+    traceFoodSession(trace, 'persistence_verified', { entryId: destinationId, itemCount: persisted.items.length });
     try {
       await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode, forgetOnError: true });
     }
@@ -633,6 +651,10 @@ SELECT LAST_INSERT_ID();`);
     traceFoodSession(trace, 'save_failed', { entryId: entryId || null, stage, errorCode: safeOpenCodeErrorCode(error) });
     try { await recordFoodError({ dbQuery, textSql, userId, trace, stage, error, httpStatus: entryId ? 502 : 503 }); }
     catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed' })); }
+    if (committed) {
+      json(response, 503, { state: 'completado', entryId: committedEntryId, requestId: entry.requestId, message: `${committedConfirmation} No pude verificar la lectura actualizada. Actualiza el día antes de volver a enviar la solicitud.` });
+      return;
+    }
     if (entryId && /^\d+$/.test(entryId)) {
       const message = error.code === 'FOOD_IDENTITY_REFUSAL' ? 'Se renovó la sesión para continuar el análisis sin pedir tu identidad; vuelve a enviar el alimento.'
         : stage === 'persistence' ? 'El análisis terminó, pero no se pudieron guardar sus alimentos y macros.'
