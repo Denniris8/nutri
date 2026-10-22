@@ -138,11 +138,11 @@ async function ensureSession(chatId, label) {
 }
 
 // ------------------------------ Estado por chat ------------------------------
-// busy / queue / stop / pendingForm / pendingPermission (resolvers de espera)
+// Estado transitorio de turnos y mensajes en cola por chat.
 const chats = new Map();
 function state(chatId) {
   if (!chats.has(chatId)) {
-    chats.set(chatId, { busy: false, currentMessage: '', lastMessage: '', queue: [], stop: false, pendingAsk: null });
+    chats.set(chatId, { busy: false, queue: [] });
   }
   return chats.get(chatId);
 }
@@ -236,7 +236,7 @@ function describePermission(req) {
   return lines.join('\n');
 }
 
-async function askPermission(chatId, sessionID, req, stopSignal) {
+async function askPermission(chatId, sessionID, req) {
   if (PERMISSION_MODE !== 'ask') {
     await api('POST', `/api/session/${sessionID}/permission/${req.id}/reply`, { decision: PERMISSION_MODE });
     console.log(`[grammy] Permiso ${req.id} auto-respondido: ${PERMISSION_MODE}`);
@@ -254,7 +254,6 @@ async function askPermission(chatId, sessionID, req, stopSignal) {
     const finish = () => { clearTimeout(timer); resolve(); };
     const waiter = { resolve: finish, chatId };
     permissionWaiters.set(req.id, waiter);
-    if (stopSignal) stopSignal.resolve = finish;
     timer = setTimeout(async () => {
       if (permissionWaiters.get(req.id) !== waiter) return;
       permissionWaiters.delete(req.id);
@@ -314,14 +313,13 @@ function parseFormAnswer(form, text) {
   return answer;
 }
 
-async function askForm(chatId, sessionID, form, stopSignal) {
+async function askForm(chatId, sessionID, form) {
   await sendMd(chatId, describeForm(form));
   await new Promise((resolve) => {
     let timer;
     const finish = () => { clearTimeout(timer); resolve(); };
     const waiter = { form, sessionID, resolve: finish };
     formWaiters.set(chatId, waiter);
-    if (stopSignal) stopSignal.resolve = finish;
     timer = setTimeout(async () => {
       if (formWaiters.get(chatId) !== waiter) return;
       formWaiters.delete(chatId);
@@ -334,7 +332,7 @@ async function askForm(chatId, sessionID, form, stopSignal) {
 }
 
 // Resolver permisos y formularios pendientes; devuelve true si habia algo.
-async function resolvePending(chatId, sessionID, stopSignal) {
+async function resolvePending(chatId, sessionID) {
   let handled = false;
   const [perms, forms] = await Promise.all([
     api('GET', `/api/session/${sessionID}/permission`),
@@ -342,7 +340,7 @@ async function resolvePending(chatId, sessionID, stopSignal) {
   ]);
   for (const req of perms.json?.data ?? []) {
     handled = true;
-    await askPermission(chatId, sessionID, req, stopSignal);
+    await askPermission(chatId, sessionID, req);
   }
   const formDetails = await Promise.all((forms.json?.data ?? []).map(async (form) => ({
     form, detail: await api('GET', `/api/session/${sessionID}/form/${form.id}`),
@@ -350,7 +348,7 @@ async function resolvePending(chatId, sessionID, stopSignal) {
   for (const { form, detail } of formDetails) {
     if (detail.json?.data?.state?.status !== 'pending') continue;
     handled = true;
-    await askForm(chatId, sessionID, form, stopSignal);
+    await askForm(chatId, sessionID, form);
   }
   return handled;
 }
@@ -359,10 +357,6 @@ async function resolvePending(chatId, sessionID, stopSignal) {
 async function runTurn(chatId, text) {
   const st = state(chatId);
   st.busy = true;
-  st.currentMessage = text;
-  st.stop = false;
-  const stopSignal = { resolve: null };
-  st.pendingAsk = stopSignal;
   const typing = setInterval(() => bot.api.sendChatAction(chatId, 'typing').catch(() => {}), 4500);
   const progress = await bot.api.sendMessage(chatId, '⏳ Conectando con OpenCode…').catch(() => null);
   const updateProgress = async (message) => {
@@ -392,53 +386,27 @@ async function runTurn(chatId, text) {
     // 2) Esperar a que el modelo termine, resolviendo permisos/preguntas en el camino
     const deadline = Date.now() + TURN_TIMEOUT_MS;
     await updateProgress('⏳ Esperando la respuesta de OpenCode…');
-    while (Date.now() < deadline && !st.stop) {
+    while (Date.now() < deadline) {
       await waitForIdle(sessionID, deadline - Date.now());
-      const hadPending = await resolvePending(chatId, sessionID, stopSignal);
+      const hadPending = await resolvePending(chatId, sessionID);
       if (!hadPending) break;
       await updateProgress('🔄 Continuando después de tu respuesta…');
     }
 
     // 3) Respuesta
-    if (st.stop) {
-      if (!await updateProgress('⛔ Turno detenido.')) await bot.api.sendMessage(chatId, '⛔ Detenido.').catch(() => {});
-      st.stop = false;
-    } else {
-      const answer = await extractAnswer(sessionID, userMsgId, sentAtMs);
-      await sendLong(chatId, answer || '✅ Listo (el modelo no devolvió texto).', progress?.message_id);
-    }
+    const answer = await extractAnswer(sessionID, userMsgId, sentAtMs);
+    await sendLong(chatId, answer || '✅ Listo (el modelo no devolvió texto).', progress?.message_id);
   } catch (error) {
     console.error('[grammy] Error en el turno:', error.message);
     if (!await updateProgress(`❌ ${error.message}`)) await bot.api.sendMessage(chatId, `❌ ${error.message}`).catch(() => {});
   } finally {
     clearInterval(typing);
     st.busy = false;
-    st.currentMessage = '';
-    st.pendingAsk = null;
-    if (st.queue.length > 0 && !st.stop) {
+    if (st.queue.length > 0) {
       const next = st.queue.shift();
       runTurn(chatId, next); // siguiente mensaje encolado
     }
   }
-}
-
-function queueOrRun(chatId, text, remember = true) {
-  const st = state(chatId);
-  if (st.busy) {
-    if (st.queue.length >= 10) return -1;
-    st.queue.push(text);
-    if (remember) st.lastMessage = text;
-    return st.queue.length;
-  }
-  if (remember) st.lastMessage = text;
-  runTurn(chatId, text).catch((error) => console.error('[grammy] runTurn:', error));
-  return 0;
-}
-
-async function submitTurn(ctx, text, remember = true) {
-  const position = queueOrRun(ctx.chat.id, text, remember);
-  if (position < 0) return ctx.reply('⚠️ Demasiados mensajes en espera; espera a que termine el actual.');
-  if (position > 0) return ctx.reply(`📥 En cola (posición ${position}). Responderé en orden.`);
 }
 
 // ------------------------------- Handlers Telegram ---------------------------
@@ -446,27 +414,13 @@ bot.command('start', (ctx) =>
   ctx.reply(
     '¡Hola! Soy el puente directo con OpenCode 🧠.\n\n' +
       'Escríbeme cualquier mensaje y llegará al modelo en tiempo real ' +
-      `(proyecto: ${PROJECT_DIR}). Puede consultar tu BD de nutrición, Garmin, archivos y más.\n\n` +
-      'Comandos:\n' +
-      '/nueva — sesión nueva desde cero\n' +
-      '/stop — interrumpe lo que estoy haciendo\n' +
-      '/sesion — info de la sesión actual\n' +
-      '/hoy — resumen nutricional de hoy\n' +
-      '/objetivos — recalcular objetivos\n' +
-      '/comida — registrar comida\n' +
-      '/dashboard — rutas de la API Nutri\n' +
-      '/help — esta ayuda',
-    {
-      reply_markup: new InlineKeyboard()
-        .text('📊 Hoy', 'cmd:hoy')
-        .text('🎯 Objetivos', 'cmd:objetivos'),
-    }
+      `(proyecto: ${PROJECT_DIR}).\n\n` +
+      'Comandos disponibles: /ssh, /dashboard y /api.'
   )
 );
 bot.command('help', (ctx) => ctx.reply(
-  'Comandos: /start, /nueva, /stop, /sesion, /ping, /hoy, /objetivos, /comida, /dashboard o /api (API Nutri), /ssh [on|off].'
+  'Comandos: /start, /help, /dashboard, /api y /ssh [on|off].'
 ));
-bot.command('ping', (ctx) => ctx.reply('pong'));
 
 const pendingApiActions = new Map();
 async function openApiDashboard(ctx) {
@@ -554,106 +508,6 @@ bot.callbackQuery(/^ssh:(off|cancel)$/, async (ctx) => {
   }
 });
 
-// Limpia esperas activas de un chat (permisos y formularios pendientes)
-async function clearWaiters(chatId) {
-  for (const [requestID, waiter] of permissionWaiters.entries()) {
-    if (waiter.chatId !== chatId) continue;
-    permissionWaiters.delete(requestID);
-    const sessionID = chatSessions[chatId];
-    if (sessionID) {
-      await api('POST', `/api/session/${sessionID}/permission/${requestID}/reply`, { decision: 'reject' }).catch(() => {});
-    }
-    waiter.resolve();
-  }
-  const fw = formWaiters.get(chatId);
-  if (fw) {
-    formWaiters.delete(chatId);
-    await api('DELETE', `/api/session/${fw.sessionID}/form/${fw.form.id}`).catch(() => {});
-    fw.resolve();
-  }
-}
-
-bot.command('stop', async (ctx) => {
-  const st = state(ctx.chat.id);
-  st.stop = true;
-  await clearWaiters(ctx.chat.id);
-  const sessionID = chatSessions[ctx.chat.id];
-  if (sessionID) {
-    await api('POST', `/api/session/${sessionID}/interrupt`, {}).catch(() => {});
-  }
-  await ctx.reply(st.busy ? '🛑 Interrumpiendo…' : 'No hay nada en curso.');
-});
-
-bot.command('nueva', async (ctx) => {
-  const chatId = ctx.chat.id;
-  const st = state(chatId);
-  st.stop = true;
-  st.queue = [];
-  await clearWaiters(chatId);
-  const old = chatSessions[chatId];
-  if (old) await api('DELETE', `/api/session/${old}`).catch(() => {});
-  delete chatSessions[chatId];
-  await persistSessions();
-  await ctx.reply('🔄 Listo: el próximo mensaje empezará una sesión nueva.');
-});
-
-bot.command('sesion', async (ctx) => {
-  const chatId = ctx.chat.id;
-  const st = state(chatId);
-  const sid = chatSessions[chatId];
-  await ctx.reply(
-    `Sesión: ${sid ?? '(ninguna aún)'}\n` +
-      `Ocupado: ${st.busy ? 'sí' : 'no'} | En cola: ${st.queue.length}\n` +
-      `Permisos: ${PERMISSION_MODE} | Proyecto: ${PROJECT_DIR}`
-  );
-});
-
-bot.command('hoy', async (ctx) => {
-  const chatId = ctx.chat.id;
-  const st = state(chatId);
-  if (st.busy) {
-    if (st.queue.length >= 10) {
-      await ctx.reply('⚠️ Demasiados mensajes en espera; espera a que termine el actual.');
-      return;
-    }
-    st.queue.push('Dame el resumen nutricional de hoy: kcal consumidas vs objetivo, macros y eventos del día.');
-    await ctx.reply(`📥 En cola (posición ${st.queue.length}). Responderé en orden.`);
-    return;
-  }
-  runTurn(chatId, 'Dame el resumen nutricional de hoy: kcal consumidas vs objetivo, macros y eventos del día.').catch((e) => console.error('[grammy] runTurn:', e));
-});
-
-bot.command('objetivos', async (ctx) => {
-  const chatId = ctx.chat.id;
-  const st = state(chatId);
-  if (st.busy) {
-    if (st.queue.length >= 10) {
-      await ctx.reply('⚠️ Demasiados mensajes en espera; espera a que termine el actual.');
-      return;
-    }
-    st.queue.push('recalcular objetivos');
-    await ctx.reply(`📥 En cola (posición ${st.queue.length}). Responderé en orden.`);
-    return;
-  }
-  runTurn(chatId, 'recalcular objetivos').catch((e) => console.error('[grammy] runTurn:', e));
-});
-
-bot.command('comida', async (ctx) => {
-  const chatId = ctx.chat.id;
-  const st = state(chatId);
-  const prompt = 'Quiero registrar una comida: ' + (ctx.match?.trim() ?? '');
-  if (st.busy) {
-    if (st.queue.length >= 10) {
-      await ctx.reply('⚠️ Demasiados mensajes en espera; espera a que termine el actual.');
-      return;
-    }
-    st.queue.push(prompt);
-    await ctx.reply(`📥 En cola (posición ${st.queue.length}). Responderé en orden.`);
-    return;
-  }
-  runTurn(chatId, prompt).catch((e) => console.error('[grammy] runTurn:', e));
-});
-
 bot.on('message:text', async (ctx) => {
   const chatId = ctx.chat.id;
   const text = ctx.message.text.trim();
@@ -681,38 +535,6 @@ bot.on('message:text', async (ctx) => {
 });
 
 // Botones de permisos
-bot.callbackQuery(/^cmd:hoy$/, async (ctx) => {
-  await ctx.answerCallbackQuery();
-  const chatId = ctx.chat.id;
-  const st = state(chatId);
-  if (st.busy) {
-    if (st.queue.length >= 10) {
-      await ctx.reply('⚠️ Demasiados mensajes en espera; espera a que termine el actual.');
-      return;
-    }
-    st.queue.push('Dame el resumen nutricional de hoy: kcal consumidas vs objetivo, macros y eventos del día.');
-    await ctx.reply(`📥 En cola (posición ${st.queue.length}). Responderé en orden.`);
-    return;
-  }
-  runTurn(chatId, 'Dame el resumen nutricional de hoy: kcal consumidas vs objetivo, macros y eventos del día.').catch((e) => console.error('[grammy] runTurn:', e));
-});
-
-bot.callbackQuery(/^cmd:objetivos$/, async (ctx) => {
-  await ctx.answerCallbackQuery();
-  const chatId = ctx.chat.id;
-  const st = state(chatId);
-  if (st.busy) {
-    if (st.queue.length >= 10) {
-      await ctx.reply('⚠️ Demasiados mensajes en espera; espera a que termine el actual.');
-      return;
-    }
-    st.queue.push('recalcular objetivos');
-    await ctx.reply(`📥 En cola (posición ${st.queue.length}). Responderé en orden.`);
-    return;
-  }
-  runTurn(chatId, 'recalcular objetivos').catch((e) => console.error('[grammy] runTurn:', e));
-});
-
 bot.callbackQuery(/^perm:(per[^:]+):(once|always|reject)$/, async (ctx) => {
   const [, requestID, decision] = ctx.match;
   const waiter = permissionWaiters.get(requestID);

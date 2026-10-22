@@ -40,10 +40,6 @@ Telegram ⇄ grammY (contenedor, red host)
 | Comando | Acción |
 |---|---|
 | `/start` `/help` | Info y ayuda |
-| `/stop` | Interrumpe el turno en curso |
-| `/nueva` | Borra la sesión y empieza una nueva en el próximo mensaje |
-| `/sesion` | Estado: sesión, si está ocupado, cola, modo de permisos |
-| `/ping` | Prueba de vida |
 | `/dashboard` `/api` | Muestra rutas y métodos de la API Nutri |
 | `/ssh` | Consulta si SSH está encendido o apagado |
 | `/ssh on` | Enciende el servicio SSH |
@@ -54,6 +50,8 @@ Telegram ⇄ grammY (contenedor, red host)
   (o configura `OPENCODE_PERMISSION_MODE=once|always|reject` en `.env`).
 - Si el modelo pregunta algo (herramienta question), llega como formulario;
   responde en un solo mensaje, una línea por pregunta, en orden.
+- Para tareas de nutrición, envía mensajes normales al bot; ya no hay comandos
+  dedicados para detener/crear sesiones, consultar estado, resumen, objetivos o comidas.
 - Consulta rutas con `/api`, por ejemplo `/api GET /api/biometrics`.
   Para escribir: `/api POST /api/biometrics {"source":"manual","weightKg":75}`;
   cada POST/DELETE requiere confirmación en Telegram.
