@@ -20,7 +20,6 @@ services:
       - .env
     environment:
       - TZ=America/Monterrey
-      - SSH_CONTROL_TOKEN=${SSH_CONTROL_TOKEN}
     volumes:
       - /home/pcp/.local/state/opencode:/opencode-state:ro
       - ./data:/app/data
