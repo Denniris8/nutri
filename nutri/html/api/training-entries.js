@@ -1,3 +1,4 @@
+const { randomUUID } = require('node:crypto');
 const { localDateTimeToUtc, parseFoodTime } = require('./food-entries.js');
 const { nextDate, nutritionDateForSelection, nutritionWindowRange, readNutritionWindow } = require('./nutrition-window.js');
 const { addNotification, resolveNotificationsSql } = require('./notifications.js');
@@ -36,7 +37,9 @@ function validateTrainingEntry(data) {
   const activity = typeof analysis.activity === 'string' ? analysis.activity.trim() : '';
   const { durationMinutes, weightKg, met } = analysis;
   const savedAt = data.savedAt == null ? null : data.savedAt;
+  const requestId = typeof data.requestId === 'string' ? data.requestId : '';
   if (!activity || activity.length > 120 || /[\u0000-\u001f]/.test(activity)
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)
     || !Number.isFinite(durationMinutes) || durationMinutes <= 0 || durationMinutes > 1440
     || !Number.isFinite(weightKg) || weightKg < 20 || weightKg > 400
     || !Number.isFinite(met) || met <= 0 || met > 30
@@ -45,9 +48,21 @@ function validateTrainingEntry(data) {
   const weight = Number(weightKg.toFixed(2));
   const intensity = Number(met.toFixed(2));
   return {
-    description, activity, durationMinutes: duration, weightKg: weight, met: intensity, savedAt,
+    description, activity, durationMinutes: duration, weightKg: weight, met: intensity, savedAt, requestId,
     caloriesKcal: Math.round(intensity * 3.5 * weight / 200 * duration * 10) / 10,
   };
+}
+
+async function recordTrainingError({ dbQuery, textSql, userId, traceId, stage, error, httpStatus, action }) {
+  const mysql = String(error?.message || '').match(/\bERROR\s+(\d+)\s+\(([A-Z0-9]{5})\)/);
+  const code = mysql ? `MYSQL_${mysql[1]}_${mysql[2]}`
+    : typeof error?.code === 'string' && /^[A-Z][A-Z0-9_]{0,55}$/.test(error.code) ? error.code
+      : `TRAINING_${stage.toUpperCase()}_FAILED`;
+  const name = typeof error?.name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error.name) ? error.name : 'Error';
+  const description = stage === 'analysis' ? 'No se pudo analizar el entrenamiento.'
+    : stage === 'verification' ? 'No se pudo verificar el entrenamiento guardado.'
+      : stage === 'steps' ? 'No se pudieron guardar los pasos diarios.' : 'No se pudo guardar el entrenamiento.';
+  await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,usuario_id,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('training-opencode')},${textSql(traceId)},${textSql('training_failed')},${textSql(stage)},${textSql(action)},${textSql('POST')},${textSql(action.split(' ')[1])},${userId},${textSql(code)},${textSql(name)},${httpStatus},${textSql(description)});`);
 }
 
 function localCalendarDate(timezone, now = new Date()) {
@@ -179,14 +194,32 @@ async function saveTrainingEntry({ response, data, userId, dbQuery, textSql, jso
     createdAt = requestedTrainingTime(entry.description, selectedDate, window.timezone, entry.savedAt, window);
   }
   catch (error) { json(response, error.status || 400, { error: error.message }); return; }
+  const traceId = randomUUID();
+  let stage = 'persistence';
   try {
-    await dbQuery(`INSERT INTO registros_entrenamientos(usuario_id,origen,external_activity_id,descripcion,actividad,duracion_minutos,peso_kg,met,energia_kcal,creado_en) VALUES (${userId},'manual',NULL,${textSql(entry.description)},${textSql(entry.activity)},${entry.durationMinutes},${entry.weightKg},${entry.met},${entry.caloriesKcal},${createdAt ? textSql(createdAt) : 'UTC_TIMESTAMP(3)'});`);
+    const inserted = await dbQuery(`INSERT INTO registros_entrenamientos(usuario_id,origen,external_activity_id,request_id,descripcion,actividad,duracion_minutos,peso_kg,met,energia_kcal,creado_en) VALUES (${userId},'manual',NULL,${textSql(entry.requestId)},${textSql(entry.description)},${textSql(entry.activity)},${entry.durationMinutes},${entry.weightKg},${entry.met},${entry.caloriesKcal},${createdAt ? textSql(createdAt) : 'UTC_TIMESTAMP(3)'}) AS incoming ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id);
+SELECT LAST_INSERT_ID();`);
+    const entryId = inserted.split(/\s+/).at(-1);
+    if (!/^\d+$/.test(entryId || '')) throw new Error('training_insert_failed');
+    stage = 'verification';
+    const saved = await dbQuery(`SELECT JSON_OBJECT('id',id,'requestId',request_id,'description',descripcion,'activity',actividad,'durationMinutes',duracion_minutos,'weightKg',peso_kg,'met',met,'caloriesKcal',energia_kcal,'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ')) FROM registros_entrenamientos WHERE id=${entryId} AND usuario_id=${userId} LIMIT 1;`);
+    if (!saved) throw Object.assign(new Error('training_readback_missing'), { code: 'TRAINING_PERSISTENCE_VERIFY_FAILED' });
+    const persisted = JSON.parse(saved);
+    if (persisted.requestId !== entry.requestId || persisted.description !== entry.description
+      || persisted.activity !== entry.activity || Number(persisted.durationMinutes) !== entry.durationMinutes
+      || Number(persisted.weightKg) !== entry.weightKg || Number(persisted.met) !== entry.met
+      || Number(persisted.caloriesKcal) !== entry.caloriesKcal) {
+      json(response, 409, { error: 'La clave de reintento ya corresponde a otro registro.' });
+      return;
+    }
     try { await dbQuery(`${resolveNotificationsSql({ userId, category: 'entrenamiento', textSql })};`); } catch {}
     if (!suppressNotification) try { await addNotification({ userId, category: 'entrenamiento', state: 'guardado', title: 'Entrenamiento guardado', message: 'Tu sesión manual quedó guardada.', dbQuery, textSql }); } catch {}
-    json(response, 201, { ok: true, caloriesKcal: entry.caloriesKcal, savedAt: entry.savedAt });
-  } catch {
+    json(response, 201, { ok: true, entryId: persisted.id, requestId: entry.requestId, caloriesKcal: persisted.caloriesKcal, createdAt: persisted.createdAt, savedAt: entry.savedAt });
+  } catch (error) {
+    try { await recordTrainingError({ dbQuery, textSql, userId, traceId, stage, error, httpStatus: 503, action: 'POST /api/training-entries' }); }
+    catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
     if (!suppressNotification) try { await addNotification({ userId, category: 'entrenamiento', state: 'error', title: 'No se pudo guardar el entrenamiento', message: 'Intenta guardar la sesión nuevamente.', dbQuery, textSql }); } catch {}
-    json(response, 503, { error: 'No se pudo guardar el entrenamiento.' });
+    json(response, 503, { requestId: entry.requestId, traceId, error: stage === 'verification' ? 'El guardado se procesó, pero no se pudo verificar. Reintenta con la misma solicitud.' : 'No se pudo guardar el entrenamiento.' });
   }
 }
 
@@ -214,4 +247,4 @@ async function readTrainingEntries({ userId, dbQuery, date, timezone }) {
   return rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [];
 }
 
-module.exports = { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, parseTrainingSavedTime, readDailySteps, readTrainingEntries, saveDailySteps, saveTrainingEntry, validateTrainingEntry, visibleTrainingEntries };
+module.exports = { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, parseTrainingSavedTime, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, validateTrainingEntry, visibleTrainingEntries };

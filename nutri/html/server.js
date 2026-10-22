@@ -14,7 +14,7 @@ const { readPlicometrics, savePlicometric } = require('./api/plicometrics.js');
 const { deleteFoodEntry, readFoodEntries, readPendingFoodDraft, saveFoodEntry } = require('./api/food-entries.js');
 const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError, safeOpenCodeErrorCode, traceFoodSession } = require('./api/opencode-food.js');
 const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, prepareTrainingSession } = require('./api/training-analysis.js');
-const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
+const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
 const { deleteTrainingPlan, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
 const { addNotification, markNotificationRead, notificationInsertSql, readNotifications, resolveNotificationsSql } = require('./api/notifications.js');
 
@@ -674,17 +674,28 @@ COMMIT;`);
       let data;
       try { data = await bodyJson(request); }
       catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
+      if (data.userMessages != null && (!Array.isArray(data.userMessages) || data.userMessages.length > 20 || data.userMessages.some((message) => typeof message !== 'string' || message.length > 1200))) {
+        authError(response, 400, 'El historial del entrenamiento no es válido.'); return;
+      }
+      const traceId = randomUUID();
+      let stage = 'analysis';
       try {
         const timezone = request.headers['x-client-timezone'] || 'UTC';
         const localDate = localCalendarDate(timezone);
         const biometricData = JSON.parse(await dbQuery(`SELECT JSON_OBJECT('latestBiometric',(SELECT JSON_OBJECT('weightKg',peso_kg,'measuredAt',DATE_FORMAT(medido_en,'%Y-%m-%d %H:%i:%s'),'source',fuente) FROM registros_biometricos WHERE usuario_id=${claims.sub} ORDER BY medido_en DESC,id DESC LIMIT 1),'registeredHeightCm',(SELECT estatura_cm FROM usuarios WHERE id=${claims.sub} LIMIT 1));`));
-        const analysis = await analyzeTraining({ userId: claims.sub, description: data.description, stepContext: { localDate, timezone }, biometricData: {
-          latestWeightKg: biometricData.latestBiometric?.weightKg,
-          weightMeasuredAt: biometricData.latestBiometric?.measuredAt,
-          weightSource: biometricData.latestBiometric?.source,
+        const latest = biometricData.latestBiometric;
+        const measuredDate = typeof latest?.measuredAt === 'string' ? latest.measuredAt.slice(0, 10) : '';
+        const ageDays = (Date.parse(`${localDate}T00:00:00Z`) - Date.parse(`${measuredDate}T00:00:00Z`)) / 86400000;
+        const latestWeightStale = latest?.weightKg != null && (!Number.isFinite(ageDays) || ageDays < 0 || ageDays > 60);
+        const analysis = await analyzeTraining({ userId: claims.sub, description: data.description, userWeightContext: (data.userMessages || [data.description]).join('\n'), stepContext: { localDate, timezone }, biometricData: {
+          latestWeightKg: latestWeightStale ? null : latest?.weightKg,
+          latestWeightStale,
+          weightMeasuredAt: latest?.measuredAt,
+          weightSource: latest?.source,
           registeredHeightCm: biometricData.registeredHeightCm,
         }, requestOpenCode: openCodeRequest });
         if (analysis.stepsCount !== null) {
+          stage = 'steps';
           analysis.stepsSaved = await saveDailySteps({
             userId: claims.sub, date: analysis.stepsDate || localDate, localDate,
             stepsCount: analysis.stepsCount, source: 'manual', dbQuery, textSql,
@@ -697,6 +708,8 @@ COMMIT;`);
         json(response, 200, { analysis });
       }
       catch (error) {
+        try { await recordTrainingError({ dbQuery, textSql, userId: claims.sub, traceId, stage, error, httpStatus: error.status || 502, action: 'POST /api/training-analysis' }); }
+        catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
         if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'error', title: 'No se pudo analizar el entrenamiento', message: 'Revisa el modal de entrenamiento e inténtalo de nuevo.', dbQuery, textSql }); } catch {}
         authError(response, error.status || 502, error.status ? error.message : 'No se pudo analizar el entrenamiento.');
       }

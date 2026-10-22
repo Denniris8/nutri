@@ -1279,6 +1279,13 @@ let trainingOpenCodeSessionActive = false;
 let trainingPending = false;
 let trainingSaving = false;
 let trainingSavedAt = null;
+const pendingTrainingSaveKey = 'nutriPendingTrainingSaveId';
+let pendingTrainingSave = (() => {
+  try {
+    const requestId = sessionStorage.getItem(pendingTrainingSaveKey);
+    return requestId ? { description: null, requestId } : null;
+  } catch { return null; }
+})();
 let trainingGarminConnected = false;
 const trainingModeStorageKey = 'nutriTrainingMode';
 function savedTrainingMode() {
@@ -1466,7 +1473,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
   try {
     const response = await fetch('/api/training-analysis', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone },
-      body: JSON.stringify({ description, suppressNotification: true }),
+      body: JSON.stringify({ description, userMessages: [...trainingChatMessages.querySelectorAll('.food-chat-message[data-role="user"] .food-chat-text')].map((node) => node.textContent.trim()).slice(-20), suppressNotification: true }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo analizar el entrenamiento.');
@@ -1489,6 +1496,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     const context = analysis.biometricContext;
     const profile = [
       context.latestWeightKg == null ? '' : `Peso registrado: ${context.latestWeightKg} kg${context.weightMeasuredAt ? ` (${context.weightMeasuredAt})` : ''}`,
+      context.latestWeightStale ? `El peso registrado supera 60 días (${context.weightMeasuredAt || 'fecha desconocida'}); confirma tu peso actual.` : '',
       context.registeredHeightCm == null ? '' : `Estatura registrada: ${context.registeredHeightCm} cm`,
     ].filter(Boolean).join(' · ');
     const message = analysis.caloriesKcal == null ? analysis.question
@@ -1510,17 +1518,33 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     trainingFeedback.textContent = 'Guardando el entrenamiento…';
     trainingSaving = true;
     const nutritionDate = dayInput?.value || localDate();
+    const turns = [...trainingChatMessages.querySelectorAll('.food-chat-message[data-role="user"] .food-chat-text')].map((node) => node.textContent.trim()).filter(Boolean);
+    const userTurns = turns.filter((turn, index) => !index || turn !== turns[index - 1]);
+    const descriptionToSave = userTurns.join(' · ').length <= 1200 ? userTurns.join(' · ')
+      : `${userTurns[0].slice(0, 550)} … ${userTurns.at(-1).slice(-600)}`;
+    if (pendingTrainingSave?.description && pendingTrainingSave.description !== descriptionToSave) throw new Error('Hay un guardado anterior pendiente de verificar. Reenvía la misma descripción antes de iniciar otro registro.');
+    if (!pendingTrainingSave) pendingTrainingSave = { description: descriptionToSave, requestId: createFoodRequestId() };
+    pendingTrainingSave.description = descriptionToSave;
+    try { sessionStorage.setItem(pendingTrainingSaveKey, pendingTrainingSave.requestId); } catch {}
     const saveResponse = await fetch('/api/training-entries', {
       method: 'POST', credentials: 'same-origin', headers: {
         'Content-Type': 'application/json', 'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
-      body: JSON.stringify({ description, analysis, savedAt: trainingSavedAt, date: nutritionDate, suppressNotification: true }),
+      body: JSON.stringify({ requestId: pendingTrainingSave.requestId, description: descriptionToSave, analysis, savedAt: trainingSavedAt, date: nutritionDate, suppressNotification: true }),
     });
     const saved = await saveResponse.json();
-    if (!saveResponse.ok) throw new Error(saved.error || 'No se pudo guardar el entrenamiento.');
+    if (!saveResponse.ok) {
+      if (saveResponse.status === 409) {
+        pendingTrainingSave = null;
+        try { sessionStorage.removeItem(pendingTrainingSaveKey); } catch {}
+      }
+      throw new Error(saved.error || 'No se pudo guardar el entrenamiento.');
+    }
     trainingSaving = false;
     trainingOpenCodeSessionActive = false;
     await loadTrainingEntries(nutritionDate);
+    pendingTrainingSave = null;
+    try { sessionStorage.removeItem(pendingTrainingSaveKey); } catch {}
     trainingSavedAt = null;
     trainingFeedback.textContent = saved.savedAt ? `Entrenamiento analizado y guardado a las ${saved.savedAt}.` : 'Entrenamiento analizado y guardado.';
     notifyApp(trainingFeedback.textContent, 'success');
@@ -1991,7 +2015,7 @@ function renderTrainingEnergySummary(consumedCaloriesKcal) {
   }));
   const warning = document.querySelector('#trainingEnergySummaryWarning');
   const notices = [
-    unresolvedTrainingDuplicates ? `${unresolvedTrainingDuplicates} registros posibles duplicados no se acreditaron` : '',
+    unresolvedTrainingDuplicates ? `${unresolvedTrainingDuplicates} sesiones Garmin/manual ambiguas no se contabilizaron; revisa los registros` : '',
     uncalculableManualTrainingRecords ? `${uncalculableManualTrainingRecords} sesiones manuales sin kcal calculables` : '',
   ].filter(Boolean);
   warning.textContent = notices.join(' · ');

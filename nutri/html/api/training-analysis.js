@@ -81,7 +81,7 @@ async function openTrainingSession(userId, config, request) {
   return id;
 }
 
-function parseReply(parts, biometricContext) {
+function parseReply(parts, biometricContext, explicitWeightKg) {
   const raw = parts.filter((part) => part.type === 'text').map((part) => part.text || '').join('\n').trim();
   const text = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   let reply;
@@ -104,11 +104,17 @@ function parseReply(parts, biometricContext) {
     || ['activity', 'durationMinutes', 'weightKg', 'met', 'formula'].some((key) => reply[key] != null))) {
     throw new Error('OpenCode mezcló pasos diarios con una sesión de entrenamiento.');
   }
+  if (reply.trainingSession && reply.caloriesKcal !== null && (biometricContext.latestWeightStale || biometricContext.latestWeightKg == null) && explicitWeightKg == null) {
+    reply.caloriesKcal = null;
+    reply.weightKg = null;
+    reply.question = [reply.question, 'Indica tu peso actual aproximado en kg; el peso registrado no está disponible o tiene más de 60 días.'].filter(Boolean).join(' ');
+  }
   if (reply.trainingSession && reply.caloriesKcal === null && !reply.question?.trim()) throw new Error('OpenCode no calculó calorías ni pidió una aclaración.');
   reply.stepsCount = stepsCount;
   reply.stepsDate = stepsDate;
   if (reply.caloriesKcal !== null) {
-    if (biometricContext.latestWeightKg != null) reply.weightKg = biometricContext.latestWeightKg;
+    if (explicitWeightKg != null) reply.weightKg = explicitWeightKg;
+    else if (biometricContext.latestWeightKg != null && !biometricContext.latestWeightStale) reply.weightKg = biometricContext.latestWeightKg;
     if (typeof reply.activity !== 'string' || !reply.activity.trim() || reply.activity.length > 120
       || !Number.isFinite(reply.durationMinutes) || reply.durationMinutes <= 0 || reply.durationMinutes > 1440
       || !Number.isFinite(reply.weightKg) || reply.weightKg <= 0 || reply.weightKg > 350
@@ -119,7 +125,7 @@ function parseReply(parts, biometricContext) {
   return reply;
 }
 
-async function analyzeTraining({ userId, description, biometricData, stepContext, requestOpenCode = openCodeRequest, readConfig = getFoodSessionDefaults }) {
+async function analyzeTraining({ userId, description, userWeightContext = description, biometricData, stepContext, requestOpenCode = openCodeRequest, readConfig = getFoodSessionDefaults }) {
   const id = String(userId);
   const text = typeof description === 'string' ? description.trim() : '';
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta autenticada no válida.'), { status: 400 });
@@ -130,6 +136,7 @@ async function analyzeTraining({ userId, description, biometricData, stepContext
   };
   const biometricContext = {
     latestWeightKg: numeric(biometricData?.latestWeightKg, 20, 400),
+    latestWeightStale: biometricData?.latestWeightStale === true,
     weightMeasuredAt: typeof biometricData?.weightMeasuredAt === 'string' ? biometricData.weightMeasuredAt.slice(0, 19) : null,
     weightSource: ['manual', 'bia'].includes(biometricData?.weightSource) ? biometricData.weightSource : null,
     registeredHeightCm: numeric(biometricData?.registeredHeightCm, 80, 250),
@@ -149,7 +156,10 @@ async function analyzeTraining({ userId, description, biometricData, stepContext
       parts: [{ type: 'text', text: JSON.stringify({ description: text, biometricContext, stepContext }) }],
     }, config.requestTimeoutMs);
     if (result.status < 200 || result.status >= 300) throw new Error('OpenCode no pudo analizar el entrenamiento.');
-    return { ...parseReply(result.data?.parts || [], biometricContext), biometricContext, requestedSaveTime: savedTime.value, saveTimeStatus: savedTime.status };
+    const weightMatches = [...String(userWeightContext || text).matchAll(/(?:peso(?:\s+actual|\s+corporal)?\s*(?:es|de|:|=)?\s*)(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\b|^\s*(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\s*$/gim)];
+    const weightMatch = weightMatches.at(-1);
+    const explicitWeightKg = weightMatch ? numeric(Number((weightMatch[1] || weightMatch[2]).replace(',', '.')), 20, 400) : null;
+    return { ...parseReply(result.data?.parts || [], biometricContext, explicitWeightKg), biometricContext, requestedSaveTime: savedTime.value, saveTimeStatus: savedTime.status };
   });
 }
 
