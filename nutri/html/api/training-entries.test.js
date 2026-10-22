@@ -33,6 +33,30 @@ test('ambiguous source matches are excluded from the adjustment and reported', (
   assert.equal(result.unresolvedPossibleDuplicates, 3);
 });
 
+test('invalid manual metrics and device calories are excluded and counted', () => {
+  const result = calculateTrainingEnergy([
+    manual({ weightKg: null }),
+    manual({ durationMinutes: 1441 }),
+    garmin({ caloriesKcal: -1, activity: 'cycling' }),
+    garmin({ caloriesKcal: 100001, activity: 'swimming' }),
+  ]);
+  assert.equal(result.adjustmentKcal, 0);
+  assert.equal(result.uncalculableManualCount, 2);
+  assert.equal(result.uncalculableDeviceCount, 2);
+  assert.equal(result.manualSessionCount, 0);
+  assert.equal(result.deviceSessionCount, 0);
+});
+
+test('valid source totals are rounded once and session counts remain traceable', () => {
+  const result = calculateTrainingEnergy([
+    manual({ durationMinutes: 30.01 }),
+    garmin({ activity: 'cycling', caloriesKcal: 100.04 }),
+  ]);
+  assert.equal(result.manualSessionCount, 1);
+  assert.equal(result.deviceSessionCount, 1);
+  assert.equal(result.adjustmentKcal, Math.round((Math.max(0, (7 - 1) * 3.5 * 70 / 200 * 30.01) + 100.04) * 10) / 10);
+});
+
 test('Garmin records are visible only when Garmin is linked and selected', () => {
   const records = [manual(), garmin()];
   assert.deepEqual(visibleTrainingEntries(records, { deviceMode: 'garmin', garminConnected: true }), records);

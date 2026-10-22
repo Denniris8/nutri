@@ -3,6 +3,7 @@ const path = require('node:path');
 const { readFile } = require('node:fs/promises');
 const { openCodeRequest, getFoodSessionDefaults } = require('./opencode-food.js');
 const { parseTrainingSavedTime } = require('./training-entries.js');
+const { extractPlanDisclosure, validatePlanSemantics } = require('./training-plans.js');
 
 const permissions = [{ permission: '*', pattern: '*', action: 'deny' }];
 // El ID vive solo en memoria del servidor; el cliente nunca elige ni recibe una sesión reutilizable.
@@ -37,7 +38,7 @@ function withUserLock(userId, run) {
   return current.finally(() => { if (locks.get(userId) === current) locks.delete(userId); });
 }
 
-function parseTrainingPlanReply(parts) {
+function parseTrainingPlanReply(parts, systemPrompt, context) {
   const raw = parts.filter((part) => part.type === 'text').map((part) => part.text || '').join('\n').trim();
   let reply;
   try { reply = JSON.parse(raw); }
@@ -56,6 +57,7 @@ function parseTrainingPlanReply(parts) {
     const value = macros[key];
     if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > limits[key])) throw new Error('OpenCode devolvió metas de macros no válidas.');
   }
+  validatePlanSemantics(reply.plan_markdown, macros, extractPlanDisclosure(systemPrompt), context);
   return { plan: reply.plan_markdown.trim(), macros: Object.fromEntries(keys.map((key) => [key, macros[key]])) };
 }
 
@@ -241,7 +243,7 @@ async function generateTrainingPlan({ userId, goals, context, requestOpenCode = 
         parts: [{ type: 'text', text: JSON.stringify({ goals: text, context }) }],
       }, config.requestTimeoutMs);
       if (result.status < 200 || result.status >= 300) throw new Error('OpenCode no pudo generar el plan.');
-      const plan = parseTrainingPlanReply(result.data?.parts || []);
+      const plan = parseTrainingPlanReply(result.data?.parts || [], systemPrompt, context);
       const runId = randomUUID();
       pendingPlanSessions.set(id, { sessionId, runId });
       retained = true;
@@ -257,4 +259,4 @@ async function generateTrainingPlan({ userId, goals, context, requestOpenCode = 
   });
 }
 
-module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, parseTrainingPlanReply, prepareTrainingSession };
+module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, parseTrainingPlanReply, prepareTrainingSession, readTrainingPlanPrompt };

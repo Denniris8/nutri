@@ -32,7 +32,7 @@ function loadFlow(search = '', fetchOverride) {
   const ids = [
     'loginForm', 'loginCelular', 'loginPassword', 'registerForm', 'errorMessage', 'cancelRegister',
     'registerName', 'registerCountryCode', 'registerCelular', 'registerPassword', 'registerHeight',
-    'confirmPassword', 'registerAge', 'registerSex', 'registerTestAccount', 'preferencesForm', 'dietPattern', 'formError',
+    'confirmPassword', 'registerAge', 'registerSex', 'preferencesForm', 'dietPattern', 'formError',
     'cancelPreferences',
     'nutritionDayStartHour', 'nutritionDayStartMinute', 'nutritionDayStartPeriod',
     'nutritionDayEndHour', 'nutritionDayEndMinute', 'nutritionDayEndPeriod',
@@ -220,6 +220,8 @@ test('dashboard has responsive calendar and More exposes editable forms and acco
   assert.match(css, /grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/);
   assert.match(css, /\.more-actions\s*\{\s*grid-template-columns:\s*1fr;/);
   assert.match(html, /id="accountHeightCm"/);
+  for (const id of ['progressCorrelationMetrics', 'progressActivityMetrics', 'progressActivityChart', 'progressQualityMetrics']) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /no se guardan cargas\/volumen de fuerza/i);
 });
 
 test('More contains accessible biometric and plicometer forms with their measurement fields', () => {

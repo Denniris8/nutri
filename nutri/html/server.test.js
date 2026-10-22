@@ -14,7 +14,8 @@ const demo = {
 };
 
 async function withServer(dbQuery, run, options = {}) {
-  const server = createServer({ ...options, dbQuery, jwtSecret: 'test-jwt-secret-must-be-at-least-32-bytes' });
+  const { registrationRateLimitResult = '1\t3600', ...serverOptions } = options;
+  const server = createServer({ ...serverOptions, dbQuery: (sql) => sql.includes('/* registration-rate-limit */') ? registrationRateLimitResult : dbQuery(sql), jwtSecret: 'test-jwt-secret-must-be-at-least-32-bytes' });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     await run(`http://127.0.0.1:${server.address().port}`);
@@ -39,12 +40,34 @@ const post = (url, data, headers = {}) => fetch(url, {
   body: JSON.stringify(data),
 });
 
+test('progress nutrition endpoint returns account-scoped nutrition, body, activity and coverage', async () => {
+  const queries = [];
+  const nutrition = { days: 7, current: { loggedDays: 1, completeDays: 1, incompleteDays: 0, kcal: 1800, protein: 100, carbs: 200, fat: 60 }, previous: { loggedDays: 0, completeDays: 0, incompleteDays: 0, kcal: null, protein: null, carbs: null, fat: null }, quality: { currentPending: 0, previousPending: 0, macroSources: { usda: 1, declared: 0, web: 0, opencode: 0, estimated: 0 } }, goals: null };
+  const body = { current: { measurements: 2, firstKg: 80, lastKg: 79 }, previous: { measurements: 0, firstKg: null, lastKg: null } };
+  const activity = { current: { stepDays: 1, avgSteps: 8000, trainingSessions: 1, manualSessions: 1, deviceSessions: 0, manualMinutes: 45, deviceMinutes: null, manualKcal: 300, deviceKcal: null }, previous: { stepDays: 0, avgSteps: null, trainingSessions: 0, manualSessions: 0, deviceSessions: 0, manualMinutes: null, deviceMinutes: null, manualKcal: null, deviceKcal: null } };
+  await withServer(async (sql) => {
+    queries.push(sql);
+    if (sql.includes('SELECT s.usuario_id')) return '27';
+    if (sql.includes('WITH daily AS')) return JSON.stringify(nutrition);
+    if (sql.includes("'measurements'")) return JSON.stringify(body);
+    if (sql.includes("'stepDays'")) return JSON.stringify(activity);
+    if (sql.includes('registros_plicometro')) return '{"current":1,"previous":0}';
+    throw new Error('unexpected_query');
+  }, async (base) => {
+    const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
+    const response = await fetch(`${base}/api/progress/nutrition?dias=7&hasta=2026-10-21`, { headers: { Cookie: cookie } });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { nutrition, body, activity, plicometric: { current: 1, previous: 0 } });
+  });
+  assert.ok(queries.filter((sql) => sql.includes('usuario_id=27')).length >= 4);
+});
+
 test('dummy registration creates synthetic measurement rows without completing onboarding', async () => {
   let registrationSql = '';
   await withServer(async (sql) => { registrationSql = sql; return '27'; }, async (base) => {
     const response = await post(base + '/api/auth/register', demo);
     assert.equal(response.status, 201);
-  });
+  }, { testAccountPhone: '+520000000000', allowTestAccountSeeding: true });
   for (const table of ['registros_biometricos', 'registros_plicometro', 'registros_comidas', 'planes_entrenamiento']) {
     assert.match(registrationSql, new RegExp(`INSERT INTO ${table}`));
   }
@@ -56,13 +79,41 @@ test('dummy registration creates synthetic measurement rows without completing o
   assert.doesNotMatch(registrationSql, /dashboard_terms_decisions/);
 });
 
-test('regular registration does not seed fictitious related rows', async () => {
+test('client cannot mark an arbitrary registration as a test account', async () => {
   let registrationSql = '';
   await withServer(async (sql) => { registrationSql = sql; return '27'; }, async (base) => {
-    const response = await post(base + '/api/auth/register', { ...demo, isTestAccount: false });
+    const response = await post(base + '/api/auth/register', { ...demo, phone: '4155550123', countryIso: 'US', isTestAccount: true });
     assert.equal(response.status, 201);
-  });
+  }, { testAccountPhone: '+520000000000', allowTestAccountSeeding: true });
   assert.doesNotMatch(registrationSql, /INSERT INTO (preferencias_usuario|perfil_salud_usuario|registros_biometricos|registros_plicometro|registros_comidas|planes_entrenamiento)/);
+});
+
+test('test account seed requires server-side authorization even for the reserved phone', async () => {
+  let registrationSql = '';
+  await withServer(async (sql) => { registrationSql = sql; return '27'; }, async (base) => {
+    const response = await post(base + '/api/auth/register', demo);
+    assert.equal(response.status, 201);
+  }, { testAccountPhone: '+520000000000', allowTestAccountSeeding: false });
+  assert.doesNotMatch(registrationSql, /INSERT INTO (registros_biometricos|registros_plicometro|registros_comidas|planes_entrenamiento)/);
+  assert.match(registrationSql, /,0\);/);
+});
+
+test('persistent registration rate limit rejects requests across server instances', async () => {
+  let accountCreated = false;
+  await withServer(async (sql) => { if (sql.includes('INSERT INTO usuarios')) accountCreated = true; return '27'; }, async (base) => {
+    const response = await post(base + '/api/auth/register', demo);
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.get('retry-after'), '3600');
+    assert.equal(accountCreated, false);
+  }, { registrationRateLimitResult: '6\t3600', testAccountPhone: '+520000000000', allowTestAccountSeeding: true });
+});
+
+test('duplicate registration response does not disclose whether the phone is already registered', async () => {
+  await withServer(async () => { throw new Error('Duplicate entry for celular_e164'); }, async (base) => {
+    const response = await post(base + '/api/auth/register', demo);
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: 'Datos no válidos.' });
+  }, { testAccountPhone: '+520000000000', allowTestAccountSeeding: true });
 });
 
 test('plicometer API validates and saves records for the authenticated account', async () => {
@@ -686,6 +737,8 @@ test('registration creates a hashed user and grants a revocable JWT session', as
     const dashboardBeforeSetup = await fetch(base + '/dashboard_nutricional.html', { headers: { Cookie: cookie }, redirect: 'manual' });
     assert.equal(dashboardBeforeSetup.status, 302);
     assert.equal(dashboardBeforeSetup.headers.get('location'), '/preferencias.html');
+    const homeBeforeSetup = await fetch(base + '/', { headers: { Cookie: cookie }, redirect: 'manual' });
+    assert.equal(homeBeforeSetup.headers.get('location'), '/preferencias.html');
     const preferencePage = await fetch(base + '/preferencias.html', { headers: { Cookie: cookie } });
     assert.equal(preferencePage.status, 200);
     assert.ok(queries.some((sql) => sql.includes('dashboard_sessions')));
@@ -709,6 +762,8 @@ test('registration creates a hashed user and grants a revocable JWT session', as
     const dashboardAfterPreferences = await fetch(base + '/dashboard_nutricional.html', { headers: { Cookie: cookie }, redirect: 'manual' });
     assert.equal(dashboardAfterPreferences.status, 302);
     assert.equal(dashboardAfterPreferences.headers.get('location'), '/terminos.html');
+    const homeAfterPreferences = await fetch(base + '/', { headers: { Cookie: cookie }, redirect: 'manual' });
+    assert.equal(homeAfterPreferences.headers.get('location'), '/terminos.html');
     const dashboardBeforeTerms = await fetch(base + '/dashboard_nutricional.html', { headers: { Cookie: cookie }, redirect: 'manual' });
     assert.equal(dashboardBeforeTerms.status, 302);
     assert.equal(dashboardBeforeTerms.headers.get('location'), '/terminos.html');
@@ -724,6 +779,8 @@ test('registration creates a hashed user and grants a revocable JWT session', as
     const dashboardAfterTerms = await fetch(base + '/dashboard_nutricional.html', { headers: { Cookie: cookie } });
     assert.equal(dashboardAfterTerms.status, 200);
     assert.match(await dashboardAfterTerms.text(), /Dashboard Nutricional/);
+    const homeAfterTerms = await fetch(base + '/', { headers: { Cookie: cookie }, redirect: 'manual' });
+    assert.equal(homeAfterTerms.headers.get('location'), '/dashboard_nutricional.html');
     const accountProfileResponse = await fetch(base + '/api/dashboard/profile', { headers: { Cookie: cookie.split(';')[0] } });
     assert.equal(accountProfileResponse.status, 200);
     const { profile } = await accountProfileResponse.json();
@@ -791,21 +848,81 @@ test('login accepts the stored password and logout revokes the session', async (
   const salt = randomBytes(16);
   const hash = scryptSync(demo.password, salt, 64);
   const queries = [];
+  let sessionActive = true;
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    await withServer(async (sql) => {
+      queries.push(sql);
+      if (sql.includes('INSERT INTO auth_login_rate_limits')) return '1\t900';
+      if (sql.includes('UPDATE auth_login_rate_limits')) return '';
+      if (sql.includes('FROM usuarios WHERE celular_e164')) return `27\t${salt.toString('hex')}\t${hash.toString('hex')}\t1`;
+      if (sql.includes('SELECT s.usuario_id')) return sessionActive ? '27' : '';
+      if (sql.includes('UPDATE dashboard_sessions')) sessionActive = false;
+      return '';
+    }, async (base) => {
+      const login = await post(base + '/api/auth/login', {
+        phone: '+52 0000000000', password: demo.password,
+      });
+      assert.equal(login.status, 200);
+      const cookie = login.headers.get('set-cookie');
+      assert.match(cookie, /HttpOnly/);
+      assert.match(cookie, /SameSite=Strict/);
+      assert.match(cookie, /Secure/);
+      assert.match(queries.find((sql) => sql.includes('INSERT INTO dashboard_sessions')) || '', /INTERVAL 8 HOUR/);
+      const logout = await post(base + '/api/auth/logout', {}, { Cookie: cookie });
+      assert.equal(logout.status, 200);
+      assert.match(queries.join('\n'), /UPDATE dashboard_sessions/);
+      const protectedPage = await fetch(base + '/dashboard_nutricional.html', { headers: { Cookie: cookie }, redirect: 'manual' });
+      assert.equal(protectedPage.status, 302);
+      assert.equal(protectedPage.headers.get('location'), '/login.html');
+    });
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
+});
+
+test('expired JWT sessions are rejected before consulting the database', async () => {
+  let queries = 0;
+  const secret = 'test-jwt-secret-must-be-at-least-32-bytes';
+  const expiredCookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', secret, 0)}`;
+  await withServer(async () => { queries += 1; return '27'; }, async (base) => {
+    const response = await fetch(base + '/api/dashboard/profile', { headers: { Cookie: expiredCookie } });
+    assert.equal(response.status, 401);
+    assert.equal(queries, 0);
+  }, { now: () => 8 * 60 * 60 });
+});
+
+test('login persists failed credential buckets and logs no credential data', async () => {
+  const queries = [];
+  const phone = '+522222222222';
   await withServer(async (sql) => {
     queries.push(sql);
-    if (sql.includes('FROM usuarios WHERE celular_e164')) return `27\t${salt.toString('hex')}\t${hash.toString('hex')}\t1`;
-    if (sql.includes('FROM dashboard_sessions')) return '27';
+    if (sql.includes('INSERT INTO auth_login_rate_limits')) return '1\t900';
+    if (sql.includes('SELECT id,HEX(password_salt)')) return '';
     return '';
   }, async (base) => {
-    const login = await post(base + '/api/auth/login', {
-      phone: '+52 0000000000', password: demo.password,
-    });
-    assert.equal(login.status, 200);
-    const cookie = login.headers.get('set-cookie');
-    assert.ok(cookie);
-    const logout = await post(base + '/api/auth/logout', {}, { Cookie: cookie });
-    assert.equal(logout.status, 200);
-    assert.match(queries.join('\n'), /UPDATE dashboard_sessions/);
+    const response = await post(base + '/api/auth/login', { phone, password: 'wrong-password-123' });
+    assert.equal(response.status, 401);
+    const audit = queries.find((sql) => sql.includes('login_failed')) || '';
+    assert.match(audit, /AUTH_INVALID_CREDENTIALS/);
+    assert.doesNotMatch(audit, /wrong-password-123|522222222222/);
+    assert.ok(queries.some((sql) => sql.includes('auth_login_rate_limits') && sql.includes('UNHEX(')));
+  });
+});
+
+test('login rate limiter rejects an exhausted shared IP bucket', async () => {
+  let accountLookup = false;
+  await withServer(async (sql) => {
+    if (sql.includes('INSERT INTO auth_login_rate_limits')) return '11\t321';
+    if (sql.includes('FROM usuarios WHERE celular_e164')) accountLookup = true;
+    return '';
+  }, async (base) => {
+    const response = await post(base + '/api/auth/login', { phone: '+522222222222', password: 'wrong-password-123' });
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.get('retry-after'), '321');
+    assert.equal(accountLookup, false);
   });
 });
 

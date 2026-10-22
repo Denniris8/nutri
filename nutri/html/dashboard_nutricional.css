@@ -171,6 +171,20 @@ button, select, input, summary, a { -webkit-tap-highlight-color: transparent; }
 .progress-range label { flex: 0 0 auto; }
 .progress-range select { max-width: 180px; }
 .progress-chart { min-width: 0; }
+.progress-nutrition-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.progress-nutrition-metric { min-width: 0; padding: 10px 12px; border-left: 2px solid var(--line); }
+.progress-nutrition-metric h3 { margin: 0; color: var(--muted); font-size: 13px; }
+.progress-nutrition-metric strong { display: block; margin-top: 5px; font-variant-numeric: tabular-nums; }
+.progress-nutrition-metric p, .progress-period-summary > p { margin: 5px 0 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.progress-chart-rows { display: grid; gap: 10px; margin-top: 16px; }
+.progress-chart-legend, .progress-chart-row-label { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
+.progress-chart-row { display: grid; gap: 5px; min-width: 0; }
+.progress-chart-track { position: relative; height: 10px; overflow: hidden; border-radius: var(--shape-full); background: var(--md-sys-color-surface-container-high); }
+.progress-chart-bar { display: block; width: var(--bar-width); height: 100%; border-radius: inherit; background: var(--bar-color, var(--accent)); }
+.progress-chart-bar.is-previous { background: var(--md-sys-color-outline); }
+.progress-chart-target { position: absolute; top: 0; bottom: 0; left: 66.667%; width: 2px; background: var(--text); }
+.progress-quality-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 12px; }
+.progress-correlation, .progress-activity, .progress-quality { min-width: 0; }
 .more-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .more-action { display: flex; min-height: 72px; flex-direction: column; align-items: flex-start; justify-content: center; gap: 4px; padding: 12px 16px; color: var(--text); text-align: left; cursor: pointer; }
 .more-action strong { font-size: 14px; }
@@ -318,6 +332,7 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
 .macro-target[data-status="met"] { color: var(--good); }
 .training-energy-summary { margin-bottom: 12px; }
 .training-energy-summary-values { display: grid; grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: 12px; }
+.training-energy-method { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .training-energy-metric { display: grid; align-content: start; gap: 4px; min-width: 0; padding: 8px 10px; border-left: 2px solid var(--line); }
 .training-energy-metric span { color: var(--muted); font-size: 12px; line-height: 1.35; }
 .training-energy-metric strong { color: var(--text); font-size: 15px; font-variant-numeric: tabular-nums; }
@@ -599,6 +614,7 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
   .dashboard-view .panel-pad { padding: 12px; }
   .progress-range { align-items: flex-start; flex-direction: column; gap: 6px; }
   .progress-range select { max-width: none; }
+  .progress-nutrition-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .more-actions { grid-template-columns: 1fr; }
   .integration-card-head { align-items: flex-start; flex-direction: column; }
   .integration-choice-grid { grid-template-columns: 1fr; }

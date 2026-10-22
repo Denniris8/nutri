@@ -13,9 +13,9 @@ const { readBiometrics, saveBiometric } = require('./api/biometrics.js');
 const { readPlicometrics, savePlicometric } = require('./api/plicometrics.js');
 const { deleteFoodEntry, readFoodEntries, readPendingFoodDraft, saveFoodEntry } = require('./api/food-entries.js');
 const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError, safeOpenCodeErrorCode, traceFoodSession } = require('./api/opencode-food.js');
-const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, prepareTrainingSession } = require('./api/training-analysis.js');
+const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, prepareTrainingSession, readTrainingPlanPrompt } = require('./api/training-analysis.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
-const { deleteTrainingPlan, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
+const { deleteTrainingPlan, extractPlanDisclosure, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
 const { addNotification, markNotificationRead, notificationInsertSql, readNotifications, resolveNotificationsSql } = require('./api/notifications.js');
 
 const scrypt = promisify(scryptCallback);
@@ -24,6 +24,8 @@ const sessionSeconds = 8 * 60 * 60;
 const termsVersion = 1;
 const bodyLimit = 32768;
 const loginLimit = 10;
+const registrationLimit = 5;
+const registrationWindowMinutes = 60;
 const limitWindow = 15 * 60 * 1000;
 const foodEntryWindow = 5 * 60 * 1000;
 const dummySalt = randomBytes(16);
@@ -122,8 +124,8 @@ function cookieValue(request) {
   return item?.slice(sessionCookie.length + 1) || '';
 }
 
-function setCookie(response, token, maxAge = sessionSeconds) {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+function setCookie(response, token, maxAge = sessionSeconds, request) {
+  const secure = process.env.NODE_ENV === 'production' || request?.socket?.encrypted ? '; Secure' : '';
   response.setHeader('Set-Cookie', `${sessionCookie}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}${secure}`);
 }
 
@@ -187,14 +189,14 @@ function validateRegistration(data) {
   if (heightValue === null || !Number.isFinite(heightValue) || heightValue < 80 || heightValue > 250) throw Object.assign(new Error(), { status: 400 });
   if (!['masculino', 'femenino'].includes(sex) || !dialCode || !/^\+[1-9]\d{6,14}$/.test(e164)) throw Object.assign(new Error(), { status: 400 });
   if (Buffer.byteLength(password, 'utf8') < 12 || Buffer.byteLength(password, 'utf8') > 128) throw Object.assign(new Error(), { status: 400 });
-  return { name, age, sex, height: heightValue.toFixed(2), country, phone, e164, password, isTest: data.isTestAccount === true };
+  return { name, age, sex, height: heightValue.toFixed(2), country, phone, e164, password };
 }
 
 function authError(response, status, message) {
   json(response, status, { error: message });
 }
 
-function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_SECRET, now = () => Math.floor(Date.now() / 1000), openCodeRequest = defaultOpenCodeRequest } = {}) {
+function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_SECRET, now = () => Math.floor(Date.now() / 1000), openCodeRequest = defaultOpenCodeRequest, testAccountPhone = process.env.DASHBOARD_TEST_ACCOUNT_PHONE || '+520000000000', allowTestAccountSeeding = process.env.ALLOW_TEST_ACCOUNT_SEEDING === 'true' && process.env.NODE_ENV !== 'production' } = {}) {
   const attempts = new Map();
 
   async function authenticated(request) {
@@ -204,6 +206,37 @@ function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_S
     const sql = `SELECT s.usuario_id FROM dashboard_sessions s JOIN usuarios u ON u.id=s.usuario_id WHERE s.session_id=${textSql(claims.sid)} AND s.usuario_id=${claims.sub} AND s.revoked_at IS NULL AND s.expires_at > UTC_TIMESTAMP() AND u.activo=1 LIMIT 1;`;
     const userId = await dbQuery(sql);
     return userId === claims.sub ? claims : null;
+  }
+
+  async function reserveLoginAttempt(request, phone) {
+    const ip = request.socket.remoteAddress || 'unknown';
+    const keys = [
+      { kind: 'ip', hash: createHmac('sha256', jwtSecret).update(`login-rate:ip:${ip}`).digest('hex') },
+      ...(phone ? [{ kind: 'phone', hash: createHmac('sha256', jwtSecret).update(`login-rate:phone:${phone}`).digest('hex') }] : []),
+    ];
+    const values = keys.map(({ kind, hash }) => `(${textSql(kind)},UNHEX('${hash}'),UTC_TIMESTAMP(3),1)`).join(',');
+    const scope = keys.map(({ kind, hash }) => `(kind=${textSql(kind)} AND key_hash=UNHEX('${hash}'))`).join(' OR ');
+    const result = await dbQuery(`DELETE FROM auth_login_rate_limits WHERE window_started_at < UTC_TIMESTAMP(3)-INTERVAL 1 DAY ORDER BY window_started_at LIMIT 500;
+INSERT INTO auth_login_rate_limits(kind,key_hash,window_started_at,attempts) VALUES ${values} ON DUPLICATE KEY UPDATE attempts=IF(window_started_at < UTC_TIMESTAMP(3)-INTERVAL 15 MINUTE,1,attempts+1),window_started_at=IF(window_started_at < UTC_TIMESTAMP(3)-INTERVAL 15 MINUTE,UTC_TIMESTAMP(3),window_started_at);
+SELECT COALESCE(MAX(attempts),0),GREATEST(1,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(3),DATE_ADD(MAX(window_started_at),INTERVAL 15 MINUTE))) FROM auth_login_rate_limits WHERE ${scope};`);
+    const [attempts, retryAfter] = result.split(/\r?\n/).at(-1).split('\t').map(Number);
+    return { keys, allowed: Number.isFinite(attempts) && attempts <= loginLimit, retryAfter: Number.isFinite(retryAfter) ? retryAfter : 900 };
+  }
+
+  async function releaseLoginAttempt(keys) {
+    const scope = keys.map(({ kind, hash }) => `(kind=${textSql(kind)} AND key_hash=UNHEX('${hash}'))`).join(' OR ');
+    await dbQuery(`UPDATE auth_login_rate_limits SET attempts=attempts-1 WHERE (${scope}) AND attempts>0;
+DELETE FROM auth_login_rate_limits WHERE (${scope}) AND attempts=0;`);
+  }
+
+  async function reserveRegistrationAttempt(request) {
+    const hash = createHmac('sha256', jwtSecret).update(`registration-rate:ip:${request.socket.remoteAddress || 'unknown'}`).digest('hex');
+    const result = await dbQuery(`/* registration-rate-limit */
+DELETE FROM auth_login_rate_limits WHERE window_started_at < UTC_TIMESTAMP(3)-INTERVAL 1 DAY ORDER BY window_started_at LIMIT 500;
+INSERT INTO auth_login_rate_limits(kind,key_hash,window_started_at,attempts) VALUES ('ip',UNHEX('${hash}'),UTC_TIMESTAMP(3),1) ON DUPLICATE KEY UPDATE attempts=IF(window_started_at < UTC_TIMESTAMP(3)-INTERVAL ${registrationWindowMinutes} MINUTE,1,LEAST(attempts+1,${registrationLimit + 1})),window_started_at=IF(window_started_at < UTC_TIMESTAMP(3)-INTERVAL ${registrationWindowMinutes} MINUTE,UTC_TIMESTAMP(3),window_started_at);
+SELECT attempts,GREATEST(1,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(3),DATE_ADD(window_started_at,INTERVAL ${registrationWindowMinutes} MINUTE))) FROM auth_login_rate_limits WHERE kind='ip' AND key_hash=UNHEX('${hash}') LIMIT 1;`);
+    const [attempts, retryAfter] = result.split(/\r?\n/).at(-1).split('\t').map(Number);
+    return { allowed: Number.isFinite(attempts) && attempts <= registrationLimit, retryAfter: Number.isFinite(retryAfter) ? retryAfter : registrationWindowMinutes * 60 };
   }
 
   async function onboardingPath(userId) {
@@ -237,11 +270,11 @@ function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_S
     return true;
   }
 
-  async function startSession(userId, response) {
+  async function startSession(userId, response, request) {
     const sessionId = randomUUID();
     const sql = `INSERT INTO dashboard_sessions(session_id,usuario_id,expires_at) VALUES (${textSql(sessionId)},${userId},UTC_TIMESTAMP()+INTERVAL ${sessionSeconds} SECOND);`;
     await dbQuery(sql);
-    setCookie(response, signJwt(userId, sessionId, jwtSecret, now()));
+    setCookie(response, signJwt(userId, sessionId, jwtSecret, now()), sessionSeconds, request);
   }
 
   return http.createServer(async (request, response) => {
@@ -277,16 +310,23 @@ function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_S
         try {
           if (route === 'register') {
             const input = validateRegistration(data);
+            const registrationAttempt = await reserveRegistrationAttempt(request);
+            if (!registrationAttempt.allowed) {
+              response.setHeader('Retry-After', registrationAttempt.retryAfter);
+              authError(response, 429, 'Demasiados intentos de registro. Intenta más tarde.');
+              return;
+            }
+            const isTestAccount = allowTestAccountSeeding && input.e164 === testAccountPhone;
             const salt = randomBytes(16);
             const passwordHash = await derivePassword(input.password, salt);
             const sessionId = randomUUID();
-            const testRows = input.isTest ? `INSERT INTO registros_biometricos(usuario_id,fuente,peso_kg,notas) VALUES (@new_user_id,'manual',75,${textSql('Datos ficticios de demostración; reemplázalos por datos personales reales.')});
+            const testRows = isTestAccount ? `INSERT INTO registros_biometricos(usuario_id,fuente,peso_kg,notas) VALUES (@new_user_id,'manual',75,${textSql('Datos ficticios de demostración; reemplázalos por datos personales reales.')});
 INSERT INTO registros_plicometro(usuario_id,fecha,triceps_mm,biceps_mm,subescapular_mm,suprailiaco_mm,abdominal_mm,muslo_anterior_mm,pantorrilla_mm) VALUES (@new_user_id,UTC_DATE(),10,5,12,9,14,15,8);
 INSERT INTO registros_comidas(usuario_id,request_id,fecha_consumo,descripcion_original,estado,creado_en) VALUES (@new_user_id,UUID(),UTC_DATE(),${textSql('DATO SINTÉTICO DE PRUEBA: desayuno de ejemplo; alimentos y cantidades no son consumo real.')},'pendiente',UTC_TIMESTAMP(3));
 INSERT INTO planes_entrenamiento(usuario_id,objetivos,contenido,creado_en) VALUES (@new_user_id,${textSql('DATO SINTÉTICO DE PRUEBA: objetivo de demostración; no es una recomendación personal.')},${textSql('DATO SINTÉTICO DE PRUEBA: plan de demostración; no es una recomendación personalizada.')},UTC_TIMESTAMP(3));
 ` : '';
             const sql = `START TRANSACTION;
-INSERT INTO usuarios(nombre,edad,sexo,estatura_cm,pais_iso,celular_e164,password_salt,password_hash,es_prueba) VALUES (${textSql(input.name)},${input.age},${textSql(input.sex)},${input.height ?? 'NULL'},${textSql(input.country)},${textSql(input.e164)},UNHEX('${salt.toString('hex')}'),UNHEX('${passwordHash.toString('hex')}'),${input.isTest ? 1 : 0});
+INSERT INTO usuarios(nombre,edad,sexo,estatura_cm,pais_iso,celular_e164,password_salt,password_hash,es_prueba) VALUES (${textSql(input.name)},${input.age},${textSql(input.sex)},${input.height ?? 'NULL'},${textSql(input.country)},${textSql(input.e164)},UNHEX('${salt.toString('hex')}'),UNHEX('${passwordHash.toString('hex')}'),${isTestAccount ? 1 : 0});
 SET @new_user_id=LAST_INSERT_ID();
 ${testRows}
 INSERT INTO dashboard_sessions(session_id,usuario_id,expires_at) VALUES (${textSql(sessionId)},@new_user_id,UTC_TIMESTAMP()+INTERVAL ${sessionSeconds} SECOND);
@@ -295,25 +335,49 @@ SELECT @new_user_id;`;
             const output = await dbQuery(sql);
             const userId = output.split(/\s+/).at(-1);
             if (!/^\d+$/.test(userId || '')) throw new Error('registration_result');
-            setCookie(response, signJwt(userId, sessionId, jwtSecret, now()));
+            setCookie(response, signJwt(userId, sessionId, jwtSecret, now()), sessionSeconds, request);
             json(response, 201, { ok: true });
             return;
           }
 
           const phone = typeof data.phone === 'string' ? data.phone.replace(/[\s()-]/g, '') : '';
           const password = typeof data.password === 'string' ? data.password : '';
+          const reservation = await reserveLoginAttempt(request, /^\+[1-9]\d{6,14}$/.test(phone) ? phone : null);
+          if (!reservation.allowed) {
+            await releaseLoginAttempt(reservation.keys);
+            response.setHeader('Retry-After', reservation.retryAfter);
+            authError(response, 429, 'Demasiados intentos. Intenta más tarde.');
+            return;
+          }
           if (!/^\+[1-9]\d{6,14}$/.test(phone) || Buffer.byteLength(password) > 128 || !password) {
+            await releaseLoginAttempt(reservation.keys);
             authError(response, 400, 'Datos no válidos.'); return;
           }
-          const result = await dbQuery(`SELECT id,HEX(password_salt),HEX(password_hash),activo FROM usuarios WHERE celular_e164=${textSql(phone)} LIMIT 1;`);
-          const [id, saltHex, hashHex, active] = result.split('\t');
-          if (!id || active !== '1' || !await passwordMatches(password, saltHex, hashHex)) { authError(response, 401, 'Celular o contraseña incorrectos.'); return; }
-          await startSession(id, response);
+          let result;
+          let passwordValid;
+          try {
+            result = await dbQuery(`SELECT id,HEX(password_salt),HEX(password_hash),activo FROM usuarios WHERE celular_e164=${textSql(phone)} LIMIT 1;`);
+            const [, saltHex, hashHex] = result.split('\t');
+            passwordValid = await passwordMatches(password, saltHex, hashHex);
+          } catch (error) {
+            await releaseLoginAttempt(reservation.keys);
+            throw error;
+          }
+          const [id, , , active] = result.split('\t');
+          if (!id || active !== '1' || !passwordValid) {
+            const traceId = randomUUID();
+            try {
+              await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('auth')},${textSql(traceId)},${textSql('login_failed')},${textSql('credentials')},${textSql('POST /api/auth/login')},${textSql('POST')},${textSql('/api/auth/login')},${textSql('AUTH_INVALID_CREDENTIALS')},${textSql('AuthenticationError')},401,${textSql('Inicio de sesión rechazado.')});`);
+            } catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
+            authError(response, 401, 'Celular o contraseña incorrectos.'); return;
+          }
+          await releaseLoginAttempt(reservation.keys);
+          await startSession(id, response, request);
           json(response, 200, { ok: true });
           return;
         } catch (error) {
           if (error.status) { authError(response, error.status, 'Datos no válidos.'); return; }
-          if (/Duplicate entry|ER_DUP_ENTRY/.test(error.message)) { authError(response, 409, 'Ya existe una cuenta con ese celular.'); return; }
+          if (/Duplicate entry|ER_DUP_ENTRY/.test(error.message || '')) { authError(response, 400, 'Datos no válidos.'); return; }
           authError(response, 503, 'No se pudo completar la solicitud.');
           return;
         }
@@ -323,7 +387,7 @@ SELECT @new_user_id;`;
         try {
           const claims = await authenticated(request);
           if (claims) await dbQuery(`UPDATE dashboard_sessions SET revoked_at=UTC_TIMESTAMP() WHERE session_id=${textSql(claims.sid)} AND revoked_at IS NULL;`);
-          setCookie(response, '', 0);
+          setCookie(response, '', 0, request);
           json(response, 200, { ok: true });
         } catch { authError(response, 503, 'No se pudo completar la solicitud.'); }
         return;
@@ -347,7 +411,7 @@ SELECT @new_user_id;`;
           await deleteFoodOpenCodeSession({ userId: claims.sub, dbQuery, requestOpenCode: openCodeRequest });
           const deleted = await dbQuery(`DELETE FROM usuarios WHERE id=${claims.sub}; SELECT ROW_COUNT();`);
           if (deleted.split(/\s+/).at(-1) !== '1') { authError(response, 404, 'La cuenta ya no existe.'); return; }
-          setCookie(response, '', 0);
+          setCookie(response, '', 0, request);
           json(response, 200, { ok: true });
         } catch { authError(response, 503, 'No se pudo eliminar la cuenta.'); }
         return;
@@ -376,7 +440,7 @@ SELECT @new_user_id;`;
 INSERT INTO dashboard_terms_decisions(usuario_id,terms_version,decision,decided_at) VALUES (${claims.sub},${termsVersion},${textSql(decision)},UTC_TIMESTAMP()) AS incoming ON DUPLICATE KEY UPDATE decision=incoming.decision,decided_at=incoming.decided_at;
 ${sessionUpdate}
 COMMIT;`);
-        if (decision === 'rejected') setCookie(response, '', 0);
+        if (decision === 'rejected') setCookie(response, '', 0, request);
         json(response, 200, { ok: true, decision });
       } catch { authError(response, 503, 'No se pudo guardar la decisión.'); }
       return;
@@ -588,6 +652,66 @@ COMMIT;`);
       return;
     }
 
+    if (pathname === '/api/progress/nutrition') {
+      if (request.method !== 'GET') { response.writeHead(405, { Allow: 'GET' }).end(); return; }
+      let claims;
+      try { claims = await authenticated(request); }
+      catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
+      if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
+      const url = new URL(request.url, 'http://localhost');
+      const days = Number(url.searchParams.get('dias'));
+      const end = url.searchParams.get('hasta');
+      if (![7, 14, 30].includes(days) || !/^\d{4}-\d{2}-\d{2}$/.test(end || '') || Number.isNaN(Date.parse(`${end}T00:00:00Z`)) || new Date(`${end}T00:00:00Z`).toISOString().slice(0, 10) !== end) {
+        authError(response, 400, 'Periodo no válido.'); return;
+      }
+      const startOffset = days - 1;
+      const periodOffset = days * 2 - 1;
+      const currentStart = `DATE_SUB(${textSql(end)},INTERVAL ${startOffset} DAY)`;
+      const previousStart = `DATE_SUB(${textSql(end)},INTERVAL ${periodOffset} DAY)`;
+      const currentDates = (column) => column.startsWith('DATE(')
+        ? `${column.slice(5, -1)}>=CONCAT(${currentStart},' 00:00:00') AND ${column.slice(5, -1)}<DATE_ADD(${textSql(end)},INTERVAL 1 DAY)`
+        : `${column} BETWEEN ${currentStart} AND ${textSql(end)}`;
+      const previousDates = (column) => column.startsWith('DATE(')
+        ? `${column.slice(5, -1)}>=CONCAT(${previousStart},' 00:00:00') AND ${column.slice(5, -1)}<CONCAT(${currentStart},' 00:00:00')`
+        : `${column} BETWEEN ${previousStart} AND DATE_SUB(${textSql(end)},INTERVAL ${days} DAY)`;
+      try {
+        const result = await dbQuery(`WITH daily AS (
+  SELECT fecha_consumo,COUNT(*) AS meals,
+    COUNT(*)=COUNT(energia_kcal) AND COUNT(*)=COUNT(proteina_g) AND COUNT(*)=COUNT(carbohidratos_g) AND COUNT(*)=COUNT(grasa_g) AS complete,
+    SUM(energia_kcal) AS kcal,SUM(proteina_g) AS protein,SUM(carbohidratos_g) AS carbs,SUM(grasa_g) AS fat
+  FROM registros_comidas WHERE usuario_id=${claims.sub} AND estado='completado'
+    AND fecha_consumo BETWEEN DATE_SUB(${textSql(end)},INTERVAL ${periodOffset} DAY) AND ${textSql(end)}
+  GROUP BY fecha_consumo
+)
+SELECT JSON_OBJECT('days',${days},'current',JSON_OBJECT(
+  'loggedDays',(SELECT COUNT(DISTINCT fecha_consumo) FROM registros_comidas WHERE usuario_id=${claims.sub} AND ${currentDates('fecha_consumo')}),
+  'completeDays',COUNT(CASE WHEN fecha_consumo>=${currentStart} AND complete THEN 1 END),
+  'incompleteDays',COUNT(CASE WHEN fecha_consumo>=${currentStart} AND NOT complete THEN 1 END),
+  'kcal',AVG(CASE WHEN fecha_consumo>=${currentStart} AND complete THEN kcal END),
+  'protein',AVG(CASE WHEN fecha_consumo>=${currentStart} AND complete THEN protein END),
+  'carbs',AVG(CASE WHEN fecha_consumo>=${currentStart} AND complete THEN carbs END),
+  'fat',AVG(CASE WHEN fecha_consumo>=${currentStart} AND complete THEN fat END)),
+  'previous',JSON_OBJECT('loggedDays',(SELECT COUNT(DISTINCT fecha_consumo) FROM registros_comidas WHERE usuario_id=${claims.sub} AND ${previousDates('fecha_consumo')}),'completeDays',COUNT(CASE WHEN fecha_consumo<${currentStart} AND complete THEN 1 END),
+  'incompleteDays',COUNT(CASE WHEN fecha_consumo<${currentStart} AND NOT complete THEN 1 END),
+  'kcal',AVG(CASE WHEN fecha_consumo<${currentStart} AND complete THEN kcal END),
+  'protein',AVG(CASE WHEN fecha_consumo<${currentStart} AND complete THEN protein END),
+  'carbs',AVG(CASE WHEN fecha_consumo<${currentStart} AND complete THEN carbs END),
+  'fat',AVG(CASE WHEN fecha_consumo<${currentStart} AND complete THEN fat END)),
+  'quality',JSON_OBJECT('currentPending',(SELECT COUNT(*) FROM registros_comidas WHERE usuario_id=${claims.sub} AND estado<>'completado' AND ${currentDates('fecha_consumo')}),'previousPending',(SELECT COUNT(*) FROM registros_comidas WHERE usuario_id=${claims.sub} AND estado<>'completado' AND ${previousDates('fecha_consumo')}),'macroSources',JSON_OBJECT('usda',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.fuente_macros='usda_fdc'),'declared',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.fuente_macros='declarado_usuario'),'web',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.fuente_macros='webfetch'),'opencode',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.fuente_macros='opencode_estimado'),'estimated',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.estado_macros='estimado'))),
+  'goals',(SELECT JSON_OBJECT('kcal',objetivo_calorias_kcal,'protein',objetivo_proteinas_g,'carbs',objetivo_carbohidratos_g,'fat',objetivo_grasas_g) FROM planes_entrenamiento WHERE usuario_id=${claims.sub} ORDER BY creado_en DESC,id DESC LIMIT 1)) FROM daily;`);
+        const body = await dbQuery(`SELECT JSON_OBJECT('current',JSON_OBJECT('measurements',(SELECT COUNT(*) FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')}),'firstKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1),'firstDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1)), 'previous',JSON_OBJECT('measurements',(SELECT COUNT(*) FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')}),'firstKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1),'firstDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1)));`);
+        const activity = await dbQuery(`SELECT JSON_OBJECT('current',JSON_OBJECT('stepDays',(SELECT COUNT(*) FROM registros_pasos_diarios WHERE usuario_id=${claims.sub} AND ${currentDates('fecha')}),'avgSteps',(SELECT AVG(pasos) FROM registros_pasos_diarios WHERE usuario_id=${claims.sub} AND ${currentDates('fecha')}),'trainingSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(creado_en)')}),'manualSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${currentDates('DATE(creado_en)')}),'deviceSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${currentDates('DATE(creado_en)')}),'manualMinutes',(SELECT SUM(duracion_minutos) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${currentDates('DATE(creado_en)')}),'deviceMinutes',(SELECT SUM(duracion_minutos) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${currentDates('DATE(creado_en)')}),'manualKcal',(SELECT SUM(energia_kcal) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${currentDates('DATE(creado_en)')}),'deviceKcal',(SELECT SUM(energia_kcal) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${currentDates('DATE(creado_en)')})), 'previous',JSON_OBJECT('stepDays',(SELECT COUNT(*) FROM registros_pasos_diarios WHERE usuario_id=${claims.sub} AND ${previousDates('fecha')}),'avgSteps',(SELECT AVG(pasos) FROM registros_pasos_diarios WHERE usuario_id=${claims.sub} AND ${previousDates('fecha')}),'trainingSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(creado_en)')}),'manualSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${previousDates('DATE(creado_en)')}),'deviceSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${previousDates('DATE(creado_en)')}),'manualMinutes',(SELECT SUM(duracion_minutos) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${previousDates('DATE(creado_en)')}),'deviceMinutes',(SELECT SUM(duracion_minutos) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${previousDates('DATE(creado_en)')}),'manualKcal',(SELECT SUM(energia_kcal) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${previousDates('DATE(creado_en)')}),'deviceKcal',(SELECT SUM(energia_kcal) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${previousDates('DATE(creado_en)')})));`);
+        const plicometric = await dbQuery(`SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE usuario_id=${claims.sub} AND ${currentDates('fecha')}),'previous',(SELECT COUNT(*) FROM registros_plicometro WHERE usuario_id=${claims.sub} AND ${previousDates('fecha')}));`);
+        json(response, 200, { nutrition: JSON.parse(result), body: JSON.parse(body), activity: JSON.parse(activity), plicometric: JSON.parse(plicometric) });
+      } catch {
+        const traceId = randomUUID();
+        try { await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('dashboard-progress')},${textSql(traceId)},${textSql('progress_data_load_failed')},${textSql('read')},${textSql('GET /api/progress/nutrition')},${textSql('GET')},${textSql('/api/progress/nutrition')},${textSql('PROGRESS_DATA_READ_FAILED')},${textSql('Error')},503,${textSql('No se pudieron consultar los datos de progreso.')});`); }
+        catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
+        authError(response, 503, 'No se pudo cargar el resumen nutricional.');
+      }
+      return;
+    }
+
     if (pathname === '/api/food/session') {
       if (!['POST', 'DELETE'].includes(request.method)) { response.writeHead(405, { Allow: 'POST, DELETE' }).end(); return; }
       if (!sameOrigin(request)) { authError(response, 403, 'Solicitud no permitida.'); return; }
@@ -727,12 +851,13 @@ COMMIT;`);
       let data;
       try { data = await bodyJson(request); }
       catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
+      const traceId = randomUUID();
       try {
         const [profile, preferences, biometricRows, plicometricRows, ageRow] = await Promise.all([
           readAccountProfile({ userId: claims.sub, dbQuery }),
           readPreferences({ userId: claims.sub, dbQuery }),
-          dbQuery(`SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT('measuredAt',DATE_FORMAT(medido_en,'%Y-%m-%d %H:%i:%s'),'source',fuente,'weightKg',peso_kg,'bodyAge',edad_corporal,'bodyFatPct',grasa_pct,'restingMetabolismKcal',metabolismo_basal_kcal,'visceralFat',grasa_visceral,'bmi',imc,'musclePct',musculo_pct,'notes',notas)),JSON_ARRAY()) FROM (SELECT medido_en,fuente,peso_kg,edad_corporal,grasa_pct,metabolismo_basal_kcal,grasa_visceral,imc,musculo_pct,notas FROM registros_biometricos WHERE usuario_id=${claims.sub} ORDER BY medido_en DESC,id DESC) AS biometric_records;`),
-          dbQuery(`SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT('fecha',fecha,'tricepsMm',triceps_mm,'bicepsMm',biceps_mm,'subescapularMm',subescapular_mm,'suprailiacoMm',suprailiaco_mm,'abdominalMm',abdominal_mm,'musloAnteriorMm',muslo_anterior_mm,'pantorrillaMm',pantorrilla_mm)),JSON_ARRAY()) FROM (SELECT id,fecha,triceps_mm,biceps_mm,subescapular_mm,suprailiaco_mm,abdominal_mm,muslo_anterior_mm,pantorrilla_mm FROM registros_plicometro WHERE usuario_id=${claims.sub} ORDER BY fecha DESC,id DESC) AS plicometric_records;`),
+          dbQuery(`SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT('measuredAt',DATE_FORMAT(medido_en,'%Y-%m-%d %H:%i:%s'),'source',fuente,'weightKg',peso_kg,'bodyAge',edad_corporal,'bodyFatPct',grasa_pct,'restingMetabolismKcal',metabolismo_basal_kcal,'visceralFat',grasa_visceral,'bmi',imc,'musclePct',musculo_pct)),JSON_ARRAY()) FROM (SELECT medido_en,fuente,peso_kg,edad_corporal,grasa_pct,metabolismo_basal_kcal,grasa_visceral,imc,musculo_pct FROM registros_biometricos WHERE usuario_id=${claims.sub} ORDER BY medido_en DESC,id DESC LIMIT 24) AS biometric_records;`),
+          dbQuery(`SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT('fecha',fecha,'tricepsMm',triceps_mm,'bicepsMm',biceps_mm,'subescapularMm',subescapular_mm,'suprailiacoMm',suprailiaco_mm,'abdominalMm',abdominal_mm,'musloAnteriorMm',muslo_anterior_mm,'pantorrillaMm',pantorrilla_mm)),JSON_ARRAY()) FROM (SELECT id,fecha,triceps_mm,biceps_mm,subescapular_mm,suprailiaco_mm,abdominal_mm,muslo_anterior_mm,pantorrilla_mm FROM registros_plicometro WHERE usuario_id=${claims.sub} ORDER BY fecha DESC,id DESC LIMIT 24) AS plicometric_records;`),
           dbQuery(`SELECT JSON_OBJECT('age',edad) FROM usuarios WHERE id=${claims.sub} LIMIT 1;`),
         ]);
         const previousPlanRow = await dbQuery(`SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ'),'goals',objetivos,'content',contenido,'macros',JSON_OBJECT('proteinas_g',objetivo_proteinas_g,'carbohidratos_g',objetivo_carbohidratos_g,'grasas_g',objetivo_grasas_g,'calorias_kcal',objetivo_calorias_kcal)) FROM planes_entrenamiento WHERE usuario_id=${claims.sub} ORDER BY creado_en DESC,id DESC LIMIT 1;`);
@@ -759,9 +884,19 @@ COMMIT;`);
         json(response, 200, generated);
       } catch (error) {
         if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'error', title: 'No se pudo generar el plan', message: 'Revisa el modal de plan e inténtalo de nuevo.', dbQuery, textSql }); } catch {}
+        const status = error.status || 502;
+        if (status >= 500) {
+          const code = typeof error.code === 'string' && /^[A-Z][A-Z0-9_]{0,55}$/.test(error.code) ? error.code : 'TRAINING_PLAN_GENERATION_FAILED';
+          const name = typeof error.name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error.name) ? error.name : 'Error';
+          try {
+            await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,usuario_id,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('training-opencode')},${textSql(traceId)},${textSql('plan_generation_failed')},${textSql('generation')},${textSql('POST /api/training-plan')},${textSql('POST')},${textSql('/api/training-plan')},${claims.sub},${textSql(code)},${textSql(name)},${status},${textSql('No se pudo generar el plan de entrenamiento.')});`);
+          } catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
+        }
         const cleanupFailed = error.code === 'TRAINING_PLAN_SESSION_CLEANUP';
         const sessionOpenFailed = error.code === 'TRAINING_PLAN_SESSION_OPEN';
-        authError(response, error.status || 502, cleanupFailed ? 'No se pudo eliminar la sesión temporal de OpenCode; el plan no se guardó en la aplicación.' : sessionOpenFailed ? error.message : error.status ? error.message : 'No se pudo generar el plan de entrenamiento.');
+        const message = cleanupFailed ? 'No se pudo eliminar la sesión temporal de OpenCode; el plan no se guardó en la aplicación.' : sessionOpenFailed ? error.message : error.status ? error.message : 'No se pudo generar el plan de entrenamiento.';
+        if (status >= 500) json(response, status, { error: message, traceId });
+        else authError(response, status, message);
       }
       return;
     }
@@ -820,7 +955,14 @@ COMMIT;`);
       try { data = await bodyJson(request, 131072); }
       catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
       try {
-        const saved = await saveTrainingPlan({ userId: claims.sub, goals: data.goals, plan: data.plan, macros: data.macros, dbQuery, textSql });
+        const disclosure = extractPlanDisclosure(await readTrainingPlanPrompt());
+        const [profile, factsRow] = await Promise.all([
+          readAccountProfile({ userId: claims.sub, dbQuery }),
+          dbQuery(`SELECT JSON_OBJECT('age',(SELECT edad FROM usuarios WHERE id=${claims.sub} LIMIT 1),'hasWeight',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND peso_kg IS NOT NULL),'bodyFacts',JSON_OBJECT('bmi',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND imc IS NOT NULL),'bodyFatPct',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND grasa_pct IS NOT NULL),'musclePct',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND musculo_pct IS NOT NULL),'visceralFat',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND grasa_visceral IS NOT NULL),'bodyAge',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND edad_corporal IS NOT NULL),'restingMetabolismKcal',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND metabolismo_basal_kcal IS NOT NULL)),'plicometryFacts',JSON_OBJECT('tricepsMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND triceps_mm IS NOT NULL),'bicepsMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND biceps_mm IS NOT NULL),'subescapularMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND subescapular_mm IS NOT NULL),'suprailiacoMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND suprailiaco_mm IS NOT NULL),'abdominalMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND abdominal_mm IS NOT NULL),'musloAnteriorMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND muslo_anterior_mm IS NOT NULL),'pantorrillaMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND pantorrilla_mm IS NOT NULL)));`),
+        ]);
+        const facts = JSON.parse(factsRow);
+        const context = { profile: { age: facts.age, sex: profile?.sex ?? null, heightCm: profile?.heightCm ?? null, restingMetabolismKcal: profile?.restingMetabolismKcal ?? null }, hasWeight: facts.hasWeight, bodyFacts: facts.bodyFacts, plicometryFacts: facts.plicometryFacts };
+        const saved = await saveTrainingPlan({ userId: claims.sub, requestId: data.runId, goals: data.goals, plan: data.plan, macros: data.macros, disclosure, context, dbQuery, textSql });
         if (typeof data.runId === 'string') try {
           await deleteTrainingPlanSession({ userId: claims.sub, runId: data.runId, requestOpenCode: openCodeRequest });
         } catch {
@@ -829,12 +971,21 @@ COMMIT;`);
             await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,usuario_id,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('training-opencode')},${textSql(traceId)},${textSql('session_cleanup_failed')},${textSql('after_plan_saved')},${textSql('POST /api/training-plans')},${textSql('POST')},${textSql('/api/training-plans')},${claims.sub},${textSql('TRAINING_PLAN_SESSION_CLEANUP')},${textSql('Error')},201,${textSql('No se pudo eliminar la sesión OpenCode después de guardar el plan.')});`);
           } catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
         }
-        try { await dbQuery(`${resolveNotificationsSql({ userId: claims.sub, category: 'plan', state: 'generado', textSql })};`); } catch {}
-        if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'guardado', title: 'Plan guardado', message: 'Tu plan de entrenamiento quedó guardado.', referenceId: saved.id, dbQuery, textSql }); } catch {}
+        if (saved.inserted) {
+          try { await dbQuery(`${resolveNotificationsSql({ userId: claims.sub, category: 'plan', state: 'generado', textSql })};`); } catch {}
+          if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'guardado', title: 'Plan guardado', message: 'Tu plan de entrenamiento quedó guardado.', referenceId: saved.id, dbQuery, textSql }); } catch {}
+        }
         json(response, 201, { ok: true, ...saved });
       } catch (error) {
         if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'error', title: 'No se pudo guardar el plan', message: 'Intenta guardar el plan nuevamente.', dbQuery, textSql }); } catch {}
-        authError(response, error.status || 503, error.status ? error.message : 'No se pudo guardar el plan.');
+        const traceId = randomUUID();
+        const status = Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : 503;
+        const code = typeof error.code === 'string' && /^[A-Z][A-Z0-9_]{0,55}$/.test(error.code) ? error.code : 'TRAINING_PLAN_SAVE_FAILED';
+        const name = typeof error.name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error.name) ? error.name : 'Error';
+        try {
+          await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,usuario_id,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('training-plan-save')},${textSql(traceId)},${textSql('plan_save_failed')},${textSql('persistence')},${textSql('POST /api/training-plans')},${textSql('POST')},${textSql('/api/training-plans')},${claims.sub},${textSql(code)},${textSql(name)},${status},${textSql('No se pudo guardar el plan de entrenamiento.')});`);
+        } catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
+        json(response, status, { error: error.status ? error.message : 'No se pudo guardar el plan.', traceId });
       }
       return;
     }

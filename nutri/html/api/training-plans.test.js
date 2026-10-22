@@ -1,6 +1,9 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { deleteTrainingPlan, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan, validateTrainingPlan } = require('./training-plans.js');
+const requestId = '123e4567-e89b-42d3-a456-426614174000';
+const disclosure = 'Las metas de calorías y carbohidratos se ajustan según los entrenamientos registrados para el día seleccionado.';
+const plan = `[Datos Registrados]\nEdad registrada.\n[Estimaciones Calculadas]\nMacros estimados.\n[Supuestos Adoptados]\nDisponibilidad asumida.\n${disclosure}`;
 
 test('previous training plan is summarized as a bounded list', () => {
   const summary = summarizeTrainingPlan({
@@ -21,23 +24,35 @@ test('saved training plan is owned by the authenticated user and records its UTC
   let sql;
   const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
   const result = await saveTrainingPlan({
-    userId: '27', goals: 'Ganar fuerza', plan: '# Plan', macros,
+    userId: '27', requestId, goals: 'Ganar fuerza', plan, macros, disclosure,
     textSql: (value) => `CONVERT(0x${Buffer.from(value).toString('hex')} USING utf8mb4)`,
-    dbQuery: async (query) => { sql = query; return '{"id":5,"createdAt":"2026-10-15T12:00:00Z"}'; },
+    dbQuery: async (query) => { sql = query; return JSON.stringify({ id: 5, requestId, createdAt: '2026-10-15T12:00:00Z', goals: 'Ganar fuerza', plan, macros, inserted: true }); },
   });
-  assert.match(sql, /INSERT INTO planes_entrenamiento\(usuario_id,objetivos,contenido,objetivo_proteinas_g,objetivo_carbohidratos_g,objetivo_grasas_g,objetivo_calorias_kcal,creado_en\) VALUES \(27,/);
+  assert.match(sql, /INSERT INTO planes_entrenamiento\(usuario_id,request_id,objetivos,contenido,/);
+  assert.match(sql, /ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID\(id\)/);
   assert.doesNotMatch(sql, /objetivo_entrenamiento_/);
   assert.match(sql, /,140\.00,220\.00,65\.00,2000\.0,UTC_TIMESTAMP/);
   assert.match(sql, /UTC_TIMESTAMP\(3\)/);
   assert.match(sql, /WHERE id=LAST_INSERT_ID\(\) AND usuario_id=27/);
-  assert.deepEqual(result, { id: 5, createdAt: '2026-10-15T12:00:00Z' });
+  assert.deepEqual(result, { id: 5, requestId, createdAt: '2026-10-15T12:00:00Z', inserted: true });
+});
+
+test('reusing an idempotency key with a different plan is rejected', async () => {
+  const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
+  await assert.rejects(saveTrainingPlan({
+    userId: '27', requestId, goals: 'Ganar fuerza', plan, macros, disclosure,
+    textSql: (value) => `CONVERT(0x${Buffer.from(value).toString('hex')} USING utf8mb4)`,
+    dbQuery: async () => JSON.stringify({ id: 5, requestId, createdAt: '2026-10-15T12:00:00Z', goals: 'Otro objetivo', plan, macros, inserted: false }),
+  }), { status: 409 });
 });
 
 test('training plan persistence rejects oversized or empty input', () => {
   const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
-  assert.throws(() => validateTrainingPlan({ userId: '27', goals: '', plan: '# Plan', macros }), { status: 400 });
-  assert.throws(() => validateTrainingPlan({ userId: '27', goals: 'Objetivo', plan: 'x'.repeat(30001), macros }), { status: 400 });
-  assert.throws(() => validateTrainingPlan({ userId: '27', goals: 'Objetivo', plan: '# Plan', macros: { ...macros, proteinas_g: '140 g' } }), { status: 400 });
+  assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: '', plan, macros, disclosure }), { status: 400 });
+  assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan: 'x'.repeat(30001), macros, disclosure }), { status: 400 });
+  assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan, macros: { ...macros, proteinas_g: '140 g' }, disclosure }), { status: 400 });
+  assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan: '# Plan', macros, disclosure }), /distinguir datos/);
+  assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan, macros: { ...macros, calorias_kcal: 2800 }, disclosure }), /4\/4\/9/);
 });
 
 test('saved plan listing is scoped to the authenticated user and limited to the latest three', async () => {

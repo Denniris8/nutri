@@ -43,6 +43,16 @@ CREATE TABLE `dashboard_sessions` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
 ;
 
+CREATE TABLE `auth_login_rate_limits` (
+  `kind` enum('ip','phone') CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  `key_hash` binary(32) NOT NULL,
+  `window_started_at` datetime(3) NOT NULL,
+  `attempts` smallint unsigned NOT NULL,
+  PRIMARY KEY (`kind`,`key_hash`),
+  KEY `idx_auth_login_rate_limits_window` (`window_started_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+;
+
 CREATE TABLE `dashboard_terms_decisions` (
   `usuario_id` bigint unsigned NOT NULL,
   `terms_version` smallint unsigned NOT NULL,

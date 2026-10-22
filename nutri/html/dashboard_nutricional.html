@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <meta name="theme-color" content="#101411">
   <title>Dashboard Nutricional</title>
-  <link rel="stylesheet" href="/dashboard_nutricional.css?v=45">
+  <link rel="stylesheet" href="/dashboard_nutricional.css?v=46">
   <link rel="stylesheet" href="/notifications.css">
 </head>
 <body>
@@ -58,6 +58,7 @@
       <section class="cards" id="macroCards" aria-label="Macros consumidos en el día nutricional seleccionado" aria-live="polite"></section>
       <section class="panel panel-pad training-energy-summary" aria-labelledby="trainingEnergySummaryTitle">
         <div class="section-head"><div><h2 id="trainingEnergySummaryTitle">Gasto y balance parcial</h2><p>El balance usa el metabolismo basal y el ejercicio registrado; no equivale al gasto total diario.</p></div></div>
+        <p class="training-energy-method">Las sesiones manuales se estiman como gasto neto. Garmin se muestra con las kcal reportadas por el dispositivo; la fuente no especifica aquí si son netas o brutas, por lo que ambas cifras se suman sin normalización.</p>
         <div id="trainingEnergySummaryValues" class="training-energy-summary-values"></div>
         <p id="trainingEnergySummaryWarning" class="macro-training-warning" hidden></p>
       </section>
@@ -88,6 +89,29 @@
       <section class="panel panel-pad progress-chart">
         <div class="section-head"><div><h2>Objetivo y consumo</h2><p>Últimos días disponibles en el periodo.</p></div></div>
         <div class="chart-frame"><div class="chart-scroll"><div class="trend-grid" id="trendCharts"></div></div></div>
+      </section>
+      <section class="panel panel-pad progress-nutrition" aria-labelledby="progressNutritionTitle" aria-busy="true">
+        <div class="section-head"><div><h2 id="progressNutritionTitle">Nutrición</h2><p id="progressNutritionCaption">Promedio de días con registros completos, frente a tu plan guardado.</p></div></div>
+        <div id="progressNutritionMetrics" class="progress-nutrition-metrics" role="status" aria-live="polite">Cargando datos nutricionales…</div>
+        <div id="progressNutritionChart" class="progress-chart-rows" aria-label="Consumo promedio como porcentaje de la meta"></div>
+      </section>
+      <section class="panel panel-pad progress-period-summary" aria-labelledby="progressSummaryTitle" aria-busy="true">
+        <div class="section-head"><div><h2 id="progressSummaryTitle">Resumen del periodo</h2><p>Comparación con el periodo anterior de igual duración.</p></div></div>
+        <p id="progressSummaryText" role="status" aria-live="polite">Cargando resumen…</p>
+        <div id="progressSummaryChart" class="progress-chart-rows" aria-label="Comparación de energía entre periodos"></div>
+      </section>
+      <section class="panel panel-pad progress-correlation" aria-labelledby="progressCorrelationTitle">
+        <div class="section-head"><div><h2 id="progressCorrelationTitle">Ingesta y evolución del peso</h2><p>Lecturas observadas en periodos iguales; relación descriptiva, no causal.</p></div></div>
+        <div id="progressCorrelationMetrics" class="progress-nutrition-metrics" role="status" aria-live="polite">Cargando relación entre ingesta y peso…</div>
+      </section>
+      <section class="panel panel-pad progress-activity" aria-labelledby="progressActivityTitle">
+        <div class="section-head"><div><h2 id="progressActivityTitle">Actividad y entrenamiento</h2><p>Pasos, duración y kcal; sesiones manuales y del dispositivo separadas. No se guardan cargas/volumen de fuerza.</p></div></div>
+        <div id="progressActivityMetrics" class="progress-nutrition-metrics" role="status" aria-live="polite">Cargando actividad…</div>
+        <div id="progressActivityChart" class="progress-chart-rows" aria-label="Comparación de pasos y entrenamientos entre periodos"></div>
+      </section>
+      <section class="panel panel-pad progress-quality" aria-labelledby="progressQualityTitle">
+        <div class="section-head"><div><h2 id="progressQualityTitle">Cobertura y calidad de datos</h2><p>Días y mediciones disponibles; los días sin registros no cuentan como cero.</p></div></div>
+        <div id="progressQualityMetrics" class="progress-quality-metrics" role="status" aria-live="polite">Cargando cobertura…</div>
       </section>
       <details class="panel panel-pad biometric-panel">
         <summary class="biometric-head collapsible-summary">
@@ -560,6 +584,6 @@
     </div>
   </dialog>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
-  <script src="/onboarding-flow.js?v=session-expired-login-1" defer></script>
+  <script src="/onboarding-flow.js?v=progress-nutrition-2" defer></script>
 </body>
 </html>

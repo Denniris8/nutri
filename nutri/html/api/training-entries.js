@@ -153,20 +153,34 @@ function calculateTrainingEnergy(records) {
   const manualNetKcal = manual.reduce((sum, record) => {
     if (duplicateManual.has(record) || ambiguousManual.has(record)) return sum;
     const { met, weightKg, durationMinutes } = record;
-    if (![met, weightKg, durationMinutes].every((value) => Number.isFinite(Number(value)))) { uncalculableManualCount += 1; return sum; }
+    if (met == null || weightKg == null || durationMinutes == null
+      || !Number.isFinite(Number(met)) || Number(met) <= 0 || Number(met) > 30
+      || !Number.isFinite(Number(weightKg)) || Number(weightKg) < 20 || Number(weightKg) > 400
+      || !Number.isFinite(Number(durationMinutes)) || Number(durationMinutes) <= 0 || Number(durationMinutes) > 1440) {
+      uncalculableManualCount += 1;
+      return sum;
+    }
     return sum + Math.max(0, (Number(met) - 1) * 3.5 * Number(weightKg) / 200 * Number(durationMinutes));
   }, 0);
+  let uncalculableDeviceCount = 0;
   const deviceReportedKcal = device.reduce((sum, record) => {
-    if (ambiguousDevice.has(record) || !Number.isFinite(Number(record.caloriesKcal))) return sum;
+    if (ambiguousDevice.has(record)) return sum;
+    if (record.caloriesKcal == null || !Number.isFinite(Number(record.caloriesKcal)) || Number(record.caloriesKcal) < 0 || Number(record.caloriesKcal) > 100000) {
+      uncalculableDeviceCount += 1;
+      return sum;
+    }
     return sum + Number(record.caloriesKcal);
   }, 0);
   return {
     manualNetKcal: Math.round(manualNetKcal * 10) / 10,
     deviceReportedKcal: Math.round(deviceReportedKcal * 10) / 10,
     adjustmentKcal: Math.round((manualNetKcal + deviceReportedKcal) * 10) / 10,
+    manualSessionCount: manual.length - duplicateManual.size - ambiguousManual.size - uncalculableManualCount,
+    deviceSessionCount: device.length - ambiguousDevice.size - uncalculableDeviceCount,
     matchedManualDuplicates: duplicateManual.size,
     unresolvedPossibleDuplicates: ambiguousManual.size + ambiguousDevice.size,
     uncalculableManualCount,
+    uncalculableDeviceCount,
   };
 }
 

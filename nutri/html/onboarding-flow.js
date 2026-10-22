@@ -556,7 +556,6 @@ function setMode(mode) {
     document.querySelector('#confirmPassword').value = demoPassword;
     document.querySelector('#registerAge').value = '30';
     document.querySelector('#registerSex').value = 'masculino';
-    document.querySelector('#registerTestAccount').value = 'true';
     registerForm.dataset.demoPrefilled = 'true';
   }
   modeButtons.forEach((button) => {
@@ -611,17 +610,16 @@ registerForm?.addEventListener('submit', async (event) => {
         age: document.querySelector('#registerAge').value,
         heightCm: document.querySelector('#registerHeight').value,
         sex: document.querySelector('#registerSex').value,
-        isTestAccount: document.querySelector('#registerTestAccount').value === 'true',
       }),
     });
     if (!response.ok) {
       const result = await response.json();
       throw new Error(result.error || 'No se pudo crear la cuenta.');
     }
-    navigateWithNotice('Cuenta creada.', '/preferencias.html');
+    navigateWithNotice('Cuenta creada.', '/');
   } catch (error) {
-    errorMessage.textContent = error.message === 'Ya existe una cuenta con ese celular.'
-      ? `${error.message} Inicia sesión.`
+    errorMessage.textContent = error.message === 'Datos no válidos.'
+      ? 'No se pudo crear la cuenta. Revisa los datos o inicia sesión si ya tienes una cuenta.'
       : error.message || 'No se pudo crear la cuenta. Intenta de nuevo.';
     notifyApp(errorMessage.textContent, 'error');
   }
@@ -629,13 +627,6 @@ registerForm?.addEventListener('submit', async (event) => {
 
 document.querySelector('#confirmPassword')?.addEventListener('input', (event) => {
   event.currentTarget.setCustomValidity('');
-});
-
-registerForm?.addEventListener('input', (event) => {
-  if (event.target.id !== 'registerTestAccount') document.querySelector('#registerTestAccount').value = 'false';
-});
-registerForm?.addEventListener('change', (event) => {
-  if (event.target.id !== 'registerTestAccount') document.querySelector('#registerTestAccount').value = 'false';
 });
 
 const preferencesForm = document.querySelector('#preferencesForm');
@@ -1923,6 +1914,211 @@ if (dashboardTabs.length) {
   dashboardTabs.forEach((button) => button.addEventListener('click', () => showView(button.dataset.dashboardTab)));
 }
 
+let progressLoadId = 0;
+async function loadProgressNutrition() {
+  const loadId = ++progressLoadId;
+  const metrics = document.querySelector('#progressNutritionMetrics');
+  const summary = document.querySelector('#progressSummaryText');
+  const nutritionChart = document.querySelector('#progressNutritionChart');
+  const summaryChart = document.querySelector('#progressSummaryChart');
+  const correlation = document.querySelector('#progressCorrelationMetrics');
+  const activityMetrics = document.querySelector('#progressActivityMetrics');
+  const activityChart = document.querySelector('#progressActivityChart');
+  const quality = document.querySelector('#progressQualityMetrics');
+  const nutritionPanel = metrics?.closest('.progress-nutrition');
+  const summaryPanel = summary?.closest('.progress-period-summary');
+  if (!metrics || !summary) return;
+  const days = Number(document.querySelector('#rangeSelect')?.value || 30);
+  const end = document.querySelector('#daySelect')?.value || localDate();
+  nutritionPanel.setAttribute('aria-busy', 'true');
+  summaryPanel.setAttribute('aria-busy', 'true');
+  try {
+    const response = await fetch(`/api/progress/nutrition?dias=${days}&hasta=${encodeURIComponent(end)}`, { credentials: 'same-origin' });
+    if (!response.ok) throw new Error();
+    if (loadId !== progressLoadId) return;
+    const { nutrition, body, activity, plicometric } = await response.json();
+    const format = new Intl.NumberFormat('es-MX', { maximumFractionDigits: 1 });
+    const labels = [['Calorías', 'kcal', 'kcal', 'var(--kcal)'], ['Proteína', 'protein', 'g', 'var(--protein)'], ['Carbohidratos', 'carbs', 'g', 'var(--carbs)'], ['Grasas', 'fat', 'g', 'var(--fat)']];
+    metrics.replaceChildren(...labels.map(([label, key, unit]) => {
+      const item = document.createElement('article');
+      item.className = 'progress-nutrition-metric';
+      const title = document.createElement('h3');
+      title.textContent = label;
+      const value = document.createElement('strong');
+      const amount = nutrition.current[key];
+      value.textContent = amount == null ? '—' : `${format.format(amount)} ${unit}`;
+      const goal = nutrition.goals?.[key];
+      const detail = document.createElement('p');
+      detail.textContent = goal == null ? 'Meta: sin plan guardado' : `Meta del último plan: ${format.format(goal)} ${unit}`;
+      item.append(title, value, detail);
+      return item;
+    }));
+    nutritionChart.replaceChildren();
+    const chartTargets = labels.filter(([, key]) => nutrition.goals?.[key] > 0 && nutrition.current[key] != null);
+    if (chartTargets.length) {
+      const legend = document.createElement('p');
+      legend.className = 'progress-chart-legend';
+      legend.textContent = 'Barra: promedio consumido · marca: meta (escala hasta 150% de la meta)';
+      nutritionChart.append(legend);
+      for (const [label, key, unit, color] of chartTargets) {
+        const goal = Number(nutrition.goals[key]);
+        const amount = Number(nutrition.current[key]);
+        const row = document.createElement('div');
+        row.className = 'progress-chart-row';
+        const caption = document.createElement('div');
+        caption.className = 'progress-chart-row-label';
+        caption.textContent = `${label}: ${format.format(amount)} / ${format.format(goal)} ${unit} (${format.format(amount / goal * 100)}%)`;
+        const track = document.createElement('div');
+        track.className = 'progress-chart-track';
+        track.setAttribute('aria-hidden', 'true');
+        const bar = document.createElement('span');
+        bar.className = 'progress-chart-bar';
+        bar.style.setProperty('--bar-color', color);
+        bar.style.setProperty('--bar-width', `${Math.min(100, amount / goal / 1.5 * 100)}%`);
+        const target = document.createElement('span');
+        target.className = 'progress-chart-target';
+        track.append(bar, target);
+        row.append(caption, track);
+        nutritionChart.append(row);
+      }
+    } else {
+      nutritionChart.textContent = 'La gráfica requiere promedios completos y metas numéricas en el último plan guardado.';
+    }
+    document.querySelector('#progressNutritionCaption').textContent = `Promedio diario en ${nutrition.current.completeDays} de ${days} días con macros completos. Incluye estimaciones registradas; metas del último plan guardado.`;
+    const current = nutrition.current;
+    const previous = nutrition.previous;
+    summaryChart.replaceChildren();
+    const metric = (label, value, detail = '') => {
+      const item = document.createElement('article');
+      item.className = 'progress-nutrition-metric';
+      const title = document.createElement('h3');
+      title.textContent = label;
+      const reading = document.createElement('strong');
+      reading.textContent = value;
+      item.append(title, reading);
+      if (detail) {
+        const note = document.createElement('p');
+        note.textContent = detail;
+        item.append(note);
+      }
+      return item;
+    };
+    const weightDelta = (period) => period.measurements > 1 && period.firstKg != null && period.lastKg != null
+      ? Number(period.lastKg) - Number(period.firstKg) : null;
+    const currentWeightDelta = weightDelta(body.current);
+    const previousWeightDelta = weightDelta(body.previous);
+    const signedKg = (value) => `${value > 0 ? '+' : ''}${format.format(value)} kg`;
+    correlation.replaceChildren(
+      metric('Ingesta promedio', current.kcal == null ? 'Sin datos completos' : `${format.format(current.kcal)} kcal/día`, `Periodo anterior: ${previous.kcal == null ? 'sin datos completos' : `${format.format(previous.kcal)} kcal/día`}`),
+      metric('Cambio de peso', currentWeightDelta == null ? body.current.measurements ? 'Una medición; sin tendencia' : 'Sin mediciones' : signedKg(currentWeightDelta), `Periodo anterior: ${previousWeightDelta == null ? body.previous.measurements ? 'una medición; sin tendencia' : 'sin mediciones' : signedKg(previousWeightDelta)}`),
+    );
+    const activityRows = [
+      ['Promedio de pasos/día', activity.current.avgSteps, activity.previous.avgSteps, 'pasos'],
+      ['Sesiones', activity.current.trainingSessions, activity.previous.trainingSessions, 'sesiones'],
+      ['Duración manual', activity.current.manualMinutes, activity.previous.manualMinutes, 'min'],
+      ['Duración del dispositivo', activity.current.deviceMinutes, activity.previous.deviceMinutes, 'min'],
+      ['Energía manual estimada', activity.current.manualKcal, activity.previous.manualKcal, 'kcal'],
+      ['Energía reportada por dispositivo', activity.current.deviceKcal, activity.previous.deviceKcal, 'kcal'],
+    ];
+    activityMetrics.replaceChildren(...activityRows.map(([label, amount, prior, unit]) => metric(label, amount == null ? 'Sin registros' : `${format.format(amount)} ${unit}`, `Periodo anterior: ${prior == null ? 'sin registros' : `${format.format(prior)} ${unit}`}`)));
+    activityChart.replaceChildren();
+    const chartLegend = document.createElement('p');
+    chartLegend.className = 'progress-chart-legend';
+    chartLegend.textContent = 'Barras comparadas dentro de cada indicador; sin extrapolar días sin datos.';
+    activityChart.append(chartLegend);
+    for (const [label, amount, prior, unit] of activityRows) {
+      if (amount == null && prior == null) continue;
+      const max = Math.max(Number(amount) || 0, Number(prior) || 0, 1);
+      for (const [periodLabel, value, previousPeriod] of [['Actual', amount, false], ['Anterior', prior, true]]) {
+        if (value == null) continue;
+        const row = document.createElement('div');
+        row.className = 'progress-chart-row';
+        const caption = document.createElement('div');
+        caption.className = 'progress-chart-row-label';
+        caption.textContent = `${label} · ${periodLabel}: ${format.format(value)} ${unit}`;
+        const track = document.createElement('div');
+        track.className = 'progress-chart-track';
+        track.setAttribute('aria-hidden', 'true');
+        const bar = document.createElement('span');
+        bar.className = `progress-chart-bar${previousPeriod ? ' is-previous' : ''}`;
+        bar.style.setProperty('--bar-width', `${Number(value) / max * 100}%`);
+        track.append(bar);
+        row.append(caption, track);
+        activityChart.append(row);
+      }
+    }
+    quality.replaceChildren(
+      metric('Días con comidas registradas', `${current.loggedDays} / ${days}`, `Completo: ${current.completeDays} · incompleto: ${current.incompleteDays} · pendientes: ${nutrition.quality.currentPending}`),
+      metric('Días sin comida registrada', String(Math.max(0, days - current.loggedDays)), 'No se consideran consumo cero.'),
+      metric('Fuente de macros', `USDA ${nutrition.quality.macroSources.usda} · usuario ${nutrition.quality.macroSources.declared}`, `Web ${nutrition.quality.macroSources.web} · OpenCode ${nutrition.quality.macroSources.opencode} · estimados ${nutrition.quality.macroSources.estimated}`),
+      metric('Mediciones de peso', String(body.current.measurements), `Periodo anterior: ${body.previous.measurements}`),
+      metric('Registros de plicómetro', String(plicometric.current), `Periodo anterior: ${plicometric.previous}`),
+      metric('Días con pasos', `${activity.current.stepDays} / ${days}`, `Periodo anterior: ${activity.previous.stepDays} días`),
+      metric('Sesiones registradas', String(activity.current.trainingSessions), `Manual: ${activity.current.manualSessions} · dispositivo: ${activity.current.deviceSessions}`),
+    );
+    const notes = [];
+    if (current.kcal != null && previous.kcal != null) {
+      const delta = current.kcal - previous.kcal;
+      const pct = previous.kcal ? Math.round(delta / previous.kcal * 100) : null;
+      const direction = delta > 0 ? 'subió' : delta < 0 ? 'bajó' : 'se mantuvo';
+      notes.push(`Ingesta promedio ${direction} ${format.format(Math.abs(delta))} kcal/día${pct == null ? '' : ` (${pct > 0 ? '+' : ''}${pct}%)`}`);
+      for (const [label, key] of [['proteína', 'protein'], ['carbohidratos', 'carbs'], ['grasas', 'fat']]) {
+        if (current[key] != null && previous[key] != null) {
+          const change = current[key] - previous[key];
+          notes.push(change === 0 ? `${label} se mantuvo` : `${label} ${change > 0 ? '+' : ''}${format.format(change)} g/día`);
+        }
+      }
+    } else notes.push('Faltan días con macros completos para comparar ingesta');
+    if (currentWeightDelta != null) notes.push(`peso actual ${signedKg(currentWeightDelta)}`);
+    else notes.push('faltan dos mediciones de peso para calcular su tendencia actual');
+    if (previousWeightDelta != null) notes.push(`peso en periodo anterior ${signedKg(previousWeightDelta)}`);
+    if (activity.current.avgSteps != null && activity.previous.avgSteps != null) {
+      const stepDelta = activity.current.avgSteps - activity.previous.avgSteps;
+      notes.push(stepDelta === 0 ? 'pasos promedio se mantuvieron' : `pasos promedio ${stepDelta > 0 ? '+' : ''}${format.format(stepDelta)}/día`);
+    } else notes.push('pasos insuficientes para comparar');
+    if (activity.current.trainingSessions != null && activity.previous.trainingSessions != null) notes.push(activity.current.trainingSessions === activity.previous.trainingSessions ? `sesiones se mantuvieron en ${activity.current.trainingSessions}` : `sesiones ${activity.current.trainingSessions} actuales frente a ${activity.previous.trainingSessions} anteriores`);
+    notes.push(`${current.completeDays}/${days} días con macros completos (${current.incompleteDays} incompletos, ${nutrition.quality.currentPending} comidas pendientes y ${Math.max(0, days - current.loggedDays)} días sin comidas guardadas)`);
+    summary.textContent = `${notes.join('. ')}. Son asociaciones descriptivas, no evidencia de causalidad ni predicción de composición corporal.`;
+    if (current.kcal != null && previous.kcal != null) {
+      const max = Math.max(current.kcal, previous.kcal, 1);
+      for (const [label, amount] of [['Periodo actual', current.kcal], ['Periodo anterior', previous.kcal]]) {
+        const row = document.createElement('div');
+        row.className = 'progress-chart-row';
+        const caption = document.createElement('div');
+        caption.className = 'progress-chart-row-label';
+        caption.textContent = `${label}: ${format.format(amount)} kcal/día`;
+        const track = document.createElement('div');
+        track.className = 'progress-chart-track';
+        track.setAttribute('aria-hidden', 'true');
+        const bar = document.createElement('span');
+        bar.className = `progress-chart-bar${label === 'Periodo anterior' ? ' is-previous' : ''}`;
+        bar.style.setProperty('--bar-width', `${amount / max * 100}%`);
+        track.append(bar);
+        row.append(caption, track);
+        summaryChart.append(row);
+      }
+    }
+  } catch {
+    if (loadId !== progressLoadId) return;
+    metrics.textContent = 'No se pudieron cargar los datos nutricionales.';
+    summary.textContent = 'No se pudo calcular el resumen del periodo.';
+    correlation.textContent = activityMetrics.textContent = quality.textContent = 'No se pudieron cargar estos datos.';
+    nutritionChart.replaceChildren();
+    summaryChart.replaceChildren();
+    activityChart.replaceChildren();
+    notifyApp('No se pudo cargar el resumen nutricional.', 'error');
+  } finally {
+    if (loadId === progressLoadId) {
+      nutritionPanel.setAttribute('aria-busy', 'false');
+      summaryPanel.setAttribute('aria-busy', 'false');
+    }
+  }
+}
+
+document.querySelector('#rangeSelect')?.addEventListener('change', loadProgressNutrition);
+dashboardTabs.forEach((button) => button.addEventListener('click', () => {
+  if (button.dataset.dashboardTab === 'progress') loadProgressNutrition();
+}));
 const dayInput = document.querySelector('#daySelect');
 let nutritionDayReady = Promise.resolve();
 if (dayInput) {
@@ -1975,8 +2171,13 @@ let trainingGarminReportedCaloriesKcal = null;
 let trainingAdjustmentCaloriesKcal = null;
 let trainingGarminEnabled = false;
 let trainingDaySelected = null;
+let trainingDayStatus = 'loading';
+let trainingEntriesLoadId = 0;
 let unresolvedTrainingDuplicates = 0;
 let uncalculableManualTrainingRecords = 0;
+let uncalculableDeviceTrainingRecords = 0;
+let validManualTrainingRecords = 0;
+let validDeviceTrainingRecords = 0;
 let restingCaloriesKcal = null;
 let restingCaloriesSource = null;
 
@@ -1989,9 +2190,9 @@ function renderTrainingEnergySummary(consumedCaloriesKcal) {
   const rows = [
     { label: 'Consumo registrado', amount: consumedCaloriesKcal },
     { term: 'tmb', amount: restingCaloriesKcal, source: restingCaloriesSource },
-    { label: 'Ejercicio manual neto estimado', amount: trainingManualNetCaloriesKcal },
-    ...(trainingGarminEnabled ? [{ label: 'Garmin reportado', amount: trainingGarminReportedCaloriesKcal }] : []),
-    { label: trainingGarminEnabled ? 'Ajuste de ejercicio manual + Garmin' : 'Ajuste de ejercicio manual', amount: trainingAdjustmentCaloriesKcal },
+    { label: `Ejercicio manual neto estimado (${validManualTrainingRecords} sesiones)`, amount: trainingManualNetCaloriesKcal },
+    ...(trainingGarminEnabled ? [{ label: `Garmin reportado, sin normalizar (${validDeviceTrainingRecords} sesiones)`, amount: trainingGarminReportedCaloriesKcal }] : []),
+    { label: trainingGarminEnabled ? 'Ajuste aplicado: suma manual neto + Garmin reportado' : 'Ajuste aplicado: ejercicio manual neto', amount: trainingAdjustmentCaloriesKcal },
     { label: 'Gasto parcial total', amount: totalExpense },
     { label: balanceLabel, amount: balance, isBalance: true },
   ];
@@ -2016,7 +2217,8 @@ function renderTrainingEnergySummary(consumedCaloriesKcal) {
   const warning = document.querySelector('#trainingEnergySummaryWarning');
   const notices = [
     unresolvedTrainingDuplicates ? `${unresolvedTrainingDuplicates} sesiones Garmin/manual ambiguas no se contabilizaron; revisa los registros` : '',
-    uncalculableManualTrainingRecords ? `${uncalculableManualTrainingRecords} sesiones manuales sin kcal calculables` : '',
+    uncalculableManualTrainingRecords ? `${uncalculableManualTrainingRecords} sesiones manuales fuera de rango o sin kcal calculables` : '',
+    uncalculableDeviceTrainingRecords ? `${uncalculableDeviceTrainingRecords} sesiones del dispositivo con kcal no válidas` : '',
   ].filter(Boolean);
   warning.textContent = notices.join(' · ');
   warning.hidden = notices.length === 0;
@@ -2061,11 +2263,17 @@ function renderMacroCards(records) {
     const targetValue = baseTarget == null || exerciseAware && exerciseExtra == null ? null : Number(baseTarget) + (exerciseAware ? exerciseExtra : 0);
     const planTarget = document.createElement('p');
     planTarget.className = 'macro-target';
-    if (trainingDaySelected === null) {
+    if (baseTarget == null) {
+      planTarget.textContent = 'Meta diaria del plan: —';
+    } else if (trainingDayStatus === 'loading') {
+      planTarget.dataset.status = 'incomplete';
+      planTarget.textContent = 'Cargando entrenamientos y calculando meta…';
+    } else if (trainingDayStatus === 'error') {
+      planTarget.dataset.status = 'incomplete';
+      planTarget.textContent = 'Meta ajustada no disponible: no se pudieron cargar los entrenamientos.';
+    } else if (trainingDaySelected === null) {
       planTarget.dataset.status = 'incomplete';
       planTarget.textContent = 'Meta del plan no disponible: no se pudo determinar la actividad del día.';
-    } else if (baseTarget == null) {
-      planTarget.textContent = 'Meta diaria del plan: —';
     } else if (exerciseAware && exerciseExtra == null) {
       planTarget.dataset.status = 'incomplete';
       planTarget.textContent = `Meta base ${format.format(Number(baseTarget))} ${unit} · ajuste por ejercicio no disponible`;
@@ -2084,6 +2292,14 @@ function renderMacroCards(records) {
     }
     reading.append(value, measure);
     card.append(title, reading, detail, planTarget);
+    if (key === 'energyKcal' && ['proteinas_g', 'carbohidratos_g', 'grasas_g', 'calorias_kcal'].every((macro) => trainingPlanTargets?.[macro] != null && Number.isFinite(Number(trainingPlanTargets[macro])))) {
+      const macroEnergy = 4 * Number(trainingPlanTargets.proteinas_g) + 4 * Number(trainingPlanTargets.carbohidratos_g) + 9 * Number(trainingPlanTargets.grasas_g);
+      const difference = Math.round((macroEnergy - Number(trainingPlanTargets.calorias_kcal)) * 10) / 10;
+      const check = document.createElement('p');
+      check.className = 'macro-target';
+      check.textContent = `Comprobación 4/4/9 de macros base: ${format.format(macroEnergy)} kcal · diferencia frente a calorías base: ${difference > 0 ? '+' : ''}${format.format(difference)} kcal`;
+      card.append(check);
+    }
     return card;
   }));
   renderTrainingEnergySummary(consumedCaloriesKcal);
@@ -2252,6 +2468,9 @@ if (document.querySelector('#dailyStepsCount')) nutritionDayReady.then(() => loa
 async function loadTrainingEntries(date = dayInput?.value || localDate()) {
   const list = document.querySelector('#trainingEntriesList');
   if (!list) return;
+  const loadId = ++trainingEntriesLoadId;
+  trainingDayStatus = 'loading';
+  renderMacroCards(currentFoodEntries);
   list.setAttribute('aria-busy', 'true');
   try {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -2260,7 +2479,11 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
     });
     if (!response.ok) throw new Error();
     const { records, exercise, garminEnabled } = await response.json();
-    if (!Array.isArray(records)) throw new Error();
+    if (loadId !== trainingEntriesLoadId) return;
+    if (!Array.isArray(records) || !exercise || typeof exercise !== 'object') throw new Error();
+    if (['manualNetKcal', 'deviceReportedKcal', 'adjustmentKcal'].some((key) => exercise[key] == null || !Number.isFinite(exercise[key]) || exercise[key] < 0)
+      || ['manualSessionCount', 'deviceSessionCount', 'uncalculableManualCount', 'uncalculableDeviceCount', 'unresolvedPossibleDuplicates'].some((key) => !Number.isSafeInteger(exercise[key]) || exercise[key] < 0)) throw new Error();
+    trainingDayStatus = 'ready';
     trainingGarminEnabled = garminEnabled === true;
     trainingDaySelected = records.length > 0;
     trainingManualNetCaloriesKcal = Number(exercise?.manualNetKcal);
@@ -2268,7 +2491,9 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
     trainingAdjustmentCaloriesKcal = Number(exercise?.adjustmentKcal);
     unresolvedTrainingDuplicates = Number(exercise?.unresolvedPossibleDuplicates) || 0;
     uncalculableManualTrainingRecords = Number(exercise?.uncalculableManualCount) || 0;
-    if (![trainingManualNetCaloriesKcal, trainingGarminReportedCaloriesKcal, trainingAdjustmentCaloriesKcal].every(Number.isFinite)) throw new Error();
+    uncalculableDeviceTrainingRecords = Number(exercise?.uncalculableDeviceCount) || 0;
+    validManualTrainingRecords = Number(exercise?.manualSessionCount) || 0;
+    validDeviceTrainingRecords = Number(exercise?.deviceSessionCount) || 0;
     renderMacroCards(currentFoodEntries);
     list.replaceChildren();
     if (!records.length) {
@@ -2334,6 +2559,8 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
       list.append(card);
     }
   } catch {
+    if (loadId !== trainingEntriesLoadId) return;
+    trainingDayStatus = 'error';
     trainingDaySelected = null;
     trainingGarminEnabled = false;
     trainingManualNetCaloriesKcal = null;
@@ -2341,11 +2568,14 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
     trainingAdjustmentCaloriesKcal = null;
     unresolvedTrainingDuplicates = 0;
     uncalculableManualTrainingRecords = 0;
+    uncalculableDeviceTrainingRecords = 0;
+    validManualTrainingRecords = 0;
+    validDeviceTrainingRecords = 0;
     renderMacroCards(currentFoodEntries);
     list.textContent = 'No se pudieron cargar los entrenamientos guardados.';
     notifyApp('No se pudieron cargar los entrenamientos guardados.', 'error');
   } finally {
-    list.setAttribute('aria-busy', 'false');
+    if (loadId === trainingEntriesLoadId) list.setAttribute('aria-busy', 'false');
   }
 }
 
@@ -2415,3 +2645,5 @@ document.querySelector('#accountProfileForm')?.addEventListener('submit', async 
     save.disabled = false;
   }
 });
+
+if (document.querySelector('[data-dashboard-tab="progress"]')?.getAttribute('aria-current') === 'page') loadProgressNutrition();
