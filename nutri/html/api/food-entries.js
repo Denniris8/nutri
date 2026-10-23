@@ -582,11 +582,11 @@ SELECT LAST_INSERT_ID();`);
       ...(answeredPendingQuantity && (!items.length || items.some((item) => item.quantityGrams == null && !hasExplicitVolume(item))) ? ['quantityGrams'] : []),
     ];
     let replyIssues = getReplyIssues();
-    for (let attempt = 1; attempt <= 1 && (replyIssues.length || (!items.length && !result?.clarificationQuestion)); attempt++) {
+    for (let attempt = 1; attempt <= 3 && (replyIssues.length || (!items.length && !result?.clarificationQuestion)); attempt++) {
       traceFoodSession(trace, 'reply_validation_retry', { issueCount: replyIssues.length || 1, attempt });
       parts = await withFoodSessionLock(userId, () => requestFoodDescription({
         ...requestArgs, sessionId, description: modelDescription,
-        retryFeedback: `ÚNICO REINTENTO: corrige la respuesta completa en JSON según estos problemas: ${replyIssues.length ? replyIssues.join(', ') : 'JSON ausente o ilegible'}. Mantén el formato y los alimentos pendientes del contexto. Conserva cantidades confirmadas: masa en quantityGrams y volumen en quantityText con quantityGrams:null; recalcula macros para la porción compatible sin convertir volumen a masa por suposición. No vuelvas a preguntar lo ya contestado. No inventes datos; pregunta solo por la información que aún falte.`,
+        retryFeedback: `REINTENTO ${attempt}/3: corrige la respuesta completa en JSON. Problemas concretos de validación: ${replyIssues.length ? replyIssues.join(', ') : 'JSON ausente o ilegible'}. Usa el contexto completo del chat que se vuelve a incluir en esta solicitud; conserva alimentos, cantidades y aclaraciones ya confirmados. Devuelve todos los campos requeridos, sin inventar datos; pregunta solo por información que realmente falte. Para masa usa quantityGrams; para volumen conserva quantityText y quantityGrams:null, sin convertir volumen a masa por suposición.`,
       }));
       stage = 'parse';
       result = parseReply(parts);
@@ -820,7 +820,7 @@ SELECT LAST_INSERT_ID();`);
     if (entryId && /^\d+$/.test(entryId)) {
       const message = error.code === 'FOOD_IDENTITY_REFUSAL' ? 'Se renovó la sesión para continuar el análisis sin pedir tu identidad; vuelve a enviar el alimento.'
         : stage === 'persistence' ? 'El análisis terminó, pero no se pudieron guardar sus alimentos y macros.'
-        : ['parse', 'validation'].includes(stage) ? 'El asistente respondió, pero sus datos de alimentos o macros no tenían un formato válido.'
+        : ['parse', 'validation'].includes(stage) ? 'No pude validar la respuesta después de varios intentos. Tu borrador y el contexto del chat se conservaron; pulsa «Enviar mensaje» para reintentarlo.'
           : 'El borrador quedó guardado, pero el asistente no completó el análisis. Puedes intentarlo de nuevo.';
       try { await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'assistant', content: `[ERROR_REGISTRO] ${message}` }); } catch {}
       if (!suppressNotification) try { await dbQuery(`${notificationInsertSql({ userId, category: 'comida', state: 'error', title: 'No se pudo completar el registro de comida', message, referenceId: entryId, textSql })};`); } catch {}

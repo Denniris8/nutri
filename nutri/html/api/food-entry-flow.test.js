@@ -66,9 +66,19 @@ test('registra leche y whey con cantidades del mensaje tras respuesta inválida 
 
 test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { skip: process.env.NUTRI_TEST_OPENCODE_LIVE !== '1' }, async () => {
   const milkWheyCase = process.env.NUTRI_TEST_OPENCODE_CASE === 'milk-whey';
+  const bonelessRepro = process.env.NUTRI_TEST_OPENCODE_CASE === 'boneless-repro';
+  const bonelessBatch = process.env.NUTRI_TEST_OPENCODE_CASE === 'boneless-batch';
   const overnightCase = /^overnight(?:-previous)?$/.test(process.env.NUTRI_TEST_OPENCODE_CASE || '');
   const previousDayCase = process.env.NUTRI_TEST_OPENCODE_CASE === 'overnight-previous';
-  const meals = milkWheyCase ? [
+  const meals = bonelessBatch ? [
+    ['Puré, spaghetti con queso y boneless 1', '', ''],
+    ['Puré, spaghetti con queso y boneless 2', '', ''],
+    ['Puré, spaghetti con queso y boneless 3', '', ''],
+    ['Puré, spaghetti con queso y boneless 4', '', ''],
+    ['Puré, spaghetti con queso y boneless 5', '', ''],
+  ] : bonelessRepro ? [
+    ['Puré de papa, spaghetti con queso y boneless', '', ''],
+  ] : milkWheyCase ? [
     ['Leche Alpura Pro y proteína ON Gold Nutrition', 'leche Alpura Pro', 'Optimum Nutrition Gold Standard 100% Whey'],
   ] : overnightCase ? [
     ['Arroz con huevo a la 1:00 a. m.', 'arroz cocido', 'huevo cocido'],
@@ -98,8 +108,10 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
   ];
   const startIndex = Math.min(9, Math.max(0, Number.parseInt(process.env.NUTRI_TEST_OPENCODE_START || '0', 10) || 0));
   const endIndex = Math.min(10, Math.max(startIndex + 1, Number.parseInt(process.env.NUTRI_TEST_OPENCODE_END || '10', 10) || 10));
-  const messageLimit = Math.min(10, Math.max(1, Number.parseInt(process.env.NUTRI_TEST_OPENCODE_LIMIT || '10', 10) || 10));
+  const messageLimit = Math.min(bonelessBatch ? 20 : 10, Math.max(1, Number.parseInt(process.env.NUTRI_TEST_OPENCODE_LIMIT || (bonelessBatch ? '20' : '10'), 10) || 10));
   let realMessageCalls = 0;
+  let reproStatus = null;
+  const reproResults = [];
   const savedMeals = [];
   const failures = [];
   for (const [offset, [meal, packaged, generic]] of meals.slice(startIndex, endIndex).entries()) {
@@ -108,7 +120,17 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
     const entryId = String(600 + index);
     const protein = 5 + index % 8, carbohydrate = 15 + index % 9, fat = 2 + index % 5;
     const energy = 4 * protein + 4 * carbohydrate + 9 * fat;
-    const description = overnightCase
+    const description = bonelessBatch
+      ? [
+        '51g puré de papa, 90g spaghetti con queso (no sé cuánto de queso calcula), 179g estilo boneless',
+        '65g puré de papa, 100g spaghetti con queso (no sé cuánto de queso calcula), 160g boneless',
+        '80g puré de papa, 120g pasta con queso (no sé cuánto de queso calcula), 150g boneless estilo búfalo',
+        '55g de puré de papa, 110g de spaghetti con queso (cantidad de queso desconocida), 175g de boneless',
+        '70g puré de papa, 95g spaghetti con queso (no sé el gramaje del queso), 185g boneless de pollo',
+      ][index]
+      : bonelessRepro
+      ? '51g puré de papa, 90g spagetti con queso (no sé cuánto de queso calcula),179g estilo boneless traza'
+      : overnightCase
       ? `${meal}: 100 g de arroz blanco cocido en casa, no envasado y sin marca; 50 g de huevo cocido en casa, genérico y sin marca.`
       : milkWheyCase
       ? `${meal}: 250 ml de leche Alpura Pro y 31 g de proteína Optimum Nutrition Gold Standard 100% Whey (ON). Fecha 2026-10-22.`
@@ -217,12 +239,23 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
           assert.equal(draftDate, '2026-10-21', `${meal}: fecha anterior simulada`);
         }
       }
-      for (let turn = 0; turn < 5 && realMessageCalls < messageLimit && result?.state !== 'completado'; turn += 1) {
+      for (let turn = 0; turn < (bonelessRepro || bonelessBatch ? 1 : 5) && realMessageCalls < messageLimit && result?.state !== 'completado'; turn += 1) {
         const userReply = overnightCase || turn ? clarificationReply(result?.question) : description;
         await saveFoodEntry({ response: {}, data: { fecha: '2026-10-22', descripcion: userReply, requestId, timezone: 'UTC' },
           userId, dbQuery, textSql, json: (_response, status, body) => { result = { status, ...body }; }, requestOpenCode });
+        if (bonelessRepro) reproStatus = result?.status;
+        if (bonelessBatch) {
+          reproResults.push({ status: result?.status, state: result?.state, question: result?.question });
+          if (result?.state === 'requiere_aclaracion') {
+            assert.match(result.question || '', /queso/i, `${meal}: debe aclarar la cantidad de queso`);
+            break;
+          }
+          if (result?.status === 502) break;
+          failures.push(`${meal}: no pidió aclaración por la cantidad de queso`);
+          break;
+        }
         if (result?.state === 'completado') {
-          const expectedIngredients = overnightCase ? ['arroz cocido', 'huevo cocido'] : milkWheyCase ? ['Alpura Pro', 'Gold Standard'] : index === 5 ? [packaged, generic, 'huevo cocido'] : [packaged, generic];
+          const expectedIngredients = bonelessRepro ? ['puré de papa', 'spaghetti', 'boneless'] : overnightCase ? ['arroz cocido', 'huevo cocido'] : milkWheyCase ? ['Alpura Pro', 'Gold Standard'] : index === 5 ? [packaged, generic, 'huevo cocido'] : [packaged, generic];
           assert.ok(result.records[0].items.length >= expectedIngredients.length, `${meal}: devolvió ${result.records[0].items.length} de ${expectedIngredients.length} ingredientes esperados`);
           for (const ingredient of expectedIngredients) {
             const key = ingredient.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().match(/[a-z0-9]{4,}/)?.[0];
@@ -250,6 +283,12 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
           savedMeals.push(meal);
           break;
         }
+        if (bonelessRepro && result?.state === 'requiere_aclaracion') {
+          assert.match(result.question || '', /queso/i, 'debe pedir la cantidad de queso sin asumirla');
+          lastQuestion = result.question;
+          break;
+        }
+        if (bonelessRepro && result?.status === 502) break;
         if (result?.state !== 'requiere_aclaracion' || !result.question) {
           failures.push(`${meal}: HTTP ${result?.status}, estado ${result?.state || 'sin respuesta'}, ${result?.error || result?.message || ''}; aclaración: ${lastQuestion}`);
           break;
@@ -257,7 +296,7 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
         lastQuestion = result.question;
         if (realMessageCalls >= messageLimit) { failures.push(`${meal}: quedó pendiente al alcanzar el límite de ${messageLimit} mensajes reales; última aclaración: ${lastQuestion}`); break; }
       }
-      if (!completed && !failures.some((failure) => failure.startsWith(`${meal}:`))) failures.push(`${meal}: no se guardó tras sus aclaraciones; última: ${lastQuestion}${overnightCase ? `; historial: ${JSON.stringify(interactions.slice(-8))}` : ''}`);
+      if (!completed && !bonelessRepro && !bonelessBatch && !failures.some((failure) => failure.startsWith(`${meal}:`))) failures.push(`${meal}: no se guardó tras sus aclaraciones; última: ${lastQuestion}${overnightCase ? `; historial: ${JSON.stringify(interactions.slice(-8))}` : ''}`);
     } catch (error) {
       failures.push(`${meal}: ${error.message}`);
     } finally {
@@ -265,5 +304,16 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
     }
   }
   assert.deepEqual(failures, [], `Llamadas reales: ${realMessageCalls}/${messageLimit}; comidas guardadas: ${savedMeals.length}/${endIndex - startIndex}; fallos: ${failures.join(' | ')}`);
-  assert.equal(savedMeals.length, endIndex - startIndex, `solo se guardaron ${savedMeals.length} de ${endIndex - startIndex} comidas en ${realMessageCalls} llamadas reales`);
+  if (bonelessRepro) {
+    assert.equal(reproStatus, 200, `respuesta HTTP inesperada: ${reproStatus}`);
+    assert.ok(realMessageCalls >= 1 && realMessageCalls <= 4, `se esperaban 1-4 mensajes, recibidos: ${realMessageCalls}`);
+  } else if (bonelessBatch) {
+    assert.equal(reproResults.length, 5, `se probaron ${reproResults.length} de 5 comidas; llamadas reales: ${realMessageCalls}/${messageLimit}`);
+    reproResults.forEach((result, index) => {
+      assert.equal(result.status, 200, `comida ${index + 1}: HTTP ${result.status}`);
+      assert.equal(result.state, 'requiere_aclaracion', `comida ${index + 1}: el queso sin gramaje no debe darse por registrado`);
+      assert.match(result.question || '', /queso/i, `comida ${index + 1}: debe aclarar la cantidad de queso`);
+    });
+  }
+  else assert.equal(savedMeals.length, endIndex - startIndex, `solo se guardaron ${savedMeals.length} de ${endIndex - startIndex} comidas en ${realMessageCalls} llamadas reales`);
 });
