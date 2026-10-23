@@ -57,6 +57,7 @@ async function readFoodSystemPrompt(maxFoodItems) {
 const foodSessionPermissions = [
   { permission: '*', pattern: '*', action: 'deny' },
   { permission: 'webfetch', pattern: '*', action: 'allow' },
+  { permission: 'websearch', pattern: '*', action: 'allow' },
 ];
 const openCodeErrorCodes = new Set([
   'ABORT_ERR', 'ECONNREFUSED', 'ECONNRESET', 'EHOSTUNREACH', 'ENETUNREACH', 'ENOTFOUND', 'EAI_AGAIN',
@@ -255,47 +256,37 @@ async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpen
   const id = String(userId);
   if (!/^\d+$/.test(id)) throw new Error('Cuenta autenticada no válida.');
   const config = await readConfig();
-  const configFingerprint = createHash('sha256').update(JSON.stringify({ userId: id, sessionScope: 'single-food-draft', model: config.model, agent: config.agent, variant: config.variant })).digest('hex');
+  const configFingerprint = createHash('sha256').update(JSON.stringify({ userId: id, sessionScope: 'food-conversation', model: config.model, agent: config.agent, variant: config.variant })).digest('hex');
   traceFoodSession(trace, 'session_resolution_started');
   return withUserLock(id, async () => {
     const cached = verifiedFoodSessions.get(id);
     if (cached?.fingerprint === configFingerprint) {
       const current = await requestOpenCode('GET', `/session/${encodeURIComponent(cached.sessionId)}`, undefined, config.requestTimeoutMs);
-      if (current.status === 404) {
-        verifiedFoodSessions.delete(id);
-        await dbQuery(`DELETE FROM sesiones_comidas_opencode WHERE usuario_id=${id} AND session_id=${textSql(cached.sessionId)};`);
-        traceFoodSession(trace, 'session_cache_stale', { session: shortSessionId(cached.sessionId) });
-      } else if (current.status >= 200 && current.status < 300
+      if (current.status >= 200 && current.status < 300
         && current.data?.metadata?.foodUserId === id && current.data?.metadata?.foodConfigSha256 === configFingerprint) {
+        traceFoodSession(trace, 'session_ready', { reused: true, session: shortSessionId(cached.sessionId) });
         return cached.sessionId;
-      } else if (current.status < 200 || current.status >= 300) {
-        throw openCodeHttpError(current.status, 'GET /api/session/{id}', 'No se pudo verificar la sesión OpenCode de comidas.');
-      } else {
-        verifiedFoodSessions.delete(id);
       }
+      if (current.status !== 404 && (current.status < 200 || current.status >= 300)) {
+        throw openCodeHttpError(current.status, 'GET /api/session/{id}', 'No se pudo verificar la sesión OpenCode de comidas.');
+      }
+      verifiedFoodSessions.delete(id);
     }
     const stored = await dbQuery(`SELECT session_id FROM sesiones_comidas_opencode WHERE usuario_id=${id} LIMIT 1;`);
     if (/^ses_[A-Za-z0-9_-]{4,120}$/.test(stored || '')) {
       const current = await requestOpenCode('GET', `/session/${encodeURIComponent(stored)}`, undefined, config.requestTimeoutMs);
-      if (current.status !== 404 && (current.status < 200 || current.status >= 300)) {
-        throw openCodeHttpError(current.status, 'GET /api/session/{id}', 'No se pudo verificar la sesión OpenCode de comidas.');
+      if (current.status !== 404 && (current.status < 200 || current.status >= 300)) throw openCodeHttpError(current.status, 'GET /api/session/{id}', 'No se pudo verificar la sesión OpenCode de comidas.');
+      if (current.status >= 200 && current.status < 300 && current.data?.metadata?.foodUserId === id
+        && current.data?.metadata?.foodConfigSha256 === configFingerprint) {
+        const updated = await requestOpenCode('PATCH', `/session/${encodeURIComponent(stored)}`, { permission: foodSessionPermissions }, config.requestTimeoutMs);
+        if (updated.status < 200 || updated.status >= 300) throw openCodeHttpError(updated.status, 'PATCH /api/session/{id}', 'No se pudieron actualizar los permisos de la sesión de comidas.');
+        verifiedFoodSessions.set(id, { sessionId: stored, fingerprint: configFingerprint });
+        traceFoodSession(trace, 'session_ready', { reused: true, session: shortSessionId(stored) });
+        return stored;
       }
-      if (current.status >= 200 && current.status < 300) {
-        if (current.data?.metadata?.foodUserId === id && current.data?.metadata?.foodConfigSha256 === configFingerprint) {
-          const updated = await requestOpenCode('PATCH', `/session/${encodeURIComponent(stored)}`, { permission: foodSessionPermissions }, config.requestTimeoutMs);
-          if (updated.status < 200 || updated.status >= 300) throw openCodeHttpError(updated.status, 'PATCH /api/session/{id}', 'No se pudieron actualizar los permisos de la sesión de comidas.');
-          verifiedFoodSessions.set(id, { sessionId: stored, fingerprint: configFingerprint });
-          traceFoodSession(trace, 'session_ready', { reused: true, session: shortSessionId(stored) });
-          return stored;
-        }
-        if (current.data?.metadata?.foodUserId !== id) {
-          traceFoodSession(trace, 'session_owner_mismatch');
-          await dbQuery(`DELETE FROM sesiones_comidas_opencode WHERE usuario_id=${id} AND session_id=${textSql(stored)};`);
-        } else {
-          traceFoodSession(trace, 'session_config_changed', { session: shortSessionId(stored) });
-          const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(stored)}`, undefined, config.requestTimeoutMs);
-          if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) throw openCodeHttpError(deleted.status, 'DELETE /api/session/{id}', 'No se pudo sustituir la sesión con la nueva configuración.');
-        }
+      if (current.status >= 200 && current.status < 300 && current.data?.metadata?.foodUserId === id) {
+        const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(stored)}`, undefined, config.requestTimeoutMs);
+        if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) throw openCodeHttpError(deleted.status, 'DELETE /api/session/{id}', 'No se pudo sustituir la sesión de comidas.');
       }
     }
     const model = config.model ? { id: config.model.modelID, providerID: config.model.providerID, ...(config.variant ? { variant: config.variant } : {}) } : undefined;
@@ -343,18 +334,18 @@ async function deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode = op
   });
 }
 
-async function requestFoodDescription({ sessionId, description, comidasDisponibles = [], alimentosPendientes = [], continuacionRegistro = false, diaNutricional, retryFeedback, config, trace, requestOpenCode = openCodeRequest }) {
+async function requestFoodDescription({ sessionId, description, initialDescription, conversation, comidasDisponibles = [], alimentosPendientes = [], continuacionRegistro = false, diaNutricional, retryFeedback, config, trace, requestOpenCode = openCodeRequest }) {
   config ||= await readFoodSessionConfig();
   const system = await readFoodSystemPrompt(config.maxFoodItems);
   const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
   const startedAt = Date.now();
-  traceFoodSession(trace, 'message_sent', { stage: 'separar_alimentos', session: shortSessionId(sessionId), enabledTools: ['webfetch'] });
-  const requestContext = { description, ...(diaNutricional ? { diaNutricional } : {}), ...(retryFeedback ? { correccionFormato: retryFeedback } : {}), ...(comidasDisponibles.length ? { comidasDisponibles } : {}), ...(alimentosPendientes.length ? { alimentosPendientes } : {}), ...(continuacionRegistro ? { continuacionRegistro: true } : {}) };
+  traceFoodSession(trace, 'message_sent', { stage: 'separar_alimentos', session: shortSessionId(sessionId), enabledTools: ['websearch', 'webfetch'] });
+  const requestContext = { description, ...(initialDescription ? { initialDescription } : {}), ...(conversation ? { conversation } : {}), ...(diaNutricional ? { diaNutricional } : {}), ...(retryFeedback ? { correccionFormato: retryFeedback } : {}), ...(comidasDisponibles.length ? { comidasDisponibles } : {}), ...(alimentosPendientes.length ? { alimentosPendientes } : {}), ...(continuacionRegistro ? { continuacionRegistro: true } : {}) };
   let result;
   try {
     result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
       system,
-      tools: { webfetch: true },
+      tools: { websearch: true, webfetch: true },
       ...(model ? { model } : {}),
       ...(config.agent ? { agent: config.agent } : {}),
       ...(config.variant ? { variant: config.variant } : {}),

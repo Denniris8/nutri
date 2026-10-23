@@ -1705,14 +1705,14 @@ document.querySelector('#registerFoodButton')?.addEventListener('click', async (
     feedback.classList.remove('food-session-error');
   }
   foodLoading.hidden = false;
-  document.querySelector('#foodLoadingText').textContent = foodPending ? 'Esperando respuesta…' : 'Preparando la sesión…';
+  document.querySelector('#foodLoadingText').textContent = foodPending ? 'Esperando respuesta…' : 'Preparando el registro…';
   saveButton.disabled = true;
   foodForm.hidden = false;
-  feedback.textContent = foodPending ? 'Esperando respuesta…' : 'Revisando borradores y preparando la sesión…';
+  feedback.textContent = foodPending ? 'Esperando respuesta…' : 'Revisando borradores y preparando el registro…';
   foodDialog.showModal();
   if (foodPending) return;
   foodChatThread.hidden = false;
-  notifyApp('Preparando la sesión de comida…', 'info');
+  notifyApp('Preparando el registro de comida…', 'info');
   try {
     await restoreFoodDraft(feedback);
     if (generation !== foodSessionGeneration) return;
@@ -1721,7 +1721,7 @@ document.querySelector('#registerFoodButton')?.addEventListener('click', async (
     if (generation !== foodSessionGeneration) return;
     foodSessionReady = true;
     foodOpenCodeSessionActive = true;
-    notifyApp('Sesión de comida lista.', 'success');
+    notifyApp('Registro de comida listo.', 'success');
     description.disabled = false;
     saveButton.disabled = false;
     description.focus();

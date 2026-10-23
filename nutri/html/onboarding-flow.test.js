@@ -200,7 +200,7 @@ test('calendar date picker navigates arbitrary dates and keeps the selected day 
 test('dashboard has responsive calendar and More exposes editable forms and account actions', () => {
   const html = readFileSync(require.resolve('./dashboard_nutricional.html'), 'utf8');
   const css = readFileSync(require.resolve('./dashboard_nutricional.css'), 'utf8');
-  assert.match(html, /<input id="daySelect" type="date"/);
+  assert.match(html, /<input id="daySelect"[^>]*type="date"/);
   assert.doesNotMatch(html, /objetivos-iniciales|personalObjectivesPanel|objectivesEditDialog|moreObjectivesButton/);
   assert.ok(html.indexOf('id="todayView"') < html.indexOf('id="daySelect"'));
   assert.ok(html.indexOf('id="daySelect"') < html.indexOf('id="progressView"'));

@@ -176,7 +176,7 @@ test('food save rejects an invalid OpenCode response without exposing it to the 
     assert.equal(result.trace, undefined);
     assert.equal(storedSession, 'ses_private_food');
     assert.equal(sent.route, '/session/ses_private_food/message');
-    assert.deepEqual(sent.body.tools, { webfetch: true });
+    assert.deepEqual(sent.body.tools, { websearch: true, webfetch: true });
     assert.equal(typeof sent.body.system, 'string');
     assert.match(sent.body.system, /`items` \(máximo \d+\)/);
     assert.ok(JSON.stringify(sent.body).includes(description));
@@ -533,11 +533,11 @@ test('OpenCode food sessions are private per authenticated user and reused on re
   const requestOpenCode = async (method, route, body) => {
     const id = route.split('/').at(-1);
     if (method === 'GET') return { status: 200, data: openCodeSessions.get(id) };
-      if (method === 'PATCH') { assert.deepEqual(body.permission, [{ permission: '*', pattern: '*', action: 'deny' }, { permission: 'webfetch', pattern: '*', action: 'allow' }]); return { status: 200, data: true }; }
+      if (method === 'PATCH') { assert.deepEqual(body.permission, [{ permission: '*', pattern: '*', action: 'deny' }, { permission: 'webfetch', pattern: '*', action: 'allow' }, { permission: 'websearch', pattern: '*', action: 'allow' }]); return { status: 200, data: true }; }
     if (method === 'DELETE') { openCodeSessions.delete(id); return { status: 200, data: true }; }
     created += 1;
     assert.equal(body.title, 'Registro de comidas');
-    assert.deepEqual(body.permission, [{ permission: '*', pattern: '*', action: 'deny' }, { permission: 'webfetch', pattern: '*', action: 'allow' }]);
+    assert.deepEqual(body.permission, [{ permission: '*', pattern: '*', action: 'deny' }, { permission: 'webfetch', pattern: '*', action: 'allow' }, { permission: 'websearch', pattern: '*', action: 'allow' }]);
     const sessionId = `ses_private${created}`;
     openCodeSessions.set(sessionId, { id: sessionId, metadata: body.metadata });
     return { status: 201, data: { id: sessionId } };
@@ -605,7 +605,7 @@ test('food sessions use OpenCode global model defaults instead of Nutri override
   assert.equal(sent[0].timeout, 600000);
 });
 
-test('food session belongs to the authenticated user and reuses only that user session', async () => {
+test('opening food chat does not create OpenCode sessions before the first message', async () => {
   const sessions = new Map();
   const openCodeSessions = new Map();
   const requests = [];
@@ -626,8 +626,8 @@ test('food session belongs to the authenticated user and reuses only that user s
     assert.deepEqual(await first.json(), { ok: true });
     assert.equal((await open(27)).status, 200);
     assert.equal((await open(44)).status, 200);
-    assert.deepEqual([...sessions.keys()], ['27', '44']);
-    assert.equal(created, 2);
+    assert.deepEqual([...sessions.keys()], []);
+    assert.equal(created, 0);
   }, { openCodeRequest: async (method, route, body) => {
     requests.push({ method, route, body });
     const id = route.split('/').at(-1);
@@ -639,7 +639,7 @@ test('food session belongs to the authenticated user and reuses only that user s
     openCodeSessions.set(sessionId, { id: sessionId, metadata: body.metadata });
     return { status: 201, data: { id: sessionId } };
   } });
-  assert.ok(requests.filter((request) => ['POST', 'PATCH'].includes(request.method)).every(({ body }) => body.permission.some((rule) => rule.permission === 'webfetch' && rule.action === 'allow')));
+  assert.ok(requests.filter((request) => ['POST', 'PATCH'].includes(request.method)).every(({ body }) => ['webfetch', 'websearch'].every((permission) => body.permission.some((rule) => rule.permission === permission && rule.action === 'allow'))));
 });
 
 test('food description remains saved when OpenCode is unavailable', async () => {

@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { foodItemIssues } = require('./food-entries.js');
+const { foodItemIssues, normalizeFoodReply } = require('./food-entries.js');
 
 const item = (overrides = {}) => ({
   name: 'Alimento', sourceText: 'Alimento', macroBasis: 'per_portion', macroStatus: 'declarado', macroSource: 'declarado_usuario',
@@ -10,6 +10,26 @@ const item = (overrides = {}) => ({
 
 test('allows omitted fiber when validating otherwise complete macros', () => {
   assert.deepEqual(foodItemIssues(item()), []);
+});
+
+test('normalizes OpenCode estimated status and decimal-comma macros before validation', () => {
+  const [normalized] = normalizeFoodReply({ items: [{
+    name: 'Arroz', macroBasis: 'per_portion', macroStatus: 'opencode_estimado', macroSource: 'opencode_estimado',
+    macros: { energyKcal: '110,0', proteinG: '2,5', carbohydrateG: '24,0', fatG: '0,3', fiberG: null },
+  }] }).items;
+
+  assert.equal(normalized.macroStatus, 'estimado');
+  assert.deepEqual(normalized.macros, { energyKcal: 110, proteinG: 2.5, carbohydrateG: 24, fatG: 0.3, fiberG: null });
+  assert.deepEqual(foodItemIssues(normalized), []);
+});
+
+test('does not coerce non-decimal macro strings into valid numbers', () => {
+  const [normalized] = normalizeFoodReply({ items: [{
+    name: 'Alimento', macroBasis: 'per_portion', macroStatus: 'estimado', macroSource: 'opencode_estimado',
+    macros: { energyKcal: '0x10', proteinG: '2', carbohydrateG: '3', fatG: '1', fiberG: null },
+  }] }).items;
+
+  assert.ok(foodItemIssues(normalized).includes('macros'));
 });
 
 test('rejects impossible macro mass for a portion', () => {

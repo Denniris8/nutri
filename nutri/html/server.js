@@ -13,7 +13,7 @@ const { readBiometrics, saveBiometric } = require('./api/biometrics.js');
 const { readPlicometrics, savePlicometric } = require('./api/plicometrics.js');
 const { clearFoodChatHistory, deleteFoodEntry, readFoodEntries, readPendingFoodDraft, saveFoodEntry } = require('./api/food-entries.js');
 const { calendarDayRange, readCalendarTimezone } = require('./api/calendar-day.js');
-const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError, safeOpenCodeErrorCode, traceFoodSession } = require('./api/opencode-food.js');
+const { deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError } = require('./api/opencode-food.js');
 const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, prepareTrainingSession, readTrainingPlanPrompt } = require('./api/training-analysis.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
 const { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
@@ -746,27 +746,7 @@ SELECT JSON_OBJECT('days',${days},'current',JSON_OBJECT(
         }
         return;
       }
-      const trace = { id: randomUUID(), events: [] };
-      try {
-        await ensureFoodOpenCodeSession({ userId: claims.sub, dbQuery, textSql, requestOpenCode: openCodeRequest, trace });
-        json(response, 200, { ok: true });
-      } catch (error) {
-        if (!trace.events.some((event) => event.event.endsWith('_failed'))) {
-          traceFoodSession(trace, 'session_open_failed', {
-            stage: 'session_resolution', errorCode: safeOpenCodeErrorCode(error),
-            ...(Number.isInteger(error.status) && error.status >= 100 && error.status <= 599 ? { upstreamHttpStatus: error.status } : {}),
-            ...(typeof error.operation === 'string' ? { operation: error.operation } : {}),
-          });
-        }
-        try {
-          await recordFoodError({
-            dbQuery, textSql, userId: claims.sub, trace, stage: 'session_resolution', error, httpStatus: 503,
-            action: 'POST /api/food/session', route: '/api/food/session',
-          });
-        } catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed' })); }
-        try { await addNotification({ userId: claims.sub, category: 'comida', state: 'error', title: 'No se pudo preparar el registro de comida', message: 'No se pudo abrir la sesión; inténtalo de nuevo.', dbQuery, textSql }); } catch {}
-        authError(response, 503, 'No se pudo abrir la sesión de comidas.');
-      }
+      json(response, 200, { ok: true });
       return;
     }
 
