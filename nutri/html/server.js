@@ -44,9 +44,14 @@ const files = new Map([
   ['/terminos.html', 'terminos.html'],
   ['/dashboard_nutricional.css', 'dashboard_nutricional.css'],
   ['/help-popups.css', 'help-popups.css'], ['/notifications.css', 'notifications.css'], ['/onboarding-flow.js', 'onboarding-flow.js'],
+  ['/manifest.webmanifest', 'manifest.webmanifest'], ['/pwa-icon.svg', 'pwa-icon.svg'],
+  ['/pwa-icon-192.png', 'pwa-icon-192.png'], ['/pwa-icon-512.png', 'pwa-icon-512.png'],
+  ['/service-worker.js', 'service-worker.js'], ['/pwa-register.js', 'pwa-register.js'],
 ]);
 const contentTypes = {
   '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.png': 'image/png',
 };
 
 function loadDatabaseEnvironment() {

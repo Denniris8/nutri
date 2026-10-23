@@ -4,6 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <meta name="theme-color" content="#101411">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/pwa-icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/pwa-icon-192.png">
   <link rel="stylesheet" href="/notifications.css">
   <title>Acceso · Dashboard Nutricional</title>
   <style>
@@ -138,6 +141,7 @@
     <p id="errorMessage" role="alert" aria-live="polite"></p>
   </main>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
+  <script src="/pwa-register.js" defer></script>
   <script src="/onboarding-flow.js?v=login-phone-e164" defer></script>
 </body>
 </html>

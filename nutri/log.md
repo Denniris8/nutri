@@ -27,6 +27,12 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-23 01:15 CST — Versión PATCH incrementada a 0.1.5 para el commit PWA; el dashboard la muestra desde `VERSION`.
+
+- 2026-10-23 01:14 CST — PWA: generados los iconos PNG de 192×192 y 512×512 con Python estándar; declarados en el manifest, las rutas estáticas y el caché de carcasa. Añadido icono táctil para iOS.
+
+- 2026-10-23 01:13 CST — PWA instalable: añadidos manifest, icono SVG, registro de service worker y cacheo de la carcasa estática con estrategia network-first. Las rutas `/api/` y los datos autenticados no se guardan en caché; servicio y recursos servidos desde el origen de la app. No se ejecutaron pruebas ni builds.
+
 - 2026-10-23 01:10 CST — Versión incrementada a 0.1.4 (PATCH) para el commit; el dashboard la sincroniza dinámicamente desde `VERSION`.
 
 - 2026-10-23 01:03 CST — Aviso de planes con días asociados: añadido margen interior de 12 px para alinearlo con el contenido de la tarjeta y evitar que quede pegado al borde izquierdo. Actualizada la caché del CSS.
