@@ -27,6 +27,34 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-23 01:10 CST — Versión incrementada a 0.1.4 (PATCH) para el commit; el dashboard la sincroniza dinámicamente desde `VERSION`.
+
+- 2026-10-23 01:03 CST — Aviso de planes con días asociados: añadido margen interior de 12 px para alinearlo con el contenido de la tarjeta y evitar que quede pegado al borde izquierdo. Actualizada la caché del CSS.
+
+- 2026-10-23 01:02 CST — Lista de planes: añadida una etiqueta visible «PLAN ACTIVO» con su fecha de inicio; las vigencias futuras se distinguen como «PLAN PROGRAMADO». Actualizada la caché del CSS.
+
+- 2026-10-23 01:01 CST — Modal de plan: corregida la regla CSS que hacía visible «Ir a planes y activar» pese a tener `hidden`; ahora permanece oculto hasta confirmar el guardado. Actualizada la versión de caché del CSS.
+
+- 2026-10-23 01:00 CST — Guardado de plan: el modal de creación ahora indica que debe activarse para aplicar sus metas y ofrece «Ir a planes y activar», que cierra el modal, abre la lista y lleva el foco a los planes. Actualizada la versión de caché del JavaScript.
+
+- 2026-10-23 00:58 CST — Botones de eliminar de comidas y entrenamientos reducidos a 24×24 px y reubicados al final de la fila de encabezado, centrados verticalmente; actualizada la versión de caché del CSS.
+
+- 2026-10-23 00:57 CST — Botones de eliminar de comidas y entrenamientos reducidos a 28×28 px y centrados debajo del contenido de cada tarjeta; actualizada la versión de caché del CSS.
+
+- 2026-10-23 00:56 CST — Botones de eliminar en las listas de comidas y entrenamientos reducidos de 44×44 px a 36×36 px; actualizada la versión de caché del CSS. No se ejecutaron pruebas.
+
+- 2026-10-23 00:54 CST — Lista de planes: eliminado el botón y la acción de borrado de la interfaz para todos los planes. Se conserva la restricción de borrado en la API; actualizada la versión de caché del JavaScript.
+
+- 2026-10-23 00:54 CST — Migraciones aplicadas con `mysql/migrate.sh`: `0007_dias_calendario` y `0008_vigencias_plan_entrenamiento`. La primera ejecución de 0008 falló al crear la FK compuesta después de dejar creado el índice único redundante; se verificó el estado parcial con MySQL, se ajustó la FK a la PK de plan y se reintentó con éxito. Verificado `schema_migrations`, ambas tablas/columnas y cero vigencias sembradas; los 13 entrenamientos existentes siguen sin vínculo histórico. El índice redundante parcial permanece documentado. No se ejecutaron pruebas.
+
+- 2026-10-23 00:49 CST — Protección de trazabilidad: se deshabilitó la eliminación en la interfaz y se añadió un aviso accesible para planes con vigencias. La API serializa activación y borrado con el bloqueo de usuario y responde 409 si existe cualquier vigencia. Actualizadas pruebas y documentación; pruebas no ejecutadas.
+
+- 2026-10-23 00:49 CST — Planes de entrenamiento: creada la migración aditiva 0008 para registrar periodos de vigencia, evitar periodos activos simultáneos y relacionar sesiones manuales/Garmin con el periodo por fecha. Añadida activación explícita desde el dashboard, vista del plan aplicable por día y metas históricas solo cuando el mismo plan cubrió todo el periodo analizado. Registros previos permanecen sin vínculo por falta de evidencia. No se aplicó manualmente la migración ni se ejecutaron pruebas; `nutri` la aplicará al arrancar.
+
+- 2026-10-23 00:40 CST — Listas de alimentos y entrenamientos guardados: unificadas visualmente con las tarjetas de planes creados, usando el mismo fondo, borde, radio y botón de eliminación de 44 px; se quitó el fondo alternado de comidas.
+
+- 2026-10-23 00:38 CST — AGENTS.md: añadido el disparador de mensaje exacto `git` para ejecutar pull, add, commit y push en ese orden, con límites ante conflictos o ausencia de cambios.
+
 - 2026-10-23 00:34 CST — Aclaración de comidas de madrugada: el mensaje ahora explica con claridad que los macros se acumularán en el día nutricional elegido, incluido al confirmar el día anterior. VERSION incrementado a 0.1.3 para este commit.
 
 - 2026-10-23 00:31 CST — Cierre con X: para comidas, el servidor elimina la sesión OpenCode, los mensajes del destino completado y el borrador pendiente del request actual, preservando comidas completadas y sus alimentos/macros. Entrenamiento y plan eliminan su sesión OpenCode, que contiene su historial conversacional. Actualizados los contratos y el esquema descriptivo; no se ejecutaron pruebas.

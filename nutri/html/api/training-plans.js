@@ -102,16 +102,70 @@ SELECT JSON_OBJECT('id',id,'requestId',request_id,'createdAt',DATE_FORMAT(creado
 async function readTrainingPlans({ userId, dbQuery }) {
   const id = String(userId);
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta no válida.'), { status: 400 });
-  const rows = await dbQuery(`SELECT JSON_OBJECT('id',id,'goals',objetivos,'plan',contenido,'macros',JSON_OBJECT('proteinas_g',objetivo_proteinas_g,'carbohidratos_g',objetivo_carbohidratos_g,'grasas_g',objetivo_grasas_g,'calorias_kcal',objetivo_calorias_kcal),'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ')) FROM planes_entrenamiento WHERE usuario_id=${id} ORDER BY creado_en DESC,id DESC LIMIT 3;`);
+  const rows = await dbQuery(`SELECT JSON_OBJECT('id',p.id,'goals',p.objetivos,'plan',p.contenido,'macros',JSON_OBJECT('proteinas_g',p.objetivo_proteinas_g,'carbohidratos_g',p.objetivo_carbohidratos_g,'grasas_g',p.objetivo_grasas_g,'calorias_kcal',p.objetivo_calorias_kcal),'createdAt',DATE_FORMAT(p.creado_en,'%Y-%m-%dT%H:%i:%sZ'),'hasAssociatedDays',EXISTS(SELECT 1 FROM vigencias_planes_entrenamiento v WHERE v.usuario_id=p.usuario_id AND v.plan_id=p.id),'activePeriod',(SELECT JSON_OBJECT('id',v.id,'startDate',DATE_FORMAT(v.fecha_inicio,'%Y-%m-%d')) FROM vigencias_planes_entrenamiento v WHERE v.usuario_id=p.usuario_id AND v.plan_id=p.id AND v.fecha_fin IS NULL LIMIT 1)) FROM planes_entrenamiento p WHERE p.usuario_id=${id} ORDER BY EXISTS(SELECT 1 FROM vigencias_planes_entrenamiento v WHERE v.usuario_id=p.usuario_id AND v.plan_id=p.id AND v.fecha_fin IS NULL) DESC,p.creado_en DESC,p.id DESC LIMIT 3;`);
   return rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [];
+}
+
+async function readTrainingPlanForDate({ userId, date, dbQuery, textSql }) {
+  const id = String(userId);
+  const parsed = typeof date === 'string' ? new Date(`${date}T00:00:00Z`) : null;
+  if (!/^\d+$/.test(id) || !/^\d{4}-\d{2}-\d{2}$/.test(date || '') || !parsed || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) {
+    throw Object.assign(new Error('La fecha del plan no es válida.'), { status: 400 });
+  }
+  const row = await dbQuery(`SELECT JSON_OBJECT('id',p.id,'goals',p.objetivos,'plan',p.contenido,'macros',JSON_OBJECT('proteinas_g',p.objetivo_proteinas_g,'carbohidratos_g',p.objetivo_carbohidratos_g,'grasas_g',p.objetivo_grasas_g,'calorias_kcal',p.objetivo_calorias_kcal),'vigencyId',v.id,'startDate',DATE_FORMAT(v.fecha_inicio,'%Y-%m-%d'),'endDate',DATE_FORMAT(v.fecha_fin,'%Y-%m-%d')) FROM vigencias_planes_entrenamiento v JOIN planes_entrenamiento p ON p.id=v.plan_id AND p.usuario_id=v.usuario_id WHERE v.usuario_id=${id} AND v.fecha_inicio<=${textSql(date)} AND (v.fecha_fin IS NULL OR v.fecha_fin>=${textSql(date)}) ORDER BY v.fecha_inicio DESC,v.id DESC LIMIT 1;`);
+  return row ? JSON.parse(row) : null;
+}
+
+async function activateTrainingPlan({ userId, planId, startDate, today, dayStart, dayEnd, dbQuery, textSql }) {
+  const user = String(userId);
+  const plan = String(planId);
+  const dateValue = (value) => {
+    if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = Date.parse(`${value}T00:00:00Z`);
+    return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === value;
+  };
+  if (!/^\d+$/.test(user) || !/^[1-9]\d{0,19}$/.test(plan) || !dateValue(startDate) || !dateValue(today)
+    || !dayStart || !dayEnd || startDate < today) throw Object.assign(new Error('La fecha de inicio del plan no es válida.'), { status: 400 });
+  const result = await dbQuery(`SET @locked_user=NULL,@plan_exists=NULL,@active_id=NULL,@active_plan=NULL,@active_start=NULL;
+START TRANSACTION;
+SELECT id INTO @locked_user FROM usuarios WHERE id=${user} FOR UPDATE;
+SET @plan_exists=(SELECT id FROM planes_entrenamiento WHERE id=${plan} AND usuario_id=${user} LIMIT 1);
+SELECT id,plan_id,fecha_inicio INTO @active_id,@active_plan,@active_start FROM vigencias_planes_entrenamiento WHERE usuario_id=${user} AND fecha_fin IS NULL LIMIT 1 FOR UPDATE;
+SET @already_active=COALESCE(@active_plan=${plan} AND @active_start=${textSql(startDate)},FALSE);
+SET @overlap=EXISTS(SELECT 1 FROM vigencias_planes_entrenamiento WHERE usuario_id=${user} AND id<>COALESCE(@active_id,0) AND (fecha_fin IS NULL OR fecha_fin>=${textSql(startDate)}));
+SET @has_training=EXISTS(SELECT 1 FROM registros_entrenamientos WHERE usuario_id=${user} AND creado_en>=${textSql(dayStart)} AND creado_en<${textSql(dayEnd)});
+SET @can_activate=@locked_user IS NOT NULL AND @plan_exists IS NOT NULL AND ${textSql(startDate)}>=${textSql(today)} AND NOT @overlap AND (@active_id IS NULL OR @active_start<${textSql(startDate)} OR @already_active) AND (@already_active OR NOT @has_training);
+UPDATE vigencias_planes_entrenamiento SET fecha_fin=DATE_SUB(${textSql(startDate)},INTERVAL 1 DAY) WHERE id=@active_id AND @can_activate AND NOT @already_active;
+INSERT INTO vigencias_planes_entrenamiento(usuario_id,plan_id,fecha_inicio,fecha_fin,creado_en) SELECT ${user},${plan},${textSql(startDate)},NULL,UTC_TIMESTAMP(3) WHERE @can_activate AND NOT @already_active;
+SET @new_id=LAST_INSERT_ID();
+SELECT JSON_OBJECT('ok',@can_activate,'planExists',@plan_exists IS NOT NULL,'alreadyActive',@already_active,'hasTraining',@has_training,'vigencyId',IF(@already_active,@active_id,@new_id));
+COMMIT;`);
+  let outcome;
+  try { outcome = JSON.parse(result.trim().split(/\r?\n/).at(-1)); } catch { throw new Error('No se pudo verificar la activación del plan.'); }
+  if (!outcome.planExists) throw Object.assign(new Error('El plan no existe.'), { status: 404 });
+  if (!outcome.ok) throw Object.assign(new Error(outcome.hasTraining
+    ? 'Ya hay entrenamientos guardados en esa fecha; activa el plan desde otro día para conservar la trazabilidad.'
+    : 'La fecha se cruza con otra vigencia o no avanza respecto al plan actual.'), { status: 409 });
+  return { vigencyId: String(outcome.vigencyId), alreadyActive: outcome.alreadyActive };
 }
 
 async function deleteTrainingPlan({ userId, planId, dbQuery }) {
   const user = String(userId);
   const id = String(planId);
   if (!/^\d+$/.test(user) || !/^[1-9]\d{0,19}$/.test(id)) throw Object.assign(new Error('Plan no válido.'), { status: 400 });
-  const result = await dbQuery(`DELETE FROM planes_entrenamiento WHERE id=${id} AND usuario_id=${user}; SELECT ROW_COUNT();`);
-  return result.split(/\s+/).at(-1) === '1';
+  const result = await dbQuery(`SET @locked_user=NULL,@plan_exists=NULL,@has_vigencies=FALSE;
+START TRANSACTION;
+SELECT id INTO @locked_user FROM usuarios WHERE id=${user} FOR UPDATE;
+SET @plan_exists=(SELECT id FROM planes_entrenamiento WHERE id=${id} AND usuario_id=${user} LIMIT 1);
+SET @has_vigencies=EXISTS(SELECT 1 FROM vigencias_planes_entrenamiento WHERE usuario_id=${user} AND plan_id=${id});
+DELETE FROM planes_entrenamiento WHERE id=${id} AND usuario_id=${user} AND @locked_user IS NOT NULL AND NOT @has_vigencies;
+SELECT JSON_OBJECT('planExists',@plan_exists IS NOT NULL,'hasVigencies',@has_vigencies,'deleted',ROW_COUNT()=1);
+COMMIT;`);
+  let outcome;
+  try { outcome = JSON.parse(result.trim().split(/\r?\n/).at(-1)); } catch { throw new Error('No se pudo verificar la eliminación del plan.'); }
+  if (!outcome.planExists) throw Object.assign(new Error('El plan ya no existe.'), { status: 404 });
+  if (outcome.hasVigencies) throw Object.assign(new Error('Este plan no se puede eliminar porque tiene días asociados y debe conservarse para la trazabilidad.'), { status: 409 });
+  return outcome.deleted === true;
 }
 
-module.exports = { deleteTrainingPlan, extractPlanDisclosure, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan, validatePlanSemantics, validateTrainingPlan };
+module.exports = { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan, validatePlanSemantics, validateTrainingPlan };

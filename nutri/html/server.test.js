@@ -67,10 +67,11 @@ test('dummy registration creates synthetic measurement rows without completing o
     const response = await post(base + '/api/auth/register', demo);
     assert.equal(response.status, 201);
   }, { testAccountPhone: '+520000000000', allowTestAccountSeeding: true });
-  for (const table of ['registros_biometricos', 'registros_plicometro', 'registros_comidas', 'planes_entrenamiento']) {
+  for (const table of ['registros_biometricos', 'registros_plicometro', 'registros_comidas', 'planes_entrenamiento', 'vigencias_planes_entrenamiento']) {
     assert.match(registrationSql, new RegExp(`INSERT INTO ${table}`));
   }
   assert.doesNotMatch(registrationSql, /INSERT INTO (preferencias_usuario|perfil_salud_usuario)/);
+  assert.match(registrationSql, /INSERT INTO vigencias_planes_entrenamiento\(usuario_id,plan_id,fecha_inicio,creado_en\)/);
   assert.ok(registrationSql.includes(Buffer.from('DATO SINTÉTICO DE PRUEBA: desayuno de ejemplo; alimentos y cantidades no son consumo real.').toString('hex')));
   assert.ok(registrationSql.includes(Buffer.from('DATO SINTÉTICO DE PRUEBA: plan de demostración; no es una recomendación personalizada.').toString('hex')));
   assert.doesNotMatch(registrationSql, /INSERT INTO (registros_comida_items|alimentos_referencia)/);
@@ -84,7 +85,7 @@ test('client cannot mark an arbitrary registration as a test account', async () 
     const response = await post(base + '/api/auth/register', { ...demo, phone: '4155550123', countryIso: 'US', isTestAccount: true });
     assert.equal(response.status, 201);
   }, { testAccountPhone: '+520000000000', allowTestAccountSeeding: true });
-  assert.doesNotMatch(registrationSql, /INSERT INTO (preferencias_usuario|perfil_salud_usuario|registros_biometricos|registros_plicometro|registros_comidas|planes_entrenamiento)/);
+  assert.doesNotMatch(registrationSql, /INSERT INTO (preferencias_usuario|perfil_salud_usuario|registros_biometricos|registros_plicometro|registros_comidas|planes_entrenamiento|vigencias_planes_entrenamiento)/);
 });
 
 test('test account seed requires server-side authorization even for the reserved phone', async () => {
@@ -93,7 +94,7 @@ test('test account seed requires server-side authorization even for the reserved
     const response = await post(base + '/api/auth/register', demo);
     assert.equal(response.status, 201);
   }, { testAccountPhone: '+520000000000', allowTestAccountSeeding: false });
-  assert.doesNotMatch(registrationSql, /INSERT INTO (registros_biometricos|registros_plicometro|registros_comidas|planes_entrenamiento)/);
+  assert.doesNotMatch(registrationSql, /INSERT INTO (registros_biometricos|registros_plicometro|registros_comidas|planes_entrenamiento|vigencias_planes_entrenamiento)/);
   assert.match(registrationSql, /,0\);/);
 });
 

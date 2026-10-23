@@ -31,6 +31,8 @@ test('manual training registration persists and verifies the calculated session'
   assert.equal(response.status, 201);
   assert.deepEqual(response.body, { ok: true, entryId: '41', requestId: trainingRequest().requestId, caloriesKcal: 257.3, createdAt: persisted.createdAt, savedAt: null });
   assert.match(queries.find((sql) => sql.includes('INSERT INTO registros_entrenamientos')), /'manual'/);
+  assert.match(queries.find((sql) => sql.includes('INSERT INTO registros_entrenamientos')), /plan_vigencia_id/);
+  assert.match(queries.find((sql) => sql.includes('INSERT INTO registros_entrenamientos')), /FROM vigencias_planes_entrenamiento/);
   assert.match(queries.find((sql) => sql.includes('INSERT INTO registros_entrenamientos')), /'123e4567-e89b-42d3-a456-426614174000'/);
   assert.ok(queries.some((sql) => sql.includes('SELECT JSON_OBJECT') && sql.includes('usuario_id=27')));
 });

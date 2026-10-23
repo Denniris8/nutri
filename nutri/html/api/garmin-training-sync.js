@@ -91,7 +91,11 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
           }];
         }).filter(([id]) => id !== null));
         if (!rows.size) return { activities: activities.length, saved: 0, skipped: activities.length, stepsUpdated, stepsUnavailable };
-        const statements = [...rows.values()].map((activity) => `INSERT IGNORE INTO registros_entrenamientos(usuario_id,descripcion,actividad,duracion_minutos,peso_kg,met,energia_kcal,distancia_metros,tipo_energia,origen,external_activity_id,creado_en) VALUES (${userId},${textSql(activity.description)},${textSql(activity.activity)},${activity.duration},NULL,NULL,${activity.calories},${activity.distance ?? 'NULL'},'reportada_dispositivo','garmin',${textSql(String(activity.id))},${textSql(activity.createdAt)}); SELECT ROW_COUNT();`).join('\n');
+        const vigencySql = `(SELECT id FROM vigencias_planes_entrenamiento WHERE usuario_id=${userId} AND fecha_inicio<=${textSql(date)} AND (fecha_fin IS NULL OR fecha_fin>=${textSql(date)}) ORDER BY fecha_inicio DESC,id DESC LIMIT 1)`;
+        const statements = `START TRANSACTION;
+SELECT id INTO @locked_user FROM usuarios WHERE id=${userId} FOR UPDATE;
+${[...rows.values()].map((activity) => `INSERT IGNORE INTO registros_entrenamientos(usuario_id,plan_vigencia_id,descripcion,actividad,duracion_minutos,peso_kg,met,energia_kcal,distancia_metros,tipo_energia,origen,external_activity_id,creado_en) VALUES (${userId},${vigencySql},${textSql(activity.description)},${textSql(activity.activity)},${activity.duration},NULL,NULL,${activity.calories},${activity.distance ?? 'NULL'},'reportada_dispositivo','garmin',${textSql(String(activity.id))},${textSql(activity.createdAt)}); SELECT ROW_COUNT();`).join('\n')}
+COMMIT;`;
         const inserted = await dbQuery(statements);
         const saved = inserted.split(/\s+/).reduce((total, count) => total + (Number(count) === 1 ? 1 : 0), 0);
         return { activities: activities.length, saved, skipped: activities.length - saved, stepsUpdated, stepsUnavailable };

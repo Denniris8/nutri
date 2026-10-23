@@ -17,6 +17,8 @@ Responde exclusivamente JSON válido, en español, con {"trainingSession":boolea
 - El servidor valida la sesión autenticada y calcula las kcal con MET, peso y duración; no confía en las kcal propuestas por OpenCode.
 - El peso biométrico de más de 60 días se considera desactualizado. Sin peso vigente ni peso actual indicado por la persona, se pide aclaración y no se estima el gasto.
 - El cliente conserva un `requestId` hasta confirmar el guardado; MySQL lo limita como único por usuario. Un reintento devuelve el registro existente, no crea otra sesión.
+- Cada sesión manual y actividad Garmin queda relacionada con la vigencia del plan que cubre su fecha calendario local. Las vigencias se activan explícitamente desde la lista de planes; un cambio cierra el periodo anterior el día previo. No se vinculan retrospectivamente sesiones sin relación demostrable.
+- Un plan con cualquier vigencia (días asociados) no se puede eliminar, aunque no tenga sesiones vinculadas. La interfaz deshabilita la acción y la API vuelve a validar de forma atómica para conservar la trazabilidad.
 - Tras insertar, el servidor relee la sesión por usuario y verifica `requestId` y descripción. El dashboard vuelve a cargar el día y calcula el balance desde sesiones manuales y actividades del dispositivo.
 - Las coincidencias manual/Garmin inequívocas cuentan una sola vez. Si hay varias coincidencias posibles, se marcan como ambiguas y no se acreditan automáticamente; el dashboard indica que deben revisarse.
 - Los fallos de análisis, guardado y verificación se registran en `errores_aplicacion` con hora UTC y `trace_id`; no se persisten descripciones ni excepciones crudas.

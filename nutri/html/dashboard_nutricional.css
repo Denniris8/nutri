@@ -294,13 +294,26 @@ button:disabled { cursor: not-allowed; color: #9ca79e; background: var(--md-sys-
 .training-plan-chat { display: grid; gap: 8px; margin-top: 8px; }
 .saved-training-plans { display: grid; gap: 8px; margin: 0 0 4px; padding: 0; list-style: none; }
 .saved-training-plans > li > .hint { margin: 0; }
-.saved-training-plan-card { position: relative; min-width: 0; border: 1px solid var(--line); border-radius: var(--shape-md); background: var(--md-sys-color-surface-container-low); }
+.saved-training-plan-card, .meal { position: relative; min-width: 0; border: 1px solid var(--line); border-radius: var(--shape-md); background: var(--md-sys-color-surface-container-low); }
 .saved-training-plan { min-width: 0; }
 .saved-training-plan > summary { display: grid; gap: 4px; padding: 10px 64px 10px 12px; cursor: pointer; }
 .saved-training-plan > summary span { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .saved-training-plan > summary .saved-training-plan-macros { font-size: 12px; }
 .saved-training-plan-content { padding: 0 12px 12px; color: var(--text); font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
-.saved-training-plan-delete { position: absolute; top: 8px; right: 8px; width: 44px; min-width: 44px; height: 44px; min-height: 44px; margin: 0; }
+.training-plan-activation { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.training-plan-activation label { display: grid; gap: 4px; font-size: 12px; }
+.training-plan-activation input { min-height: 44px; padding: 8px; border: 1px solid var(--md-sys-color-outline); border-radius: var(--shape-sm); background: var(--md-sys-color-surface); color: var(--text); font: inherit; }
+.training-plan-activation button { min-height: 44px; }
+.saved-training-plan-active, .training-plan-link { color: var(--accent); font-size: 12px; }
+.saved-training-plan-active { margin: 0; padding: 0 12px 10px; line-height: 1.4; }
+.saved-training-plan-status { justify-self: start; padding: 3px 8px; border-radius: var(--shape-full); background: var(--md-sys-color-surface-container-high); color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .03em; }
+.saved-training-plan-status[data-state="active"] { background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.saved-training-plan-status[data-state="scheduled"] { background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent); }
+.training-active-plan h3 { margin: 0 0 4px; font-size: var(--type-title); }
+.training-active-plan details { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
+.training-active-plan summary { cursor: pointer; color: var(--accent); font-weight: 600; }
+.training-active-plan details > div { padding-top: 8px; color: var(--muted); font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.meal-delete-button { display: grid; width: 24px; min-width: 24px; height: 24px; min-height: 24px; margin: 0; box-sizing: border-box; padding: 0; place-items: center; border: 0; border-radius: 3px; background: #b42318; color: #fff; font-size: 14px; line-height: 1; cursor: pointer; }
 .training-plan-chat .food-chat-thread { max-height: 240px; }
 .training-plan-chat .food-chat-message[data-role="assistant"] { max-width: 100%; }
 .training-plan-chat label { font-size: 13px; font-weight: 600; }
@@ -308,6 +321,7 @@ button:disabled { cursor: not-allowed; color: #9ca79e; background: var(--md-sys-
 .training-plan-composer textarea { min-width: 0; min-height: 44px; box-sizing: border-box; padding: 8px 12px; border: 1px solid var(--input-border); border-radius: var(--shape-md); background: var(--input-bg); color: var(--text); font: inherit; resize: vertical; }
 .training-plan-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
 .training-plan-actions button { flex: 0 1 auto; width: auto; }
+.training-plan-actions button[hidden] { display: none !important; }
 .collapsible-summary { display: flex; align-items: center; min-height: 46px; gap: 12px; list-style: none; cursor: pointer; user-select: none; }
 .collapsible-summary::-webkit-details-marker { display: none; }
 .collapsible-summary::after { content: "⌄"; display: grid; flex: 0 0 32px; width: 32px; height: 32px; place-items: center; margin-left: auto; border-radius: var(--shape-full); color: var(--accent); background: var(--md-sys-color-surface-container); font-size: 19px; transition: transform 160ms ease; }
@@ -383,19 +397,18 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
 .chart-point:hover, .chart-point:focus, .chart-bar:hover, .chart-bar:focus { outline: none; filter: drop-shadow(0 0 3px rgba(25, 35, 28, .4)); stroke: var(--text); stroke-width: 2px; }
 .meals { display: grid; gap: 10px; }
 .meal-block-title { margin: 4px 2px 2px; color: var(--muted); font-size: 13px; font-weight: 700; }
-.meal { padding: 12px 14px; border: 1px solid var(--line); border-radius: var(--shape-lg); background: var(--md-sys-color-surface-container-low); }
-.meal:nth-of-type(even) { background: var(--md-sys-color-surface-container-high); }
+.meal { padding: 10px 12px; }
 .meal-alert-window { border-color: #80652d; box-shadow: inset 3px 0 #e9c36f; }
 .meal-alert-dup { border-color: #e7aaa3; box-shadow: inset 3px 0 var(--bad); }
-.meal-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+.meal-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 6px; }
 .meal-head-actions { display: flex; align-items: center; gap: 8px; }
-.meal-delete-button { display: grid; width: 24px; min-width: 24px; height: 24px; min-height: 24px; box-sizing: border-box; padding: 0; place-items: center; border: 0; border-radius: 3px; background: #b42318; color: #fff; font-size: 18px; line-height: 1; cursor: pointer; }
 .meal-delete-button:hover { background: #d92d20; }
 .meal-delete-button:disabled { opacity: .55; cursor: wait; }
 .meal h3 { margin: 0; font-size: var(--type-title); font-weight: 620; }
 .meal-food { padding: 8px 0; border-top: 1px solid var(--line); }
 .meal-food h4 { margin: 0 0 3px; font-size: 14px; font-weight: 650; }
 .meal .meal-macros { font-size: 13px; }
+.meal .training-plan-link { color: var(--accent); font-size: 12px; }
 .meal-total { margin-top: 6px; padding: 10px 0 2px; border-top: 1px solid var(--line); }
 .meal-total h4 { margin: 0 0 3px; font-size: 14px; font-weight: 700; }
 .meal .meal-total p { font-size: 13px; font-weight: 600; }
@@ -581,7 +594,6 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
   h1 { font-size: clamp(26px, 7vw, 34px); }
   .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .insight-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .meal-head { align-items: flex-start; }
 }
 @media (max-width: 480px) {
   .training-plan-actions button { flex: 1 1 120px; }
@@ -590,7 +602,6 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
   .cards { grid-template-columns: 1fr; }
   .badge { max-width: 100%; }
   .insight-grid { grid-template-columns: 1fr; }
-  .meal-head { flex-direction: column; }
   .garmin-toolbar button { width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {

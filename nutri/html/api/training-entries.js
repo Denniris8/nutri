@@ -60,7 +60,8 @@ async function recordTrainingError({ dbQuery, textSql, userId, traceId, stage, e
   const name = typeof error?.name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error.name) ? error.name : 'Error';
   const description = stage === 'analysis' ? 'No se pudo analizar el entrenamiento.'
     : stage === 'verification' ? 'No se pudo verificar el entrenamiento guardado.'
-      : stage === 'steps' ? 'No se pudieron guardar los pasos diarios.' : 'No se pudo guardar el entrenamiento.';
+      : stage === 'steps' ? 'No se pudieron guardar los pasos diarios.'
+        : stage === 'activation' ? 'No se pudo activar el plan de entrenamiento.' : 'No se pudo guardar el entrenamiento.';
   await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,usuario_id,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('training-opencode')},${textSql(traceId)},${textSql('training_failed')},${textSql(stage)},${textSql(action)},${textSql('POST')},${textSql(action.split(' ')[1])},${userId},${textSql(code)},${textSql(name)},${httpStatus},${textSql(description)});`);
 }
 
@@ -201,16 +202,23 @@ async function saveTrainingEntry({ response, data, userId, dbQuery, textSql, jso
   try { entry = validateTrainingEntry(data); }
   catch (error) { json(response, error.status || 400, { error: error.message }); return; }
   let createdAt;
+  let calendarTimezone;
+  let occurredDate;
   try {
-    const calendarTimezone = await readCalendarTimezone(userId, dbQuery, timezone);
+    calendarTimezone = await readCalendarTimezone(userId, dbQuery, timezone);
+    occurredDate = nutritionDate || localCalendarDate(calendarTimezone);
     createdAt = requestedTrainingTime(entry.description, nutritionDate, calendarTimezone, entry.savedAt);
   }
   catch (error) { json(response, error.status || 400, { error: error.message }); return; }
   const traceId = randomUUID();
   let stage = 'persistence';
   try {
-    const inserted = await dbQuery(`INSERT INTO registros_entrenamientos(usuario_id,origen,external_activity_id,request_id,descripcion,actividad,duracion_minutos,peso_kg,met,energia_kcal,creado_en) VALUES (${userId},'manual',NULL,${textSql(entry.requestId)},${textSql(entry.description)},${textSql(entry.activity)},${entry.durationMinutes},${entry.weightKg},${entry.met},${entry.caloriesKcal},${createdAt ? textSql(createdAt) : 'UTC_TIMESTAMP(3)'}) AS incoming ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id);
-SELECT LAST_INSERT_ID();`);
+    const vigencySql = `(SELECT id FROM vigencias_planes_entrenamiento WHERE usuario_id=${userId} AND fecha_inicio<=${textSql(occurredDate)} AND (fecha_fin IS NULL OR fecha_fin>=${textSql(occurredDate)}) ORDER BY fecha_inicio DESC,id DESC LIMIT 1)`;
+    const inserted = await dbQuery(`START TRANSACTION;
+SELECT id INTO @locked_user FROM usuarios WHERE id=${userId} FOR UPDATE;
+INSERT INTO registros_entrenamientos(usuario_id,plan_vigencia_id,origen,external_activity_id,request_id,descripcion,actividad,duracion_minutos,peso_kg,met,energia_kcal,creado_en) VALUES (${userId},${vigencySql},'manual',NULL,${textSql(entry.requestId)},${textSql(entry.description)},${textSql(entry.activity)},${entry.durationMinutes},${entry.weightKg},${entry.met},${entry.caloriesKcal},${createdAt ? textSql(createdAt) : 'UTC_TIMESTAMP(3)'}) AS incoming ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id);
+SELECT LAST_INSERT_ID();
+COMMIT;`);
     const entryId = inserted.split(/\s+/).at(-1);
     if (!/^\d+$/.test(entryId || '')) throw new Error('training_insert_failed');
     stage = 'verification';
@@ -253,9 +261,9 @@ async function readTrainingEntries({ userId, dbQuery, date, timezone }) {
       const calendarTimezone = await readCalendarTimezone(id, dbQuery, timezone);
       ({ start, end } = calendarDayRange(date, calendarTimezone));
     } catch { throw Object.assign(new Error('La fecha o zona horaria no es válida.'), { status: 400 }); }
-    dateFilter = ` AND creado_en>='${start}' AND creado_en<'${end}'`;
+    dateFilter = ` AND e.creado_en>='${start}' AND e.creado_en<'${end}'`;
   }
-  const rows = await dbQuery(`SET time_zone='+00:00'; SELECT JSON_OBJECT('id',id,'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ'),'description',descripcion,'activity',actividad,'durationMinutes',duracion_minutos,'weightKg',peso_kg,'met',met,'caloriesKcal',energia_kcal,'distanceMeters',distancia_metros,'energyType',tipo_energia,'origin',origen,'externalActivityId',external_activity_id) FROM registros_entrenamientos WHERE usuario_id=${id}${dateFilter} ORDER BY creado_en DESC,id DESC LIMIT 100;`);
+  const rows = await dbQuery(`SET time_zone='+00:00'; SELECT JSON_OBJECT('id',e.id,'createdAt',DATE_FORMAT(e.creado_en,'%Y-%m-%dT%H:%i:%sZ'),'description',e.descripcion,'activity',e.actividad,'durationMinutes',e.duracion_minutos,'weightKg',e.peso_kg,'met',e.met,'caloriesKcal',e.energia_kcal,'distanceMeters',e.distancia_metros,'energyType',e.tipo_energia,'origin',e.origen,'externalActivityId',e.external_activity_id,'plan',IF(p.id IS NULL,NULL,JSON_OBJECT('id',p.id,'goals',p.objetivos,'startDate',DATE_FORMAT(v.fecha_inicio,'%Y-%m-%d'),'endDate',DATE_FORMAT(v.fecha_fin,'%Y-%m-%d')))) FROM registros_entrenamientos e LEFT JOIN vigencias_planes_entrenamiento v ON v.id=e.plan_vigencia_id LEFT JOIN planes_entrenamiento p ON p.id=v.plan_id AND p.usuario_id=e.usuario_id WHERE e.usuario_id=${id}${dateFilter} ORDER BY e.creado_en DESC,e.id DESC LIMIT 100;`);
   return rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [];
 }
 

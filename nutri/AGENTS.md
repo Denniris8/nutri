@@ -24,6 +24,7 @@
 22 - Antes de crear o aplicar una migración, contrastar el esquema y los datos existentes usando `mysql`, considerar compatibilidad durante el despliegue y documentar una recuperación segura (rollback cuando sea viable o migración correctiva hacia delante). No asumir que DDL es transaccional ni modificar una migración ya aplicada.
 23 - En análisis, resúmenes y gráficas que crucen datos, indicar periodo, cantidad/cobertura y procedencia de cada dato cuando esté disponible; distinguir valores medidos, declarados y estimados. No tratar días sin datos como cero ni interpolar mediciones faltantes. Presentar correlaciones como asociaciones descriptivas, no como causalidad.
 24 - Antes de cada commit de la app, incrementar el número PATCH de `VERSION` (semver), y mantener la versión que muestra el dashboard sincronizada desde ese archivo. No incrementar por cambios locales que no se vayan a confirmar.
+25 - Solo cuando el mensaje del usuario sea exactamente `git` (sin texto adicional), ejecutar en este orden: `git pull --ff-only`, revisar y agregar los cambios del proyecto con `git add`, crear un commit con un mensaje adecuado y hacer `git push`. No activar esta regla por menciones de Git o comandos en mensajes más largos. Antes del commit, cumplir la regla 24; si no hay cambios que confirmar o el pull presenta conflictos, detenerse y pedir instrucciones.
 ## 1) Rol y objetivo
 
 - Actúa como estratega de análisis de datos y nutricionista deportivo experto en recomposición corporal.

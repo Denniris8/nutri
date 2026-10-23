@@ -49,6 +49,7 @@ if (document.querySelector('#todayView')) {
 const trainingPlanGoalsInput = document.querySelector('#trainingPlanGoals');
 const trainingPlanSendButton = document.querySelector('#sendTrainingPlanGoals');
 const trainingPlanSaveButton = document.querySelector('#saveTrainingPlan');
+const goToSavedTrainingPlansButton = document.querySelector('#goToSavedTrainingPlans');
 const trainingPlanDialog = document.querySelector('#trainingPlanDialog');
 const trainingPlanTrigger = document.querySelector('#createTrainingPlanButton');
 const trainingPlanTriggerLoading = document.querySelector('#trainingPlanButtonLoading');
@@ -64,6 +65,7 @@ let generatedTrainingMacros = null;
 let savedTrainingPlan = false;
 let savedTrainingPlans = [];
 let savedTrainingPlansLoadId = 0;
+let selectedActiveTrainingPlan = null;
 let trainingPlanTargets = null;
 let trainingPlanSessionReady = true;
 let trainingPlanGeneration = 0;
@@ -182,31 +184,63 @@ function renderSavedTrainingPlans() {
     const formatMacro = (value, unit) => value == null ? '—' : `${new Intl.NumberFormat('es-MX', { maximumFractionDigits: 1 }).format(value)} ${unit}`;
     macros.className = 'saved-training-plan-macros';
     macros.textContent = `Meta en reposo: proteína ${formatMacro(plan.macros?.proteinas_g, 'g')} · carbohidratos ${formatMacro(plan.macros?.carbohidratos_g, 'g')} · grasas ${formatMacro(plan.macros?.grasas_g, 'g')} · energía ${formatMacro(plan.macros?.calorias_kcal, 'kcal')}`;
-    summary.append(date, goals, macros);
+    const active = document.createElement('span');
+    active.className = 'saved-training-plan-status';
+    if (plan.activePeriod) {
+      const scheduled = plan.activePeriod.startDate > localDate();
+      active.dataset.state = scheduled ? 'scheduled' : 'active';
+      active.textContent = `${scheduled ? 'PLAN PROGRAMADO' : 'PLAN ACTIVO'} · desde ${plan.activePeriod.startDate}`;
+    } else active.textContent = 'Sin vigencia activa';
+    summary.append(date, goals, macros, active);
     const content = document.createElement('div');
     content.className = 'saved-training-plan-content';
     appendTextWithTermHelp(content, plan.plan);
-    details.append(summary, content);
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'meal-delete-button saved-training-plan-delete';
-    remove.textContent = '−';
-    remove.title = 'Eliminar plan';
-    remove.setAttribute('aria-label', `Eliminar plan guardado del ${dateLabel}`);
-    remove.addEventListener('click', async () => {
-      if (!await confirmRecordDelete(`¿Eliminar este plan guardado del ${dateLabel}? Esta acción no se puede deshacer.`)) return;
-      remove.disabled = true;
+    const activation = document.createElement('div');
+    activation.className = 'training-plan-activation';
+    const startLabel = document.createElement('label');
+    const startDate = document.createElement('input');
+    const today = localDate();
+    const activeStart = savedTrainingPlans.find((saved) => saved.activePeriod)?.activePeriod?.startDate;
+    const tomorrow = new Date(`${activeStart && activeStart > today ? activeStart : today}T12:00:00Z`);
+    tomorrow.setUTCDate(tomorrow.getUTCDate() + 1);
+    startDate.type = 'date';
+    startDate.min = today;
+    startDate.value = plan.activePeriod ? tomorrow.toISOString().slice(0, 10) : activeStart ? tomorrow.toISOString().slice(0, 10) : today;
+    startDate.id = `trainingPlanStart-${plan.id}`;
+    startLabel.htmlFor = startDate.id;
+    startLabel.textContent = 'Vigente desde';
+    const activate = document.createElement('button');
+    activate.type = 'button';
+    activate.className = 'button-muted';
+    activate.textContent = plan.activePeriod ? 'Cambiar vigencia' : 'Activar plan';
+    activate.setAttribute('aria-label', `${activate.textContent}: ${plan.goals}`);
+    activate.addEventListener('click', async () => {
+      activate.disabled = true;
       try {
-        const response = await fetch(`/api/training-plans/${encodeURIComponent(plan.id)}`, { method: 'DELETE', credentials: 'same-origin' });
-        if (!response.ok) throw new Error((await response.json()).error || 'No se pudo eliminar el plan.');
-        notifyApp('Plan de entrenamiento eliminado.', 'success');
+        const response = await fetch(`/api/training-plans/${encodeURIComponent(plan.id)}/activate`, {
+          method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone },
+          body: JSON.stringify({ startDate: startDate.value }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'No se pudo activar el plan.');
+        notifyApp(`${startDate.value > localDate() ? 'Vigencia del plan programada' : 'Plan activo'} desde ${startDate.value}.`, 'success');
         await loadSavedTrainingPlans();
+        await loadTrainingEntries(dayInput?.value || localDate());
       } catch (error) {
-        notifyApp(error.message || 'No se pudo eliminar el plan.', 'error');
-        remove.disabled = false;
-      }
+        notifyApp(error.message || 'No se pudo activar el plan.', 'error');
+      } finally { activate.disabled = false; }
     });
-    item.append(details, remove);
+    activation.append(startLabel, startDate, activate);
+    content.append(activation);
+    details.append(summary, content);
+    item.append(details);
+    if (plan.hasAssociatedDays) {
+      const notice = document.createElement('p');
+      notice.id = `trainingPlanDeleteNotice-${plan.id}`;
+      notice.className = 'saved-training-plan-active';
+      notice.textContent = 'No se puede eliminar porque tiene días asociados; se conserva para mantener la trazabilidad.';
+      item.append(notice);
+    }
     savedTrainingPlansList.append(item);
   }
   savedTrainingPlansList.setAttribute('aria-busy', 'false');
@@ -222,7 +256,6 @@ async function loadSavedTrainingPlans() {
     if (!response.ok) throw new Error(result.error || 'No se pudieron cargar los planes guardados.');
     savedTrainingPlans = Array.isArray(result.plans) ? result.plans : [];
     renderSavedTrainingPlans();
-    if (!generatedTrainingMacros || savedTrainingPlan) setTrainingPlanTargets(savedTrainingPlans[0]?.macros);
   } catch (error) {
     if (loadId !== savedTrainingPlansLoadId) return;
     const message = document.createElement('li');
@@ -298,7 +331,7 @@ trainingPlanSendButton?.addEventListener('click', async () => {
   generatedTrainingGoals = null;
   generatedTrainingMacros = null;
   savedTrainingPlan = false;
-  setTrainingPlanTargets(savedTrainingPlans[0]?.macros);
+  setTrainingPlanTargets(selectedActiveTrainingPlan?.macros || null);
   planSummaryText.textContent = 'Generando plan…';
   planLoading.hidden = false;
   trainingPlanTrigger.setAttribute('aria-busy', 'true');
@@ -370,8 +403,10 @@ trainingPlanSaveButton?.addEventListener('click', async () => {
     void loadSavedTrainingPlans();
     trainingPlanSaveButton.textContent = 'Guardado';
     trainingPlanSaveButton.title = `Plan guardado el ${savedAt}`;
-    planSummaryText.textContent = `Plan guardado · ${savedAt}`;
+    planSummaryText.textContent = `Plan guardado · ${savedAt}. Para usar sus metas en las tarjetas, ve a la lista y activa el plan.`;
     appendTrainingPlanMessage('assistant', `Plan guardado el ${savedAt}.`);
+    goToSavedTrainingPlansButton.hidden = false;
+    goToSavedTrainingPlansButton.focus();
     notifyApp('Plan de entrenamiento guardado.', 'success');
     await notifyResultIfHidden(trainingPlanDialog, 'plan', 'guardado', 'Plan guardado', 'Tu plan de entrenamiento quedó guardado.', result.id);
   } catch (error) {
@@ -380,6 +415,15 @@ trainingPlanSaveButton?.addEventListener('click', async () => {
     notifyApp(error.message || 'No se pudo guardar el plan.', 'error');
     await notifyResultIfHidden(trainingPlanDialog, 'plan', 'error', 'No se pudo guardar el plan', 'Intenta guardar el plan nuevamente.');
   } finally { trainingPlanSaving = false; }
+});
+
+goToSavedTrainingPlansButton?.addEventListener('click', async () => {
+  trainingPlanDialog.close();
+  const plansSection = savedTrainingPlansList?.closest('details');
+  if (plansSection) plansSection.open = true;
+  await loadSavedTrainingPlans();
+  savedTrainingPlansList?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  savedTrainingPlansList?.focus({ preventScroll: true });
 });
 
 function confirmRecordDelete(message) {
@@ -1926,7 +1970,7 @@ async function loadProgressNutrition() {
       value.textContent = amount == null ? '—' : `${format.format(amount)} ${unit}`;
       const goal = nutrition.goals?.[key];
       const detail = document.createElement('p');
-      detail.textContent = goal == null ? 'Meta: sin plan guardado' : `Meta del último plan: ${format.format(goal)} ${unit}`;
+      detail.textContent = goal == null ? 'Meta: no hay un plan vigente durante todo el periodo' : `Meta del plan vigente todo el periodo: ${format.format(goal)} ${unit}`;
       item.append(title, value, detail);
       return item;
     }));
@@ -1935,7 +1979,7 @@ async function loadProgressNutrition() {
     if (chartTargets.length) {
       const legend = document.createElement('p');
       legend.className = 'progress-chart-legend';
-      legend.textContent = 'Barra: promedio consumido · marca: meta (escala hasta 150% de la meta)';
+      legend.textContent = 'Promedio consumido frente a la meta del plan que rigió todo el periodo (escala hasta 150% de la meta).';
       nutritionChart.append(legend);
       for (const [label, key, unit, color] of chartTargets) {
         const goal = Number(nutrition.goals[key]);
@@ -2447,12 +2491,14 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
       credentials: 'same-origin', headers: { 'X-Client-Timezone': timezone },
     });
     if (!response.ok) throw new Error();
-    const { records, exercise, garminEnabled } = await response.json();
+    const { records, exercise, garminEnabled, activePlan } = await response.json();
     if (loadId !== trainingEntriesLoadId) return;
     if (!Array.isArray(records) || !exercise || typeof exercise !== 'object') throw new Error();
     if (['manualNetKcal', 'deviceReportedKcal', 'adjustmentKcal'].some((key) => exercise[key] == null || !Number.isFinite(exercise[key]) || exercise[key] < 0)
       || ['manualSessionCount', 'deviceSessionCount', 'uncalculableManualCount', 'uncalculableDeviceCount', 'unresolvedPossibleDuplicates'].some((key) => !Number.isSafeInteger(exercise[key]) || exercise[key] < 0)) throw new Error();
     trainingDayStatus = 'ready';
+    selectedActiveTrainingPlan = activePlan || null;
+    setTrainingPlanTargets(selectedActiveTrainingPlan?.macros || null);
     trainingGarminEnabled = garminEnabled === true;
     trainingDaySelected = records.length > 0;
     trainingManualNetCaloriesKcal = Number(exercise?.manualNetKcal);
@@ -2465,10 +2511,26 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
     validDeviceTrainingRecords = Number(exercise?.deviceSessionCount) || 0;
     renderMacroCards(currentFoodEntries);
     list.replaceChildren();
+    if (selectedActiveTrainingPlan) {
+      const activeCard = document.createElement('article');
+      activeCard.className = 'meal training-active-plan';
+      const activeTitle = document.createElement('h3');
+      activeTitle.textContent = 'Plan vigente en esta fecha';
+      const activeGoals = document.createElement('p');
+      activeGoals.textContent = selectedActiveTrainingPlan.goals;
+      const planContent = document.createElement('details');
+      const planSummary = document.createElement('summary');
+      planSummary.textContent = 'Ver plan';
+      const planText = document.createElement('div');
+      appendTextWithTermHelp(planText, selectedActiveTrainingPlan.plan);
+      planContent.append(planSummary, planText);
+      activeCard.append(activeTitle, activeGoals, planContent);
+      list.append(activeCard);
+    }
     if (!records.length) {
       const empty = document.createElement('div');
       empty.className = 'empty';
-       empty.textContent = 'No hay entrenamientos registrados para esta fecha.';
+      empty.textContent = 'No hay entrenamientos registrados para esta fecha.';
       list.append(empty);
       return;
     }
@@ -2505,7 +2567,7 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
           remove.disabled = false;
         }
       });
-      headActions.append(time, remove);
+        headActions.append(time, remove);
       header.append(title, headActions);
       const details = document.createElement('div');
       details.className = 'meal-food';
@@ -2516,7 +2578,10 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
       metrics.textContent = record.energyType === 'reportada_dispositivo'
         ? `${record.durationMinutes} min${record.distanceMeters != null && Number.isFinite(Number(record.distanceMeters)) ? ` · ${(Number(record.distanceMeters) / 1000).toFixed(2)} km` : ''} · ${record.origin === 'garmin' ? 'Garmin Connect' : record.origin}`
         : `${record.durationMinutes} min · ${record.weightKg} kg · ${record.met} MET`;
-      details.append(description, metrics);
+      const planLink = document.createElement('p');
+      planLink.className = 'training-plan-link';
+      planLink.textContent = record.plan ? `Plan relacionado: ${record.plan.goals} · ${record.plan.startDate}${record.plan.endDate ? ` a ${record.plan.endDate}` : ' en adelante'}` : 'Sin vínculo histórico con un plan.';
+      details.append(description, metrics, planLink);
       const total = document.createElement('div');
       total.className = 'meal-total';
       const label = document.createElement('h4');
@@ -2530,6 +2595,8 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
   } catch {
     if (loadId !== trainingEntriesLoadId) return;
     trainingDayStatus = 'error';
+    selectedActiveTrainingPlan = null;
+    setTrainingPlanTargets(null);
     trainingDaySelected = null;
     trainingGarminEnabled = false;
     trainingManualNetCaloriesKcal = null;

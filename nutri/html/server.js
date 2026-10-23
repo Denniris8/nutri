@@ -12,10 +12,11 @@ const { syncGarminTraining } = require('./api/garmin-training-sync.js');
 const { readBiometrics, saveBiometric } = require('./api/biometrics.js');
 const { readPlicometrics, savePlicometric } = require('./api/plicometrics.js');
 const { clearFoodChatHistory, deleteFoodEntry, readFoodEntries, readPendingFoodDraft, saveFoodEntry } = require('./api/food-entries.js');
+const { calendarDayRange, readCalendarTimezone } = require('./api/calendar-day.js');
 const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError, safeOpenCodeErrorCode, traceFoodSession } = require('./api/opencode-food.js');
 const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, prepareTrainingSession, readTrainingPlanPrompt } = require('./api/training-analysis.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
-const { deleteTrainingPlan, extractPlanDisclosure, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
+const { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
 const { addNotification, markNotificationRead, notificationInsertSql, readNotifications, resolveNotificationsSql } = require('./api/notifications.js');
 
 const scrypt = promisify(scryptCallback);
@@ -325,6 +326,7 @@ SELECT attempts,GREATEST(1,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(3),DATE_ADD(window
 INSERT INTO registros_plicometro(usuario_id,fecha,triceps_mm,biceps_mm,subescapular_mm,suprailiaco_mm,abdominal_mm,muslo_anterior_mm,pantorrilla_mm) VALUES (@new_user_id,UTC_DATE(),10,5,12,9,14,15,8);
 INSERT INTO registros_comidas(usuario_id,request_id,fecha_consumo,descripcion_original,estado,creado_en) VALUES (@new_user_id,UUID(),UTC_DATE(),${textSql('DATO SINTÉTICO DE PRUEBA: desayuno de ejemplo; alimentos y cantidades no son consumo real.')},'pendiente',UTC_TIMESTAMP(3));
 INSERT INTO planes_entrenamiento(usuario_id,objetivos,contenido,creado_en) VALUES (@new_user_id,${textSql('DATO SINTÉTICO DE PRUEBA: objetivo de demostración; no es una recomendación personal.')},${textSql('DATO SINTÉTICO DE PRUEBA: plan de demostración; no es una recomendación personalizada.')},UTC_TIMESTAMP(3));
+INSERT INTO vigencias_planes_entrenamiento(usuario_id,plan_id,fecha_inicio,creado_en) SELECT usuario_id,id,UTC_DATE(),UTC_TIMESTAMP(3) FROM planes_entrenamiento WHERE usuario_id=@new_user_id ORDER BY id DESC LIMIT 1;
 ` : '';
             const sql = `START TRANSACTION;
 INSERT INTO usuarios(nombre,edad,sexo,estatura_cm,pais_iso,celular_e164,password_salt,password_hash,es_prueba) VALUES (${textSql(input.name)},${input.age},${textSql(input.sex)},${input.height ?? 'NULL'},${textSql(input.country)},${textSql(input.e164)},UNHEX('${salt.toString('hex')}'),UNHEX('${passwordHash.toString('hex')}'),${isTestAccount ? 1 : 0});
@@ -699,7 +701,7 @@ SELECT JSON_OBJECT('days',${days},'current',JSON_OBJECT(
   'carbs',AVG(CASE WHEN fecha_consumo<${currentStart} AND complete THEN carbs END),
   'fat',AVG(CASE WHEN fecha_consumo<${currentStart} AND complete THEN fat END)),
   'quality',JSON_OBJECT('currentPending',(SELECT COUNT(*) FROM registros_comidas WHERE usuario_id=${claims.sub} AND estado<>'completado' AND ${currentDates('fecha_consumo')}),'previousPending',(SELECT COUNT(*) FROM registros_comidas WHERE usuario_id=${claims.sub} AND estado<>'completado' AND ${previousDates('fecha_consumo')}),'macroSources',JSON_OBJECT('usda',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.fuente_macros='usda_fdc'),'declared',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.fuente_macros='declarado_usuario'),'web',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.fuente_macros='webfetch'),'opencode',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.fuente_macros='opencode_estimado'),'estimated',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.estado_macros='estimado'))),
-  'goals',(SELECT JSON_OBJECT('kcal',objetivo_calorias_kcal,'protein',objetivo_proteinas_g,'carbs',objetivo_carbohidratos_g,'fat',objetivo_grasas_g) FROM planes_entrenamiento WHERE usuario_id=${claims.sub} ORDER BY creado_en DESC,id DESC LIMIT 1)) FROM daily;`);
+   'goals',(SELECT JSON_OBJECT('kcal',p.objetivo_calorias_kcal,'protein',p.objetivo_proteinas_g,'carbs',p.objetivo_carbohidratos_g,'fat',p.objetivo_grasas_g) FROM vigencias_planes_entrenamiento v JOIN planes_entrenamiento p ON p.id=v.plan_id AND p.usuario_id=v.usuario_id WHERE v.usuario_id=${claims.sub} AND v.fecha_inicio<=${currentStart} AND (v.fecha_fin IS NULL OR v.fecha_fin>=${textSql(end)}) ORDER BY v.fecha_inicio DESC,v.id DESC LIMIT 1)) FROM daily;`);
         const body = await dbQuery(`SELECT JSON_OBJECT('current',JSON_OBJECT('measurements',(SELECT COUNT(*) FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')}),'firstKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1),'firstDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1)), 'previous',JSON_OBJECT('measurements',(SELECT COUNT(*) FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')}),'firstKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1),'firstDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1)));`);
         const activity = await dbQuery(`SELECT JSON_OBJECT('current',JSON_OBJECT('stepDays',(SELECT COUNT(*) FROM registros_pasos_diarios WHERE usuario_id=${claims.sub} AND ${currentDates('fecha')}),'avgSteps',(SELECT AVG(pasos) FROM registros_pasos_diarios WHERE usuario_id=${claims.sub} AND ${currentDates('fecha')}),'trainingSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(creado_en)')}),'manualSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${currentDates('DATE(creado_en)')}),'deviceSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${currentDates('DATE(creado_en)')}),'manualMinutes',(SELECT SUM(duracion_minutos) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${currentDates('DATE(creado_en)')}),'deviceMinutes',(SELECT SUM(duracion_minutos) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${currentDates('DATE(creado_en)')}),'manualKcal',(SELECT SUM(energia_kcal) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${currentDates('DATE(creado_en)')}),'deviceKcal',(SELECT SUM(energia_kcal) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${currentDates('DATE(creado_en)')})), 'previous',JSON_OBJECT('stepDays',(SELECT COUNT(*) FROM registros_pasos_diarios WHERE usuario_id=${claims.sub} AND ${previousDates('fecha')}),'avgSteps',(SELECT AVG(pasos) FROM registros_pasos_diarios WHERE usuario_id=${claims.sub} AND ${previousDates('fecha')}),'trainingSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(creado_en)')}),'manualSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${previousDates('DATE(creado_en)')}),'deviceSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${previousDates('DATE(creado_en)')}),'manualMinutes',(SELECT SUM(duracion_minutos) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${previousDates('DATE(creado_en)')}),'deviceMinutes',(SELECT SUM(duracion_minutos) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${previousDates('DATE(creado_en)')}),'manualKcal',(SELECT SUM(energia_kcal) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${previousDates('DATE(creado_en)')}),'deviceKcal',(SELECT SUM(energia_kcal) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${previousDates('DATE(creado_en)')})));`);
         const plicometric = await dbQuery(`SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE usuario_id=${claims.sub} AND ${currentDates('fecha')}),'previous',(SELECT COUNT(*) FROM registros_plicometro WHERE usuario_id=${claims.sub} AND ${previousDates('fecha')}));`);
@@ -945,6 +947,35 @@ SELECT JSON_OBJECT('days',${days},'current',JSON_OBJECT(
       return;
     }
 
+    const trainingPlanActivate = pathname.match(/^\/api\/training-plans\/([1-9]\d{0,19})\/activate$/);
+    if (trainingPlanActivate) {
+      if (request.method !== 'POST') { response.writeHead(405, { Allow: 'POST' }).end(); return; }
+      if (!sameOrigin(request)) { authError(response, 403, 'Solicitud no permitida.'); return; }
+      if (!allowAttempt(request, response, 'training-plan-activate')) return;
+      let claims;
+      try { claims = await authenticated(request); }
+      catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
+      if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
+      let data;
+      try { data = await bodyJson(request, 4096); }
+      catch (error) { authError(response, error.status || 400, 'La fecha de inicio no es válida.'); return; }
+      const parsedStartDate = typeof data.startDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(data.startDate) ? Date.parse(`${data.startDate}T00:00:00Z`) : NaN;
+      if (!Number.isFinite(parsedStartDate) || new Date(parsedStartDate).toISOString().slice(0, 10) !== data.startDate) { authError(response, 400, 'La fecha de inicio no es válida.'); return; }
+      const traceId = randomUUID();
+      try {
+        const timezone = await readCalendarTimezone(claims.sub, dbQuery, request.headers['x-client-timezone']);
+        const today = localCalendarDate(timezone);
+        const { start, end } = calendarDayRange(data.startDate, timezone);
+        const activated = await activateTrainingPlan({ userId: claims.sub, planId: trainingPlanActivate[1], startDate: data.startDate, today, dayStart: start, dayEnd: end, dbQuery, textSql });
+        json(response, 200, { ok: true, ...activated });
+      } catch (error) {
+        const status = Number.isInteger(error.status) ? error.status : 503;
+        if (status === 503) try { await recordTrainingError({ dbQuery, textSql, userId: claims.sub, traceId, stage: 'activation', error, httpStatus: status, action: `POST /api/training-plans/${trainingPlanActivate[1]}/activate` }); } catch {}
+        authError(response, status, status === 503 ? 'No se pudo activar el plan.' : error.message);
+      }
+      return;
+    }
+
     if (pathname === '/api/training-plans') {
       if (!['GET', 'POST'].includes(request.method)) { response.writeHead(405, { Allow: 'GET, POST' }).end(); return; }
       if (request.method === 'POST' && !sameOrigin(request)) { authError(response, 403, 'Solicitud no permitida.'); return; }
@@ -1042,7 +1073,7 @@ SELECT JSON_OBJECT('days',${days},'current',JSON_OBJECT(
           try { preferences = await readPreferences({ userId: claims.sub, dbQuery }); } catch {}
           const garminEnabled = preferences?.deviceMode === 'garmin' && preferences.garminConnected === true;
           const visibleRecords = visibleTrainingEntries(records, preferences);
-          json(response, 200, { records: visibleRecords, garminEnabled, ...(date ? { exercise: calculateTrainingEnergy(visibleRecords) } : {}) });
+          json(response, 200, { records: visibleRecords, garminEnabled, ...(date ? { exercise: calculateTrainingEnergy(visibleRecords), activePlan: await readTrainingPlanForDate({ userId: claims.sub, date, dbQuery, textSql }) } : {}) });
         }
         catch (error) { authError(response, error.status || 503, error.status ? error.message : 'No se pudieron cargar los entrenamientos.'); }
         return;

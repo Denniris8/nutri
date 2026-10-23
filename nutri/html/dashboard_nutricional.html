@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
   <meta name="theme-color" content="#101411">
   <title>Dashboard Nutricional</title>
-  <link rel="stylesheet" href="/dashboard_nutricional.css?v=49">
+  <link rel="stylesheet" href="/dashboard_nutricional.css?v=56">
   <link rel="stylesheet" href="/notifications.css">
 </head>
 <body>
@@ -63,8 +63,8 @@
         <p id="trainingEnergySummaryWarning" class="macro-training-warning" hidden></p>
       </section>
       <details class="panel panel-pad food-day-list" aria-labelledby="planTitle" open>
-        <summary class="collapsible-summary section-head"><div><h2 id="planTitle">Planes creados</h2><p>Tus últimos 3 planes guardados.</p></div></summary>
-        <ul id="savedTrainingPlans" class="saved-training-plans" aria-label="Últimos 3 planes guardados" aria-busy="true"><li class="hint" role="status">Cargando planes guardados…</li></ul>
+        <summary class="collapsible-summary section-head"><div><h2 id="planTitle">Planes creados</h2><p>Tus planes recientes; el vigente aparece primero.</p></div></summary>
+        <ul id="savedTrainingPlans" class="saved-training-plans" aria-label="Planes recientes y plan vigente" aria-busy="true" tabindex="-1"><li class="hint" role="status">Cargando planes guardados…</li></ul>
       </details>
       <details class="panel panel-pad food-day-list" aria-labelledby="foodEntriesTitle">
         <summary class="collapsible-summary section-head"><div><h2 id="foodEntriesTitle">Alimentos guardados</h2><p>Cada envío aparece por separado con su hora, alimentos y macros.</p></div></summary>
@@ -440,6 +440,7 @@
         <div class="training-plan-actions">
           <button id="sendTrainingPlanGoals" type="button">Enviar mensaje</button>
           <button id="saveTrainingPlan" type="button" title="Guardar el plan generado" disabled hidden>Guardar</button>
+          <button id="goToSavedTrainingPlans" type="button" hidden>Ir a planes y activar</button>
         </div>
       </div>
     </div>
@@ -552,6 +553,6 @@
     </div>
   </dialog>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
-  <script src="/onboarding-flow.js?v=close-clears-chat" defer></script>
+  <script src="/onboarding-flow.js?v=plan-save-activation-guidance" defer></script>
 </body>
 </html>
