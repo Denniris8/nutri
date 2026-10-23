@@ -251,7 +251,6 @@ async function cancelTrainingPlan() {
   if (trainingPlanCancelPending) return;
   const hasSession = trainingPlanSessionActive || Boolean(generatedTrainingPlanRunId) || !planLoading.hidden;
   if (!hasSession) { trainingPlanDialog?.close(); return; }
-  if (!await confirmRecordDelete('Al cancelar se eliminará la sesión actual de creación del plan. ¿Deseas continuar?')) return;
   const generation = ++trainingPlanGeneration;
   trainingPlanCancelPending = true;
   trainingPlanTrigger.disabled = true;
@@ -266,7 +265,7 @@ async function cancelTrainingPlan() {
     trainingPlanSessionActive = false;
     planLoading.hidden = true;
     trainingPlanDialog?.close();
-    notifyApp('Sesión de creación del plan eliminada.', 'success');
+    notifyApp('Sesión e historial del plan eliminados.', 'success');
   } catch (error) { trainingPlanSessionActive = true; notifyApp(error.message, 'error'); }
   finally {
     trainingPlanCancelPending = false;
@@ -276,7 +275,6 @@ async function cancelTrainingPlan() {
   }
 }
 document.querySelector('#closeTrainingPlanDialog')?.addEventListener('click', cancelTrainingPlan);
-document.querySelector('#cancelTrainingPlanDialog')?.addEventListener('click', cancelTrainingPlan);
 trainingPlanDialog?.addEventListener('cancel', (event) => { event.preventDefault(); void cancelTrainingPlan(); });
 trainingPlanDialog?.addEventListener('close', () => trainingPlanTrigger?.focus());
 
@@ -1351,6 +1349,7 @@ syncGarminTrainingButton?.addEventListener('click', async () => {
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   syncGarminTrainingButton.disabled = true;
   trainingFeedback.textContent = `Consultando actividades Garmin del ${date}…`;
+  trainingFeedback.setAttribute('aria-busy', 'true');
   notifyApp(trainingFeedback.textContent, 'info');
   try {
     const response = await fetch('/api/integrations/garmin/sync', {
@@ -1376,12 +1375,14 @@ syncGarminTrainingButton?.addEventListener('click', async () => {
     trainingFeedback.textContent = error.message || 'No se pudieron sincronizar las actividades Garmin.';
     appendTrainingMessage('error', trainingFeedback.textContent);
     notifyApp(trainingFeedback.textContent, 'error');
-  } finally { syncGarminTrainingButton.disabled = false; }
+  } finally {
+    trainingFeedback.removeAttribute('aria-busy');
+    syncGarminTrainingButton.disabled = false;
+  }
 });
 async function cancelTrainingDialog() {
   if (trainingSaving) { notifyApp('Espera a que termine el guardado antes de cancelar.', 'info'); return; }
   if (!trainingOpenCodeSessionActive && !trainingSessionPreparing && !trainingPending) { trainingDialog?.close(); return; }
-  if (!await confirmRecordDelete('Al cancelar se eliminará la sesión actual de registro de entrenamiento. ¿Deseas continuar?')) return;
   const generation = ++trainingOpenGeneration;
   try {
     const response = await fetch('/api/training/session', { method: 'DELETE', credentials: 'same-origin' });
@@ -1392,7 +1393,7 @@ async function cancelTrainingDialog() {
     trainingPending = false;
     trainingSavedAt = null;
     trainingDialog?.close();
-    notifyApp('Sesión de entrenamiento eliminada.', 'success');
+    notifyApp('Sesión e historial del entrenamiento eliminados.', 'success');
   } catch (error) {
     if (generation === trainingOpenGeneration) {
       trainingSessionPreparing = false;
@@ -1405,7 +1406,6 @@ async function cancelTrainingDialog() {
   }
 }
 document.querySelector('#closeTrainingModal')?.addEventListener('click', cancelTrainingDialog);
-document.querySelector('#cancelTrainingModal')?.addEventListener('click', cancelTrainingDialog);
 trainingDialog?.addEventListener('cancel', (event) => { event.preventDefault(); void cancelTrainingDialog(); });
 trainingDialog?.addEventListener('close', () => trainingTrigger?.focus());
 function appendTrainingMessage(role, content) {
@@ -1700,12 +1700,13 @@ async function closeFoodDialog() {
   const description = document.querySelector('#foodDescription');
   const saveButton = document.querySelector('#saveFoodButton');
   if (foodPending) { notifyApp('Espera a que termine el registro antes de cancelar.', 'info'); return; }
-  if (!foodOpenCodeSessionActive && !foodSessionPreparing) { foodDialog.close(); return; }
-  if (!await confirmRecordDelete('Al cancelar se eliminará la sesión actual de registro de comida. ¿Deseas continuar?')) return;
   const generation = ++foodSessionGeneration;
   foodSessionReady = foodSessionPreparing = false;
   try {
-    const response = await fetch('/api/food/session', { method: 'DELETE', credentials: 'same-origin' });
+    const response = await fetch('/api/food/session', {
+      method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ requestId: foodRequestId, targetEntryId: foodTargetEntryId }),
+    });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || 'No se pudo eliminar la sesión de comida.');
     foodRequestId = '';
@@ -1713,7 +1714,7 @@ async function closeFoodDialog() {
     foodEntryDate = '';
     foodOpenCodeSessionActive = false;
     foodDialog.close();
-    notifyApp('Sesión de comida eliminada.', 'success');
+    notifyApp('Sesión e historial de la conversación de comida eliminados.', 'success');
   } catch (error) {
     if (generation === foodSessionGeneration) {
       foodSessionReady = foodOpenCodeSessionActive = true;
@@ -1724,7 +1725,6 @@ async function closeFoodDialog() {
   }
 }
 document.querySelector('#closeFoodDialog')?.addEventListener('click', closeFoodDialog);
-document.querySelector('#cancelFoodEntry')?.addEventListener('click', closeFoodDialog);
 foodDialog?.addEventListener('cancel', (event) => { event.preventDefault(); void closeFoodDialog(); });
 foodDialog?.addEventListener('close', () => foodTrigger?.focus());
 foodForm?.addEventListener('submit', async (event) => {

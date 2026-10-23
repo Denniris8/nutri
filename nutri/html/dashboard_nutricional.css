@@ -484,6 +484,9 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
 .food-session-error { color: var(--bad); font-weight: 600; }
 .food-chat-message[data-role="assistant"] { justify-self: start; }
 .training-ui-body { display: grid; gap: 8px; }
+#trainingFeedback[aria-busy="true"] { display: flex; align-items: center; gap: 8px; }
+#trainingFeedback[aria-busy="true"]::after { width: 15px; height: 15px; flex: 0 0 15px; border: 2px solid var(--line); border-top-color: var(--md-sys-color-primary); border-radius: 50%; animation: assistant-spin .8s linear infinite; content: ""; }
+@media (prefers-reduced-motion: reduce) { #trainingFeedback[aria-busy="true"]::after { animation-duration: 2s; } }
 
 .form-hints { display: grid; gap: 2px; }
 

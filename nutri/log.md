@@ -27,6 +27,22 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-23 00:34 CST — Aclaración de comidas de madrugada: el mensaje ahora explica con claridad que los macros se acumularán en el día nutricional elegido, incluido al confirmar el día anterior. VERSION incrementado a 0.1.3 para este commit.
+
+- 2026-10-23 00:31 CST — Cierre con X: para comidas, el servidor elimina la sesión OpenCode, los mensajes del destino completado y el borrador pendiente del request actual, preservando comidas completadas y sus alimentos/macros. Entrenamiento y plan eliminan su sesión OpenCode, que contiene su historial conversacional. Actualizados los contratos y el esquema descriptivo; no se ejecutaron pruebas.
+
+- 2026-10-23 00:27 CST — Aclaración de comidas de madrugada: corregido el detector para reconocer la pregunta con las fechas seleccionada y anterior entre paréntesis; ahora procesa “anterior”/“actual” en lugar de repetir la misma pregunta. No se ejecutaron pruebas.
+
+- 2026-10-23 00:25 CST — Comidas de madrugada: si no se especifica hora, el servidor usa la hora local actual de la cuenta; entre 00:00 y 03:00 solicita confirmar el día nutricional anterior o el seleccionado. Las horas explícitas mantienen prioridad. No se ejecutaron pruebas.
+
+- 2026-10-23 00:23 CST — Comidas de madrugada: la aclaración de día nutricional ahora se solicita para horas explícitas de 00:00 a 03:00 inclusive, preguntando si corresponde al día seleccionado o al anterior. Actualizada la fuente canónica. No se ejecutaron pruebas.
+
+- 2026-10-23 00:20 CST — Modales de comidas, entrenamiento y plan: retirados los botones “Cancelar” y sus listeners; la X existente permanece como forma de cierre. Actualizado el cache-busting. No se ejecutaron pruebas.
+
+- 2026-10-23 00:19 CST — Cierre de comidas, entrenamiento y creación de plan: se quitó el modal de confirmación de eliminación al cerrar o cancelar; la limpieza silenciosa de las sesiones se conserva. Actualizado el cache-busting. No se ejecutaron pruebas.
+
+- 2026-10-23 00:16 CST — Registrar entrenamiento: durante la sincronización Garmin, el mensaje de estado muestra una animación accesible al lado y el botón de sincronización permanece deshabilitado hasta terminar o fallar. Actualizado el cache-busting. No se ejecutaron pruebas.
+
 - 2026-10-22 20:16 CST — Comidas guardadas: al solicitar completar macros faltantes, OpenCode recibe valores y procedencia existentes y debe corregir solo los ítems identificados, conservando cantidad, hora y macros conocidos; el servidor evita crear una comida nueva si la respuesta no identifica una corrección. Actualizado el prompt canónico y VERSION a 0.1.2 para el commit. No se ejecutaron pruebas.
 
 - 2026-10-22 14:54 CST — Aplicación: añadida versión central en `VERSION` y visible en la sección “Más”; el servidor inserta ese valor al servir el dashboard. `VERSION` queda en 0.1.1 conforme a la regla de incrementar PATCH por commit. No se ejecutaron pruebas.

@@ -83,7 +83,7 @@ function chatFoodDate(text, timezone) {
 }
 
 function earlyFoodDayChoice(question, answer) {
-  if (!/¿Esta comida pertenece al día nutricional seleccionado(?:\s*\([^)]*\))? o al anterior\?/i.test(String(question || ''))) return null;
+  if (!/¿Esta comida pertenece al día nutricional seleccionado(?:\s*\([^)]*\))? o al anterior(?:\s*\([^)]*\))?\?/i.test(String(question || ''))) return null;
   const text = String(answer).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   if (/\b(anterior|dia anterior|ayer)\b/.test(text)) return 'anterior';
   if (/\b(actual|seleccionado|este dia|hoy)\b/.test(text)) return 'actual';
@@ -203,6 +203,16 @@ async function deleteFoodEntry({ userId, entryId, dbQuery }) {
   if (!/^\d+$/.test(String(userId)) || !/^[1-9]\d*$/.test(String(entryId))) throw Object.assign(new Error('Registro no válido.'), { status: 400 });
   const result = await dbQuery(`DELETE FROM registros_comidas WHERE id=${entryId} AND usuario_id=${userId}; SELECT ROW_COUNT();`);
   return result.split(/\s+/).at(-1) === '1';
+}
+
+async function clearFoodChatHistory({ userId, requestId, targetEntryId, dbQuery, textSql }) {
+  if (!/^\d+$/.test(String(userId)) || requestId != null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)
+      || targetEntryId != null && !/^[1-9]\d*$/.test(String(targetEntryId))) throw Object.assign(new Error('El contexto de conversación no es válido.'), { status: 400 });
+  const statements = ["SET time_zone='+00:00'", 'START TRANSACTION'];
+  if (requestId) statements.push(`DELETE FROM registros_comidas WHERE usuario_id=${userId} AND request_id=${textSql(requestId)} AND estado='borrador_chat'`);
+  if (targetEntryId != null) statements.push(`DELETE i FROM registros_comida_interacciones i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.id=${targetEntryId} AND e.usuario_id=${userId} AND e.estado='completado'`);
+  statements.push('COMMIT');
+  await dbQuery(`${statements.join(';')};`);
 }
 
 function parseFoodReply(parts) {
@@ -390,7 +400,7 @@ SELECT LAST_INSERT_ID();`);
     const pendingFoodItems = saved.question ? await readDraftFoodItems({ entryId, userId, dbQuery }) : [];
     await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'user', content: entry.descripcion });
     const asksTimeChoice = /Hay varias comidas a esa hora|¿Te refieres a las .*a\. m\. o p\. m\./i.test(saved.question || '');
-    const asksDayChoice = /¿Esta comida pertenece al día nutricional seleccionado(?:\s*\([^)]*\))? o al anterior\?/i.test(saved.question || '');
+    const asksDayChoice = /¿Esta comida pertenece al día nutricional seleccionado(?:\s*\([^)]*\))? o al anterior(?:\s*\([^)]*\))?\?/i.test(saved.question || '');
     const asksPreviousDayConfirmation = /¿La guardo en el día nutricional anterior .*11:59:59 p\. m\./i.test(saved.question || '');
     const priorUserText = asksTimeChoice || asksDayChoice || asksPreviousDayConfirmation ? await readFoodUserText({ entryId, dbQuery }) : '';
     const requestedTime = parseFoodTime(entry.descripcion) || (priorUserText ? parseFoodTime(priorUserText) : null);
@@ -565,17 +575,22 @@ SELECT LAST_INSERT_ID();`);
     let createdAt = null;
     let savedDate = entry.fecha;
     let savedDescription = asksDayChoice || asksPreviousDayConfirmation ? saved.description : entry.descripcion;
-    const isEarlyTime = requestedTime && !requestedTime.invalid && requestedTime.hours.length === 1
-      && requestedTime.hours[0] * 60 + requestedTime.minute >= 1 && requestedTime.hours[0] * 60 + requestedTime.minute <= 300;
-    if (asksDayChoice && !dayChoice) clarification = '¿Esta comida pertenece al día nutricional seleccionado o al anterior? Responde “actual” o “anterior”.';
+    const localNow = !requestedTime && Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: entry.timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit',
+    }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
+    const saveTimeMinutes = requestedTime && !requestedTime.invalid && requestedTime.hours.length === 1
+      ? requestedTime.hours[0] * 60 + requestedTime.minute
+      : localNow ? Number(localNow.hour) * 60 + Number(localNow.minute) : null;
+    const isEarlyTime = saveTimeMinutes != null && saveTimeMinutes <= 180;
+    if (asksDayChoice && !dayChoice) clarification = '¿Esta comida pertenece al día nutricional seleccionado o al anterior? Responde “actual” o “anterior”. Los macros se sumarán al día nutricional que elijas.';
     if (isEarlyTime && !asksDayChoice && !asksPreviousDayConfirmation && !activeTarget) {
-      clarification = `¿Esta comida pertenece al día nutricional seleccionado (${entry.fecha}) o al anterior (${previousDate(entry.fecha)})?`;
+      clarification = `¿Esta comida pertenece al día nutricional seleccionado (${entry.fecha}) o al anterior (${previousDate(entry.fecha)})? Los macros se sumarán al día nutricional que elijas.`;
     }
     if (asksDayChoice && dayChoice === 'anterior') {
-      clarification = `¿La guardo en el día nutricional anterior (${previousDate(entry.fecha)})? Sugiero dejarla a las 11:59:59 p. m. para mantenerla dentro de esa fecha. Confirma o indica otra hora.`;
+      clarification = `¿La guardo en el día nutricional anterior (${previousDate(entry.fecha)})? Sus macros se sumarán a ese día. Sugiero dejarla a las 11:59:59 p. m. para mantenerla dentro de esa fecha. Confirma o indica otra hora.`;
     }
     if (asksPreviousDayConfirmation && !previousSaveAnswer?.confirmed) {
-      clarification = `¿La guardo en el día nutricional anterior (${previousDate(entry.fecha)})? Sugiero dejarla a las 11:59:59 p. m. para mantenerla dentro de esa fecha. Confirma o indica otra hora.`;
+      clarification = `¿La guardo en el día nutricional anterior (${previousDate(entry.fecha)})? Sus macros se sumarán a ese día. Sugiero dejarla a las 11:59:59 p. m. para mantenerla dentro de esa fecha. Confirma o indica otra hora.`;
     }
     if (asksPreviousDayConfirmation && previousSaveAnswer?.confirmed) {
       savedDate = confirmedDate || previousDate(entry.fecha);
@@ -736,4 +751,4 @@ SELECT LAST_INSERT_ID();`);
   }
 }
 
-module.exports = { applyExplicitGrams, deleteFoodEntry, foodItemIssues, localDateTimeToUtc, normalizeFoodReply, parseFoodReply, parseFoodTime, readFoodEntries, readPendingFoodDraft, saveFoodEntry, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, localDateTimeToUtc, normalizeFoodReply, parseFoodReply, parseFoodTime, readFoodEntries, readPendingFoodDraft, saveFoodEntry, validateFoodEntry, validFoodItem };

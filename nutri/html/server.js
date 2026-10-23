@@ -11,7 +11,7 @@ const { verifyGarminAccount } = require('./api/garmin-verification.js');
 const { syncGarminTraining } = require('./api/garmin-training-sync.js');
 const { readBiometrics, saveBiometric } = require('./api/biometrics.js');
 const { readPlicometrics, savePlicometric } = require('./api/plicometrics.js');
-const { deleteFoodEntry, readFoodEntries, readPendingFoodDraft, saveFoodEntry } = require('./api/food-entries.js');
+const { clearFoodChatHistory, deleteFoodEntry, readFoodEntries, readPendingFoodDraft, saveFoodEntry } = require('./api/food-entries.js');
 const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError, safeOpenCodeErrorCode, traceFoodSession } = require('./api/opencode-food.js');
 const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, prepareTrainingSession, readTrainingPlanPrompt } = require('./api/training-analysis.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
@@ -722,9 +722,15 @@ SELECT JSON_OBJECT('days',${days},'current',JSON_OBJECT(
       catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
       if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
       if (request.method === 'DELETE') {
+        let closeContext = {};
+        if (request.headers['content-type']) {
+          try { closeContext = await bodyJson(request); }
+          catch (error) { authError(response, error.status || 400, 'No se pudo leer el contexto de cierre.'); return; }
+        }
         const trace = { id: randomUUID(), events: [] };
         try {
           await deleteFoodOpenCodeSession({ userId: claims.sub, dbQuery, requestOpenCode: openCodeRequest });
+          await clearFoodChatHistory({ userId: claims.sub, requestId: closeContext.requestId, targetEntryId: closeContext.targetEntryId, dbQuery, textSql });
           json(response, 200, { ok: true });
         } catch (error) {
           try { await recordFoodError({ dbQuery, textSql, userId: claims.sub, trace, stage: 'cancel_session', error, httpStatus: 503, action: 'DELETE /api/food/session', route: '/api/food/session', method: 'DELETE' }); }
