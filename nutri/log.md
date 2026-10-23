@@ -27,6 +27,7 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-23 09:49 CST — Versión PATCH incrementada a 0.1.7 antes del commit. Se registra la eliminación local de `DESIGN.md`; el dashboard obtiene su versión dinámicamente desde `VERSION`.
 - 2026-10-23 09:47 CST — Versión PATCH incrementada a 0.1.6 antes del commit; el dashboard la presenta desde `VERSION` mediante el servidor.
 - 2026-10-23 09:44 CST — Responsividad dashboard: control de nombres largos en la barra superior, altura dinámica y scroll interno de diálogos en móvil, textarea legible en iOS y acciones apiladas en pantallas de 380 px o menos. Actualizado cache-busting CSS.
 - 2026-10-23 09:43 CST — Dashboard, sección “Más”: excluidos sus botones de acción del selector global de botones primarios; recuperan fondo carbón y contraste correcto para descripciones pequeñas.
