@@ -2,36 +2,64 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-  <meta name="theme-color" content="#101411">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#000000">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/pwa-icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/pwa-icon-192.png">
   <link rel="stylesheet" href="/notifications.css">
   <title>Acceso · Dashboard Nutricional</title>
   <style>
-    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #101411; color: #edf2eb; }
-    body { min-height: 100vh; margin: 0; display: grid; place-items: center; }
-    main { width: min(90vw, 390px); box-sizing: border-box; padding: 2rem; border: 1px solid #37423a; border-radius: 20px; background: #19211b; }
-    h1 { margin-top: 0; font-size: 1.5rem; } p { color: #b8c4b9; }
-    label { display: block; margin: 1rem 0 .4rem; }
-    input, select, button { width: 100%; box-sizing: border-box; padding: .8rem; border-radius: 10px; font: inherit; }
-    input { border: 1px solid #536153; color: inherit; background: #101411; }
-    select { border: 1px solid #536153; color: inherit; background: #101411; }
-    button { margin-top: 1.3rem; border: 0; background: #b8de8b; color: #172016; font-weight: 700; cursor: pointer; }
-    .mode-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: .5rem; }
-    .mode-buttons button { margin-top: .4rem; background: #29352b; color: inherit; }
-    .mode-buttons button[aria-pressed="true"] { background: #b8de8b; color: #172016; }
-    .button-cancel { background: #29352b; color: inherit; }
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #000; color: #f5f5f7; --surface: #111; --surface-raised: #2a2a2c; --ink-muted: #c7c7cc; --line: #48484a; --blue: #2997ff; }
+    * { box-sizing: border-box; }
+    body { min-height: 100vh; margin: 0; padding: 40px 28px; display: grid; place-items: center; background: #000; }
+    main { width: min(100%, 1000px); display: grid; grid-template-columns: minmax(0, 1fr) minmax(360px, 440px); align-items: center; gap: clamp(40px, 8vw, 120px); }
+    .login-intro { max-width: 430px; }
+    .brand { margin: 0 0 64px; color: #f5f5f7; font-size: 22px; font-weight: 650; letter-spacing: -.06em; }
+    .brand span { color: var(--blue); }
+    h1 { max-width: 9ch; margin: 0; font-size: clamp(42px, 5vw, 68px); line-height: .98; letter-spacing: -.055em; text-wrap: balance; }
+    .login-intro > p { max-width: 34ch; margin: 20px 0 0; color: var(--ink-muted); font-size: 17px; line-height: 1.55; }
+    .auth-panel { padding: 28px; border-radius: 16px; background: var(--surface); }
+    .auth-panel > p { margin: 0 0 20px; color: var(--ink-muted); }
+    label { display: block; margin: 16px 0 7px; color: #f5f5f7; font-size: 14px; font-weight: 550; }
+    input, select, button { width: 100%; min-height: 46px; padding: 10px 12px; border-radius: 8px; font: inherit; }
+    input, select { border: 1px solid var(--line); color: inherit; background: #000; }
+    button { margin-top: 16px; border: 0; background: #f5f5f7; color: #000; font-weight: 650; cursor: pointer; transition: background-color 140ms ease, transform 100ms ease; }
+    button:hover { background: #d9d9de; }
+    button:active { transform: scale(.99); }
+    @media (prefers-reduced-motion: reduce) { button { transition: none; } }
+    .mode-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; margin-bottom: 22px; padding: 4px; border-radius: 9px; background: #000; }
+    .mode-buttons button { min-height: 40px; margin: 0; padding: 8px; border-radius: 6px; background: transparent; color: var(--ink-muted); font-size: 14px; }
+    .mode-buttons button[aria-pressed="true"] { background: var(--surface-raised); color: #fff; }
+    .button-cancel { margin-top: 8px; background: var(--surface-raised); color: #fff; }
+    .button-cancel:hover { background: #38383a; }
+    :focus-visible { outline: 3px solid var(--blue); outline-offset: 3px; }
     [hidden] { display: none !important; }
-    [role="alert"] { min-height: 1.5em; color: #ffaaa0; }
+    [role="alert"] { min-height: 1.5em; margin-bottom: 0; color: #ff6961; }
+    .skip-link { position: fixed; z-index: 1000; top: 8px; left: 8px; padding: 10px 14px; transform: translateY(-160%); background: #f5f5f7; color: #000; }
+    .skip-link:focus { transform: translateY(0); }
+    @media (max-width: 700px) {
+      body { display: block; padding: 28px 16px; }
+      main { width: min(100%, 480px); margin: 0 auto; grid-template-columns: 1fr; gap: 28px; }
+      .login-intro { padding: 0 4px; }
+      .brand { margin-bottom: 34px; }
+      h1 { max-width: 12ch; font-size: clamp(38px, 10vw, 52px); }
+      .login-intro > p { margin-top: 12px; font-size: 15px; }
+      .auth-panel { padding: 22px 18px; }
+    }
   </style>
 </head>
 <body>
-  <main>
-    <h1>Dashboard nutricional</h1>
-    <p>Accede a tu información nutricional o crea tu perfil.</p>
-    <div class="mode-buttons" aria-label="Acceso a la cuenta">
+  <a class="skip-link" href="#mainContent">Saltar al contenido</a>
+  <main id="mainContent" tabindex="-1">
+    <section class="login-intro" aria-labelledby="loginTitle">
+      <p class="brand" translate="no">Nutri<span>.</span></p>
+      <h1 id="loginTitle">Nutrición con contexto.</h1>
+      <p>Registra alimentación y actividad. Revisa tus objetivos y tendencias desde un solo lugar.</p>
+    </section>
+    <section class="auth-panel" aria-label="Acceso a tu cuenta">
+    <p>Inicia sesión o crea tu perfil para continuar.</p>
+    <div class="mode-buttons" role="group" aria-label="Acceso a la cuenta">
       <button type="button" data-mode="login" aria-pressed="true">Iniciar sesión</button>
       <button type="button" data-mode="register" aria-pressed="false">Registrarme</button>
     </div>
@@ -139,6 +167,7 @@
       <button id="cancelRegister" type="button" class="button-cancel">Cancelar</button>
     </form>
     <p id="errorMessage" role="alert" aria-live="polite"></p>
+    </section>
   </main>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
   <script src="/pwa-register.js" defer></script>

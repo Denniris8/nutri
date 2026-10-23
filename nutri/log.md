@@ -27,6 +27,16 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-23 09:47 CST — Versión PATCH incrementada a 0.1.6 antes del commit; el dashboard la presenta desde `VERSION` mediante el servidor.
+- 2026-10-23 09:44 CST — Responsividad dashboard: control de nombres largos en la barra superior, altura dinámica y scroll interno de diálogos en móvil, textarea legible en iOS y acciones apiladas en pantallas de 380 px o menos. Actualizado cache-busting CSS.
+- 2026-10-23 09:43 CST — Dashboard, sección “Más”: excluidos sus botones de acción del selector global de botones primarios; recuperan fondo carbón y contraste correcto para descripciones pequeñas.
+- 2026-10-23 09:42 CST — Acceso: alineada la identidad visual con el dashboard (negro, superficies carbón, azul de foco), añadida composición adaptable de marca y formulario y conservados los controles/IDs de autenticación. No se ejecutaron pruebas ni inspección visual.
+- 2026-10-23 09:39 CST — Revisión Web Interface Guidelines: añadidos enlaces para saltar al contenido en acceso, dashboard, preferencias y términos; completados nombres/autocomplete en controles de captura y evitado corrector ortográfico en credenciales. Cache-busting del CSS actualizado. No se ejecutaron pruebas ni builds.
+- 2026-10-23 — Accesibilidad UI: restaurado el zoom del navegador en acceso, dashboard, preferencias y términos; corregido el foco de teclado de puntos/barras de gráficas y reducida la animación cuando el sistema lo solicita. Cache-busting del CSS actualizado. No se ejecutaron pruebas ni builds.
+- 2026-10-23 09:33 CST — Rediseño UI del dashboard: aplicado shell oscuro con navegación lateral (barra inferior en móvil), superficies planas y acciones neutrales; azul reservado a datos. Se preservaron IDs, rutas de datos y estados de navegación. Dirección true-black-flat registrada en `.taste-skill/direction.json`; CSS cache-busting actualizado.
+- 2026-10-23 09:35 CST — Pulido del dashboard: quitado el acento repetido en las tarjetas de macros y mejorados márgenes móviles; eliminada la etiqueta de kicker y normalizada la tipografía del reporte.
+- 2026-10-23 09:36 CST — Quitada una regla `.eyebrow` sin uso en el CSS del dashboard.
+
 - 2026-10-23 01:15 CST — Versión PATCH incrementada a 0.1.5 para el commit PWA; el dashboard la muestra desde `VERSION`.
 
 - 2026-10-23 01:14 CST — PWA: generados los iconos PNG de 192×192 y 512×512 con Python estándar; declarados en el manifest, las rutas estáticas y el caché de carcasa. Añadido icono táctil para iOS.
@@ -467,3 +477,5 @@
 - 2026-10-22 11:37 CST — Configurado STRIX_LLM=openai/gpt-6-luna en .env para análisis local con Strix.
 
 - 2026-10-22 11:44 CST — Configurado STRIX_LLM=chatgpt/gpt-5.4 para autenticar Strix mediante inicio de sesión ChatGPT, según el formato documentado.
+- 2026-10-23 09:27 CST — Añadido `DESIGN.md` en la raíz como referencia visual basada en el diseño de Apple; no modifica la interfaz por sí solo. No se ejecutaron pruebas.
+- 2026-10-23 09:29 CST — Dashboard visual: adaptadas superficies y tipografía al lenguaje de Apple, con neutros claros/oscuros, azul de acción y menos sombras; preservados temas, datos y controles. Cache-busting actualizado. No se ejecutaron pruebas.

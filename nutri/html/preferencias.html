@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="/notifications.css">
   <meta name="theme-color" content="#101411">
   <link rel="manifest" href="/manifest.webmanifest">
@@ -33,11 +33,14 @@
     button { margin-top: 1rem; border: 0; background: #b8de8b; color: #172016; font-weight: 700; cursor: pointer; }
     .button-cancel { background: #29352b; color: inherit; }
     [hidden] { display: none !important; }
-    [role="alert"] { min-height: 1.4em; color: #ffaaa0; }
+     [role="alert"] { min-height: 1.4em; color: #ffaaa0; }
+     .skip-link { position: fixed; z-index: 1000; top: 8px; left: 8px; padding: 10px 14px; transform: translateY(-160%); background: #edf2eb; color: #101411; }
+     .skip-link:focus { transform: translateY(0); }
   </style>
 </head>
 <body>
-  <main>
+  <a class="skip-link" href="#mainContent">Saltar al contenido</a>
+  <main id="mainContent" tabindex="-1">
     <p id="preferencesStep" class="eyebrow">Antes de entrar al dashboard · Paso 1 de 2</p>
     <h1 id="preferencesTitle">Preferencias personales</h1>
     <p id="preferencesIntro">Estas respuestas personalizan tu experiencia. No cambian las reglas comunes de seguridad ni sustituyen datos de salud.</p>
@@ -51,9 +54,9 @@
         </div>
         <div id="integrationCredentialsSection" hidden>
           <label for="integrationUsername">Correo de Garmin Connect</label>
-          <input id="integrationUsername" type="email" maxlength="254" autocomplete="username">
+          <input id="integrationUsername" name="garminUsername" type="email" maxlength="254" autocomplete="username" spellcheck="false">
           <label for="integrationPassword">Contraseña de Garmin Connect</label>
-          <input id="integrationPassword" type="password" maxlength="256" autocomplete="new-password">
+          <input id="integrationPassword" name="garminPassword" type="password" maxlength="256" autocomplete="new-password">
            <p id="integrationCredentialsNote" role="status" aria-live="polite"><small>Prueba el acceso antes de guardar. Las credenciales se almacenan cifradas en tu cuenta.</small></p>
           <button id="verifyGarminButton" type="button" class="button-cancel" hidden>Probar cuenta</button>
         </div>
@@ -62,7 +65,7 @@
       <fieldset>
         <legend>Preferencias de alimentos</legend>
         <label for="dietPattern">Patrón alimentario</label>
-        <select id="dietPattern" name="patronAlimentario" required>
+        <select id="dietPattern" name="patronAlimentario" autocomplete="off" required>
           <option value="">Selecciona…</option>
           <option value="omnivoro">Omnívoro</option>
           <option value="vegetariano">Vegetariano</option>
@@ -72,36 +75,36 @@
           <option value="sin_preferencia">Sin preferencia</option>
         </select>
         <label for="preferredFoods">Alimentos o tipos de comida que prefieres (opcional)</label>
-        <textarea id="preferredFoods" maxlength="800" placeholder="Ej.: pescado, comidas sencillas"></textarea>
+        <textarea id="preferredFoods" name="alimentosPreferidos" autocomplete="off" maxlength="800" placeholder="Ej.: pescado, comidas sencillas…"></textarea>
         <label for="avoidedFoods">Alimentos que prefieres evitar (opcional)</label>
-        <textarea id="avoidedFoods" maxlength="800" placeholder="Ej.: alimentos muy picantes"></textarea>
+        <textarea id="avoidedFoods" name="alimentosEvitados" autocomplete="off" maxlength="800" placeholder="Ej.: alimentos muy picantes…"></textarea>
         <p><small>Este campo es para gustos, no para alergias o restricciones médicas; esas requieren un registro separado.</small></p>
       </fieldset>
 
       <fieldset>
         <legend>Alergias conocidas</legend>
-        <label for="allergiesStatus">¿Cuál describe mejor tu situación?</label>
-        <select id="allergiesStatus" required>
+          <label for="allergiesStatus">¿Cuál describe mejor tu situación?</label>
+        <select id="allergiesStatus" name="estadoAlergias" autocomplete="off" required>
           <option value="">Selecciona…</option>
           <option value="ninguna_conocida">No conozco alergias</option>
           <option value="registradas">Sí, tengo alergias conocidas</option>
           <option value="sin_informacion">No estoy seguro / prefiero no indicarlo</option>
         </select>
         <label id="allergiesDetailsLabel" for="allergiesDetails" hidden>Indica el alérgeno y la reacción conocida, uno por línea</label>
-        <textarea id="allergiesDetails" maxlength="2000" placeholder="Ej.: cacahuate — urticaria" hidden></textarea>
+        <textarea id="allergiesDetails" name="alergias" autocomplete="off" maxlength="2000" placeholder="Ej.: cacahuate — urticaria…" hidden></textarea>
       </fieldset>
 
       <fieldset>
         <legend>Medicamentos de uso permanente o regular</legend>
         <label for="medicationsStatus">¿Cuál describe mejor tu situación?</label>
-        <select id="medicationsStatus" required>
+        <select id="medicationsStatus" name="estadoMedicamentos" autocomplete="off" required>
           <option value="">Selecciona…</option>
           <option value="ninguno">No tomo medicamentos de uso regular</option>
           <option value="registrados">Sí, tomo medicamentos de uso regular</option>
           <option value="sin_informacion">No estoy seguro / prefiero no indicarlo</option>
         </select>
         <label id="medicationsDetailsLabel" for="medicationsDetails" hidden>Indica nombre, dosis y frecuencia tal como te lo indicaron, uno por línea</label>
-        <textarea id="medicationsDetails" maxlength="3000" placeholder="Ej.: medicamento, dosis y frecuencia prescritas" hidden></textarea>
+        <textarea id="medicationsDetails" name="medicamentos" autocomplete="off" maxlength="3000" placeholder="Ej.: medicamento, dosis y frecuencia prescritas…" hidden></textarea>
         <p><small>Se guardan como datos personales de salud para dar contexto; no modifican tratamientos ni sustituyen indicaciones médicas.</small></p>
       </fieldset>
       <p id="formError" role="alert" aria-live="polite"></p>
