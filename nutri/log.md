@@ -27,6 +27,8 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-22 20:16 CST — Comidas guardadas: al solicitar completar macros faltantes, OpenCode recibe valores y procedencia existentes y debe corregir solo los ítems identificados, conservando cantidad, hora y macros conocidos; el servidor evita crear una comida nueva si la respuesta no identifica una corrección. Actualizado el prompt canónico y VERSION a 0.1.2 para el commit. No se ejecutaron pruebas.
+
 - 2026-10-22 14:54 CST — Aplicación: añadida versión central en `VERSION` y visible en la sección “Más”; el servidor inserta ese valor al servir el dashboard. `VERSION` queda en 0.1.1 conforme a la regla de incrementar PATCH por commit. No se ejecutaron pruebas.
 
 - 2026-10-22 12:32 CST — Acceso: separado el código internacional del teléfono también en inicio de sesión; se compone el número E.164 (+código y dígitos nacionales) antes de enviarlo. No se ejecutaron pruebas.

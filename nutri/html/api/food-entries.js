@@ -408,7 +408,7 @@ SELECT LAST_INSERT_ID();`);
         id: String(record.id), hora: new Intl.DateTimeFormat('es-MX', { timeZone: entry.timezone, hour: '2-digit', minute: '2-digit' }).format(new Date(record.createdAt)),
         hour24: Number(parts.hour), minute: Number(parts.minute),
         alimentos: record.items.map((item) => `${item.name}${item.quantity ? ` (${item.quantity})` : ''}`),
-        items: record.items.map(({ itemId, name, quantity, quantityGrams, energyKcal, proteinG, carbohydrateG, fatG, fiberG }) => ({ targetItemId: String(itemId), name, quantity, quantityGrams, energyKcal, proteinG, carbohydrateG, fatG, fiberG })),
+        items: record.items.map(({ itemId, sourceText, name, quantity, quantityGrams, basis, energyKcal, proteinG, carbohydrateG, fatG, fiberG, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote }) => ({ targetItemId: String(itemId), sourceText, name, quantity, quantityGrams, basis, energyKcal, proteinG, carbohydrateG, fatG, fiberG, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote })),
         ...(record.items.length ? {} : { descripcion: record.description }),
       };
     });
@@ -528,8 +528,14 @@ SELECT LAST_INSERT_ID();`);
     const target = targetEntryId == null ? null : matchedMeals.find((meal) => String(meal.id) === String(targetEntryId));
     const ownedTarget = target && await dbQuery(`SELECT id FROM registros_comidas WHERE id=${target.id} AND usuario_id=${userId} AND fecha_consumo=${textSql(entry.fecha)} AND estado='completado' LIMIT 1;`);
     if (targetEntryId != null && !ownedTarget) { appendTargetId = null; updateTargetId = null; clarification = 'La comida seleccionada ya no está disponible. Indica cuál quieres modificar.'; }
-    const asksCorrection = /\b(corrige|corregir|actualiza|actualizar|reemplaza|reemplazar|cambia|cambiar)\b/i.test(entry.descripcion);
+    const asksMacroRepair = /\b(?:recalcul(?:a|ar|en)|complet(?:a|ar|en)|rellen(?:a|ar|en)|faltan|falta)\b.{0,60}\bmacros?\b|\bmacros?\b.{0,60}\b(?:faltantes?|incompletos?|recalcular)\b/i.test(entry.descripcion);
+    const asksCorrection = asksMacroRepair || /\b(corrige|corregir|actualiza|actualizar|reemplaza|reemplazar|cambia|cambiar)\b/i.test(entry.descripcion);
     const asksAddition = /\b(agrega|agregar|añade|añadir|incorpora|incorporar)\b/i.test(entry.descripcion);
+    if (asksMacroRepair && result.action !== 'update') {
+      clarification = matchedMeals.length === 1
+        ? `No pude identificar los alimentos que necesitan macros en la comida de las ${matchedMeals[0].hora}. Indica cuáles quieres completar.`
+        : `No pude identificar una sola comida para completar macros. Indica cuál: ${matchedMeals.map((meal) => `${meal.hora}: ${(meal.alimentos || []).join(', ') || meal.descripcion}`).join('; ') || 'no hay comidas completadas disponibles'}.`;
+    }
     if (activeTarget && !clarification && asksCorrection && !asksAddition && result.action !== 'update') {
       appendTargetId = null;
       updateTargetId = null;
