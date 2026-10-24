@@ -165,15 +165,6 @@ async function analyzeTraining({ userId, description, userWeightContext = descri
   });
 }
 
-async function prepareTrainingSession({ userId, requestOpenCode = openCodeRequest, readConfig = getFoodSessionDefaults }) {
-  const id = String(userId);
-  if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta autenticada no válida.'), { status: 400 });
-  return withUserLock(id, async () => {
-    await deleteTrainingSession({ userId: id, requestOpenCode, alreadyLocked: true });
-    return openTrainingSession(id, await readConfig(), requestOpenCode);
-  });
-}
-
 async function deleteTrainingSession({ userId, requestOpenCode = openCodeRequest, alreadyLocked = false }) {
   const id = String(userId);
   const remove = async () => {
@@ -259,4 +250,4 @@ async function generateTrainingPlan({ userId, goals, context, requestOpenCode = 
   });
 }
 
-module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, parseTrainingPlanReply, prepareTrainingSession, readTrainingPlanPrompt };
+module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, parseTrainingPlanReply, readTrainingPlanPrompt };

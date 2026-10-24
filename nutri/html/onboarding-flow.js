@@ -1284,7 +1284,6 @@ const trainingDescriptionFields = document.querySelector('#trainingDescriptionFi
 let trainingOpenGeneration = 0;
 let trainingSessionReady = false;
 let trainingSessionUiInitialized = false;
-let trainingSessionPreparing = false;
 let trainingOpenCodeSessionActive = false;
 let trainingPending = false;
 let trainingSaving = false;
@@ -1326,51 +1325,16 @@ async function showGarminTrainingSync(generation) {
     }
   } catch {}
 }
-async function prepareTrainingSessionUi(generation) {
-  trainingSessionPreparing = true;
-  trainingAnalyzeButton.disabled = true;
-  trainingInput.disabled = true;
-  trainingLoading.hidden = false;
-  trainingLoadingText.textContent = 'Preparando sesión…';
-  trainingFeedback.textContent = 'Preparando la sesión de entrenamiento…';
-  notifyApp('Preparando la sesión de entrenamiento.', 'info');
-  try {
-    const response = await fetch('/api/training/session', { method: 'POST', credentials: 'same-origin' });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'No se pudo preparar la sesión de entrenamiento.');
-    if (generation !== trainingOpenGeneration) return;
-    trainingSessionReady = true;
-    trainingOpenCodeSessionActive = true;
-    trainingFeedback.textContent = 'Sesión lista.';
-    trainingFeedback.classList.remove('food-session-error');
-    notifyApp(trainingFeedback.textContent, 'success');
-  } catch {
-    if (generation !== trainingOpenGeneration) return;
-    trainingSessionReady = false;
-    trainingFeedback.textContent = 'No se pudo abrir la sesión de entrenamiento';
-    trainingFeedback.classList.add('food-session-error');
-    notifyApp(trainingFeedback.textContent, 'error');
-  } finally {
-    if (generation === trainingOpenGeneration) trainingSessionPreparing = false;
-    if (generation === trainingOpenGeneration) {
-      trainingSessionUiInitialized = trainingSessionReady;
-      trainingLoading.hidden = true;
-      trainingAnalyzeButton.disabled = !trainingSessionReady;
-      trainingInput.disabled = !trainingSessionReady;
-      if (trainingSessionReady && trainingDialog.open) trainingInput.focus();
-    }
-  }
-}
 trainingTrigger?.addEventListener('click', () => {
   if (trainingPending || trainingSessionUiInitialized) { trainingDialog?.showModal(); return; }
   trainingSessionUiInitialized = true;
   const generation = ++trainingOpenGeneration;
-  trainingAnalyzeButton.disabled = true;
-  trainingInput.disabled = true;
-  trainingSessionReady = false;
+  trainingSessionReady = true;
+  trainingOpenCodeSessionActive = false;
   trainingSavedAt = null;
   trainingInput.value = '';
-  trainingInput.disabled = true;
+  trainingInput.disabled = false;
+  trainingAnalyzeButton.disabled = false;
   trainingFeedback.classList.remove('food-session-error');
   trainingGarminConnected = false;
   document.querySelector(`[name="trainingMode"][value="${savedTrainingMode()}"]`).checked = true;
@@ -1382,7 +1346,7 @@ trainingTrigger?.addEventListener('click', () => {
   updateTrainingMode();
   trainingDialog?.showModal();
   void showGarminTrainingSync(generation);
-  void prepareTrainingSessionUi(generation);
+  trainingInput.focus();
 });
 trainingModeToggle?.addEventListener('change', (event) => {
   try { localStorage.setItem(trainingModeStorageKey, event.target.value); } catch {}
@@ -1426,13 +1390,13 @@ syncGarminTrainingButton?.addEventListener('click', async () => {
 });
 async function cancelTrainingDialog() {
   if (trainingSaving) { notifyApp('Espera a que termine el guardado antes de cancelar.', 'info'); return; }
-  if (!trainingOpenCodeSessionActive && !trainingSessionPreparing && !trainingPending) { trainingDialog?.close(); return; }
+  if (!trainingOpenCodeSessionActive && !trainingPending) { trainingDialog?.close(); return; }
   const generation = ++trainingOpenGeneration;
   try {
     const response = await fetch('/api/training/session', { method: 'DELETE', credentials: 'same-origin' });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || 'No se pudo eliminar la sesión de entrenamiento.');
-    trainingSessionReady = trainingSessionUiInitialized = trainingSessionPreparing = false;
+    trainingSessionReady = trainingSessionUiInitialized = false;
     trainingOpenCodeSessionActive = false;
     trainingPending = false;
     trainingSavedAt = null;
@@ -1440,7 +1404,6 @@ async function cancelTrainingDialog() {
     notifyApp('Sesión e historial del entrenamiento eliminados.', 'success');
   } catch (error) {
     if (generation === trainingOpenGeneration) {
-      trainingSessionPreparing = false;
       trainingSessionReady = true;
       trainingOpenCodeSessionActive = true;
       trainingAnalyzeButton.disabled = false;

@@ -34,14 +34,12 @@ services:
       DB_PORT: 3306
       PORT: 8080
       HOST: 0.0.0.0
-      OPENCODE_BASE_URL: http://host.docker.internal:49375
+      OPENCODE_BASE_URL: http://opencode:4096
       OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?Define OPENCODE_SERVER_PASSWORD en .env}
       OPENCODE_AUTO_START: "false"
     volumes:
       - .:/app:ro
       - ../garmin-connect-mcp:/app/garmin-connect-mcp:ro
-    extra_hosts:
-      - "host.docker.internal:172.21.0.1"
     ports:
       - "8080:8080"
     depends_on:
@@ -67,7 +65,7 @@ services:
     memswap_limit: 256m
     pids_limit: 64
     cap_drop: [ALL]
-    networks: [opencode_egress]
+    networks: [default, opencode_egress]
     healthcheck:
       test: ["CMD-SHELL", "curl -fsS -u \"opencode:$${OPENCODE_SERVER_PASSWORD}\" http://127.0.0.1:4096/global/health >/dev/null"]
       interval: 20s

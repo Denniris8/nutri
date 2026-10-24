@@ -14,7 +14,7 @@ const { readPlicometrics, savePlicometric } = require('./api/plicometrics.js');
 const { clearFoodChatHistory, deleteFoodEntry, readFoodEntries, readPendingFoodDraft, saveFoodEntry } = require('./api/food-entries.js');
 const { calendarDayRange, readCalendarTimezone } = require('./api/calendar-day.js');
 const { deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError } = require('./api/opencode-food.js');
-const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, prepareTrainingSession, readTrainingPlanPrompt } = require('./api/training-analysis.js');
+const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, readTrainingPlanPrompt } = require('./api/training-analysis.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
 const { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
 const { addNotification, markNotificationRead, notificationInsertSql, readNotifications, resolveNotificationsSql } = require('./api/notifications.js');
@@ -751,32 +751,21 @@ SELECT JSON_OBJECT('days',${days},'current',JSON_OBJECT(
     }
 
     if (pathname === '/api/training/session') {
-      if (!['POST', 'DELETE'].includes(request.method)) { response.writeHead(405, { Allow: 'POST, DELETE' }).end(); return; }
+      if (request.method !== 'DELETE') { response.writeHead(405, { Allow: 'DELETE' }).end(); return; }
       if (!sameOrigin(request)) { authError(response, 403, 'Solicitud no permitida.'); return; }
-      if (request.method === 'POST' && !allowAttempt(request, response, 'training-session')) return;
       let claims;
       try { claims = await authenticated(request); }
       catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
       if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
-      if (request.method === 'DELETE') {
-        try {
-          await deleteTrainingSession({ userId: claims.sub, requestOpenCode: openCodeRequest });
-          json(response, 200, { ok: true });
-        } catch {
-          const traceId = randomUUID();
-          try {
-            await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,usuario_id,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('training-opencode')},${textSql(traceId)},${textSql('session_cleanup_failed')},${textSql('cancel_session')},${textSql('DELETE /api/training/session')},${textSql('DELETE')},${textSql('/api/training/session')},${claims.sub},${textSql('TRAINING_SESSION_CANCEL_CLEANUP')},${textSql('Error')},503,${textSql('No se pudo eliminar la sesión OpenCode de entrenamiento al cancelar.')});`);
-          } catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
-          authError(response, 503, 'No se pudo eliminar la sesión de entrenamiento.');
-        }
-        return;
-      }
       try {
-        await prepareTrainingSession({ userId: claims.sub, requestOpenCode: openCodeRequest });
+        await deleteTrainingSession({ userId: claims.sub, requestOpenCode: openCodeRequest });
         json(response, 200, { ok: true });
       } catch {
-        try { await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'error', title: 'No se pudo preparar el entrenamiento', message: 'No se pudo abrir la sesión; inténtalo de nuevo.', dbQuery, textSql }); } catch {}
-        authError(response, 503, 'No se pudo preparar la sesión de entrenamiento.');
+        const traceId = randomUUID();
+        try {
+          await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,usuario_id,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('training-opencode')},${textSql(traceId)},${textSql('session_cleanup_failed')},${textSql('cancel_session')},${textSql('DELETE /api/training/session')},${textSql('DELETE')},${textSql('/api/training/session')},${claims.sub},${textSql('TRAINING_SESSION_CANCEL_CLEANUP')},${textSql('Error')},503,${textSql('No se pudo eliminar la sesión OpenCode de entrenamiento al cancelar.')});`);
+        } catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
+        authError(response, 503, 'No se pudo eliminar la sesión de entrenamiento.');
       }
       return;
     }
