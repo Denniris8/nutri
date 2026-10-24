@@ -1,7 +1,7 @@
 const { createHash, randomUUID } = require('node:crypto');
 const path = require('node:path');
 const { readFile } = require('node:fs/promises');
-const { openCodeRequest, getFoodSessionDefaults } = require('./opencode-food.js');
+const { openCodeRequest, readFoodSessionConfig } = require('./opencode-food.js');
 const { parseTrainingSavedTime } = require('./training-entries.js');
 const { extractPlanDisclosure, validatePlanSemantics } = require('./training-plans.js');
 
@@ -127,7 +127,7 @@ function parseReply(parts, biometricContext, explicitWeightKg) {
   return reply;
 }
 
-async function analyzeTraining({ userId, description, userWeightContext = description, biometricData, stepContext, requestOpenCode = openCodeRequest, readConfig = getFoodSessionDefaults }) {
+async function analyzeTraining({ userId, description, userWeightContext = description, biometricData, stepContext, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
   const id = String(userId);
   const text = typeof description === 'string' ? description.trim() : '';
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta autenticada no válida.'), { status: 400 });
@@ -194,7 +194,7 @@ async function deleteTrainingPlanSession({ userId, runId, requestOpenCode = open
   return withUserLock(id, () => closePendingPlanSession(id, requestOpenCode, runId));
 }
 
-async function generateTrainingPlan({ userId, goals, context, requestOpenCode = openCodeRequest, readConfig = getFoodSessionDefaults }) {
+async function generateTrainingPlan({ userId, goals, context, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
   const id = String(userId);
   const text = typeof goals === 'string' ? goals.trim() : '';
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta autenticada no válida.'), { status: 400 });

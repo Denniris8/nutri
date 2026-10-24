@@ -530,3 +530,5 @@
 - 2026-10-24 02:34 CST — Commit solicitado con `git`: PATCH actualizado a `0.1.11`; la versión del dashboard se sirve desde `VERSION`.
 - 2026-10-24 02:40 CST — Diagnóstico de producción: `errores_aplicacion` mostró `SERVICE_CONFIG` en etapa `analysis`; la validación allowlist de OpenCode rechazaba el hostname Docker `opencode` antes de enviar la solicitud. Permitido solo ese hostname interno además de los loopback ya existentes; se conserva el rechazo de hosts no permitidos. No se ejecutaron pruebas.
 - 2026-10-24 02:41 CST — Commit solicitado con `git`: PATCH actualizado a `0.1.12`; el dashboard toma la versión desde `VERSION`.
+- 2026-10-24 02:50 CST — Diagnóstico de `OPEN_CODE_ERROR`: entrenamiento y creación de planes usaban `getFoodSessionDefaults()` (`model: null`), dejando que OpenCode eligiera el modelo gratuito predeterminado, que rechaza llamadas externas. Ambos flujos ahora leen `configuracion-sesion.json` mediante `readFoodSessionConfig`, igual que comidas. No se ejecutaron pruebas.
+- 2026-10-24 02:51 CST — Commit solicitado con `git`: PATCH actualizado a `0.1.13`; el dashboard toma la versión desde `VERSION`.
