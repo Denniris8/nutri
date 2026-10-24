@@ -34,13 +34,12 @@ services:
       DB_PORT: 3306
       PORT: 8080
       HOST: 0.0.0.0
-      OPENCODE_SERVICE_FILE: /run/opencode/service.json
-      OPENCODE_SERVICE_PROXY_URL: http://host.docker.internal:49375
+      OPENCODE_BASE_URL: http://host.docker.internal:49375
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?Define OPENCODE_SERVER_PASSWORD en .env}
       OPENCODE_AUTO_START: "false"
     volumes:
       - .:/app:ro
       - ../garmin-connect-mcp:/app/garmin-connect-mcp:ro
-      - /home/pcp/.local/state/opencode/service.json:/run/opencode/service.json:ro
     extra_hosts:
       - "host.docker.internal:172.21.0.1"
     ports:
@@ -48,6 +47,39 @@ services:
     depends_on:
       mysql:
         condition: service_healthy
+      opencode:
+        condition: service_healthy
+
+  opencode:
+    build: ./docker/opencode
+    image: nutri-opencode:2.1.3
+    restart: unless-stopped
+    command: ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]
+    environment:
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?Define OPENCODE_SERVER_PASSWORD en .env}
+    ports:
+      - "127.0.0.1:49375:4096"
+    volumes:
+      - opencode_config:/home/opencode/.config/opencode
+      - opencode_data:/home/opencode/.local/share/opencode
+      - opencode_state:/home/opencode/.local/state/opencode
+    mem_limit: 256m
+    memswap_limit: 256m
+    pids_limit: 64
+    cap_drop: [ALL]
+    networks: [opencode_egress]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -u \"opencode:$${OPENCODE_SERVER_PASSWORD}\" http://127.0.0.1:4096/global/health >/dev/null"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 volumes:
   mysql_data:
+  opencode_config:
+  opencode_data:
+  opencode_state:
+
+networks:
+  opencode_egress:
