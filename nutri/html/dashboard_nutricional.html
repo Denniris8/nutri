@@ -8,7 +8,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/pwa-icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/pwa-icon-192.png">
-  <link rel="stylesheet" href="/dashboard_nutricional.css?v=63">
+  <link rel="stylesheet" href="/dashboard_nutricional.css?v=65">
   <link rel="stylesheet" href="/notifications.css">
 </head>
 <body>
@@ -415,7 +415,7 @@
 
   <dialog id="registerFoodDialog" class="more-form-dialog" aria-labelledby="registerFoodTitle">
     <header class="more-form-header">
-      <div><h2 id="registerFoodTitle">Registrar comida</h2><p>Si necesito aclarar algo, te preguntaré antes de guardar.</p></div>
+      <div><h2 id="registerFoodTitle">Registrar comida</h2></div>
       <button id="closeFoodDialog" class="icon-close" type="button" aria-label="Cerrar">×</button>
     </header>
     <form id="registerFoodForm" class="more-form-body">
@@ -428,7 +428,7 @@
         <p id="foodLoading" class="food-loading" role="status" aria-live="polite" hidden><span class="assistant-thinking" aria-hidden="true"></span><span id="foodLoadingText">Esperando respuesta…</span></p>
       </div>
       <label id="foodDescriptionLabel" for="foodDescription">Alimentos consumidos</label>
-      <input id="foodDescription" name="alimentos" class="food-chat-input" type="text" autocomplete="off" maxlength="5000" placeholder="Ej.: 150 g de pollo, 100 g de arroz cocido y 1 manzana" required>
+      <textarea id="foodDescription" name="alimentos" class="food-chat-input" rows="4" autocomplete="off" maxlength="5000" placeholder="Ej.: 150 g de pollo, 100 g de arroz cocido y 1 manzana" required></textarea>
       <p id="foodEntryFeedback" role="status" aria-live="polite"></p>
       <div class="action-plan-dialog-actions">
         <button id="saveFoodButton" type="submit">Guardar</button>
@@ -438,7 +438,7 @@
 
   <dialog id="trainingPlanDialog" class="more-form-dialog" aria-labelledby="trainingPlanDialogTitle">
     <header class="more-form-header">
-      <div><h2 id="trainingPlanDialogTitle">Crear plan de entrenamiento</h2><p id="planSummaryText">Cuéntame tus objetivos y generaré un plan con tus datos registrados.</p></div>
+      <div><h2 id="trainingPlanDialogTitle">Crear plan de entrenamiento</h2><p id="planSummaryText"></p></div>
       <button id="closeTrainingPlanDialog" class="icon-close" type="button" aria-label="Cerrar">×</button>
     </header>
     <div id="planContent" class="more-form-body training-plan-chat">
@@ -480,7 +480,7 @@
 
   <dialog id="trainingModal" class="more-form-dialog" aria-labelledby="trainingModalTitle">
     <header class="more-form-header">
-      <div><h2 id="trainingModalTitle">Registrar entrenamiento</h2><p>Describe tu sesión; incluye duración, intensidad y distancia si aplica.</p></div>
+      <div><h2 id="trainingModalTitle">Registrar entrenamiento</h2></div>
       <button id="closeTrainingModal" class="icon-close" type="button" aria-label="Cerrar">×</button>
     </header>
     <div class="more-form-body training-ui-body">
@@ -568,6 +568,6 @@
   </dialog>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
   <script src="/pwa-register.js" defer></script>
-  <script src="/onboarding-flow.js?v=plan-save-activation-guidance" defer></script>
+  <script src="/onboarding-flow.js?v=plan-save-activation-guidance-keyboard-viewport" defer></script>
 </body>
 </html>

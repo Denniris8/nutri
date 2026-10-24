@@ -179,10 +179,32 @@ function isFoodIdentityRefusal(message) {
 }
 
 async function readFoodConversationText({ entryId, dbQuery, fallback, excludeLatestUser = false }) {
-  const rows = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`);
-  const messages = rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)).filter((message) => !isLegacyFoodNameError(message) && !isFoodErrorMessage(message) && !isFoodIdentityRefusal(message)) : [];
+  const messages = await readFoodConversationMessages({ entryId, dbQuery });
   if (excludeLatestUser && messages.at(-1)?.role === 'user') messages.pop();
   return messages.map((message) => `${message.role === 'user' ? 'Usuario' : 'Asistente'}: ${message.content}`).join('\n') || fallback;
+}
+
+async function readFoodConversationMessages({ entryId, dbQuery }) {
+  const rows = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`);
+  return rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)).filter((message) => !isLegacyFoodNameError(message) && !isFoodErrorMessage(message) && !isFoodIdentityRefusal(message)) : [];
+}
+
+function hasGenericEstimateApproval(messages, pendingQuestion, answer) {
+  if (/\b(?:aceptas|acepta|usar|estimaci[oó]n)\b.{0,100}\bgen[eé]ric[oa]s?\b/i.test(pendingQuestion || '')
+    && /^\s*(?:s[ií]|correcto|de acuerdo|adelante)\b/i.test(answer || '')) return true;
+  let approved = false;
+  let genericQuestionPending = false;
+  for (const message of messages) {
+    if (message.role === 'assistant') {
+      genericQuestionPending = /\b(?:aceptas|acepta|usar|estimaci[oó]n)\b.{0,100}\bgen[eé]ric[oa]s?\b/i.test(message.content);
+    } else if (message.role === 'user') {
+      if (/\b(?:no quiero|no uses|no acepto)\b.{0,40}\bgen[eé]ric[oa]s?\b|\b(?:prefiero|mejor busca)\b.{0,40}\b(?:marca|etiqueta)\b/i.test(message.content)) approved = false;
+      else if (/^\s*(?:(?:usa|usar|quiero|acepto|puedes usar)\s+)?gen[eé]ric[oa]s?\s*[.!]?\s*$|\b(?:usa|usar|quiero|acepto|puedes usar|prefiero)\b.{0,50}\bgen[eé]ric[oa]s?\b|\bno tengo (?:la )?etiqueta\b|\bsin (?:la )?etiqueta\b/i.test(message.content)
+        || genericQuestionPending && /^\s*(?:s[ií]|correcto|de acuerdo|adelante)\b/i.test(message.content)) approved = true;
+      genericQuestionPending = false;
+    }
+  }
+  return approved;
 }
 
 async function readFoodUserText({ entryId, dbQuery }) {
@@ -466,11 +488,17 @@ SELECT LAST_INSERT_ID();`);
 
     const identityRefusal = isFoodIdentityRefusal({ role: 'assistant', content: saved.question });
     if (['borrador_chat', 'requiere_aclaracion'].includes(saved.state) && saved.question && !isLegacyFoodNameError({ role: 'assistant', content: saved.question }) && !identityRefusal) {
-      await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'user', content: saved.description });
-      await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'assistant', content: saved.question });
+      const existingMessages = await readFoodConversationMessages({ entryId, dbQuery });
+      if (!existingMessages.some((message) => message.role === 'user' && message.content === saved.description)) {
+        await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'user', content: saved.description });
+      }
+      if (!existingMessages.some((message) => message.role === 'assistant' && message.content === saved.question)) {
+        await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'assistant', content: saved.question });
+      }
     }
     const pendingFoodItems = saved.question ? await readDraftFoodItems({ entryId, userId, dbQuery }) : [];
     await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'user', content: entry.descripcion });
+    const genericEstimateApproved = hasGenericEstimateApproval(await readFoodConversationMessages({ entryId, dbQuery }), saved.question, entry.descripcion);
     const asksTimeChoice = /Hay varias comidas a esa hora|¿Te refieres a las .*a\. m\. o p\. m\./i.test(saved.question || '');
     const asksDayChoice = /¿Esta comida pertenece al día nutricional seleccionado(?:\s*\([^)]*\))? o al anterior(?:\s*\([^)]*\))?\?/i.test(saved.question || '');
     const asksPreviousDayConfirmation = /¿La guardo en el día nutricional anterior .*11:59:59 p\. m\./i.test(saved.question || '');
@@ -545,10 +573,11 @@ SELECT LAST_INSERT_ID();`);
       await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode, forgetOnError: true });
       traceFoodSession(trace, 'identity_refusal_session_reset');
     }
-    let sessionId = await ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode, trace });
+    let session = await ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode, trace, returnMetadata: true });
+    let sessionId = session.sessionId;
     const conversation = await readFoodConversationText({ entryId, dbQuery, fallback: '', excludeLatestUser: true });
     stage = 'analysis';
-    const requestArgs = { sessionId, description: modelDescription, initialDescription: saved.description, ...(conversation ? { conversation } : {}), comidasDisponibles: mealsForModel, alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
+    const requestArgs = { sessionId, description: modelDescription, initialDescription: saved.description, genericEstimateApproved, ...(!session.reused && conversation ? { conversation } : {}), comidasDisponibles: mealsForModel, alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
     let parts = await withFoodSessionLock(userId, () => requestFoodDescription(requestArgs));
     stage = 'parse';
     let result;
@@ -563,7 +592,9 @@ SELECT LAST_INSERT_ID();`);
       modelDescription = await readFoodConversationText({ entryId, dbQuery, fallback: entry.descripcion });
       await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode, forgetOnError: true });
       traceFoodSession(trace, 'identity_refusal_session_reset');
-      sessionId = await ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode, trace });
+      session = await ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode, trace, returnMetadata: true });
+      sessionId = session.sessionId;
+      if (conversation) requestArgs.conversation = conversation;
       stage = 'analysis';
       parts = await withFoodSessionLock(userId, () => requestFoodDescription({ ...requestArgs, sessionId, description: modelDescription }));
       stage = 'parse';
@@ -582,18 +613,20 @@ SELECT LAST_INSERT_ID();`);
       ...(answeredPendingQuantity && (!items.length || items.some((item) => item.quantityGrams == null && !hasExplicitVolume(item))) ? ['quantityGrams'] : []),
     ];
     let replyIssues = getReplyIssues();
-    for (let attempt = 1; attempt <= 3 && (replyIssues.length || (!items.length && !result?.clarificationQuestion)); attempt++) {
+    const macroIssues = () => replyIssues.some((issue) => /\.macros(?:$|\.)|macro_unit_bounds|energy_unit_bounds|energy_4_4_9_mismatch/.test(issue));
+    const retryLimit = macroIssues() ? 3 : 1;
+    for (let attempt = 1; attempt <= retryLimit && (replyIssues.length || (!items.length && !result?.clarificationQuestion)); attempt++) {
       traceFoodSession(trace, 'reply_validation_retry', { issueCount: replyIssues.length || 1, attempt });
       parts = await withFoodSessionLock(userId, () => requestFoodDescription({
         ...requestArgs, sessionId, description: modelDescription,
-        retryFeedback: `REINTENTO ${attempt}/3: corrige la respuesta completa en JSON. Problemas concretos de validación: ${replyIssues.length ? replyIssues.join(', ') : 'JSON ausente o ilegible'}. Usa el contexto completo del chat que se vuelve a incluir en esta solicitud; conserva alimentos, cantidades y aclaraciones ya confirmados. Devuelve todos los campos requeridos, sin inventar datos; pregunta solo por información que realmente falte. Para masa usa quantityGrams; para volumen conserva quantityText y quantityGrams:null, sin convertir volumen a masa por suposición.`,
+        retryFeedback: `CORRECCIÓN ${attempt}/${retryLimit}: corrige la respuesta completa en JSON. Problemas: ${replyIssues.length ? replyIssues.join(', ') : 'JSON ausente o ilegible'}. Conserva alimentos, cantidades y aclaraciones confirmados en la sesión y el contexto; no repitas preguntas contestadas. Devuelve todos los campos requeridos. ${macroIssues() ? 'Debes resolver los macros obligatorios de todos los alimentos solicitados: si no hay fuente exacta utilizable, usa valores típicos razonables y marca macroSource:"opencode_estimado" y macroStatus:"estimado"; no dejes macros obligatorios nulos.' : 'No inventes información y pregunta solo si falta un dato necesario.'} Nunca inventes cantidades. Para masa usa quantityGrams; para volumen conserva quantityText y quantityGrams:null, sin convertir volumen a masa por suposición.`,
       }));
       stage = 'parse';
       result = parseReply(parts);
       items = applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity);
       if (result) result.items = items;
       replyIssues = getReplyIssues();
-      if (replyIssues.length || (!items.length && !result?.clarificationQuestion)) {
+      if ((replyIssues.length || (!items.length && !result?.clarificationQuestion)) && attempt === retryLimit) {
         stage = 'validation';
         traceFoodSession(trace, 'reply_validation_failed', { stage, errorCode: 'FOOD_RESPONSE_INVALID_STRUCTURE', issueCount: replyIssues.length || 1, issueCodes: replyIssues.slice(0, 20), retries: attempt });
         throw Object.assign(new Error('OpenCode no devolvió un formato válido tras un reintento. No se guardaron los alimentos; vuelve a enviar el mensaje.'), { code: 'FOOD_RESPONSE_INVALID_STRUCTURE' });

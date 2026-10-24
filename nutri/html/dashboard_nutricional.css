@@ -492,7 +492,8 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
 .food-chat-speaker { font-size: 11px; font-weight: 700; opacity: .8; }
 .food-chat-text { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
 .more-form-body .food-chat-input { min-height: 44px; padding: 8px 12px; border-radius: var(--shape-full); }
-#foodDescription, #trainingDescription, #trainingPlanGoals { box-sizing: border-box; height: 56px; min-height: 56px; border-radius: 0; line-height: 1.25; }
+#foodDescription { box-sizing: border-box; height: 96px; min-height: 96px; border-radius: 0; line-height: 1.35; resize: vertical; }
+#trainingDescription, #trainingPlanGoals { box-sizing: border-box; height: 56px; min-height: 56px; border-radius: 0; line-height: 1.25; }
 .food-session-error { color: var(--bad); font-weight: 600; }
 .food-chat-message[data-role="assistant"] { justify-self: start; }
 .training-ui-body { display: grid; gap: 8px; }
@@ -699,8 +700,12 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
   .dashboard-view { padding: 18px 16px 32px; }
   .dashboard-toolbar, .active-user-name { min-width: 0; }
   .active-user-name, .test-account-notice { overflow-wrap: anywhere; }
-  .more-form-dialog[open] { max-height: 88dvh; }
+  #registerFoodDialog[open], #trainingModal[open], #trainingPlanDialog[open] { position: fixed; top: calc(var(--keyboard-viewport-top, 0px) + 8px); left: 50%; margin: 0; transform: translateX(-50%); max-height: calc(var(--keyboard-viewport-height, 100dvh) - 16px); }
   .more-form-body { overscroll-behavior: contain; padding-bottom: max(16px, env(safe-area-inset-bottom)); }
+  #registerFoodDialog[open] #registerFoodForm:has(#foodChatThread:not([hidden])) { min-height: 0; overflow: hidden; grid-template-rows: auto minmax(48px, 1fr) auto auto auto auto; }
+  #registerFoodDialog[open] #foodChatThread, #trainingModal[open] .food-chat-thread, #trainingPlanDialog[open] .food-chat-thread { min-height: 0; max-height: none; }
+  #trainingModal[open] .training-ui-body { min-height: 0; overflow: hidden; grid-template-rows: auto minmax(48px, 1fr) auto auto auto auto; }
+  #trainingPlanDialog[open] #planContent { min-height: 0; overflow: hidden; grid-template-rows: minmax(48px, 1fr) auto auto; }
   .more-form-body textarea, .modal-body textarea { font-size: 16px; }
   #foodDescription, #trainingDescription, #trainingPlanGoals { font-size: 16px; }
 }

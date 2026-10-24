@@ -252,12 +252,13 @@ function withUserLock(userId, run) {
 
 function withFoodSessionLock(userId, run) { return withUserLock(String(userId), run); }
 
-async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig, trace }) {
+async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig, trace, returnMetadata = false }) {
   const id = String(userId);
   if (!/^\d+$/.test(id)) throw new Error('Cuenta autenticada no válida.');
   const config = await readConfig();
   const configFingerprint = createHash('sha256').update(JSON.stringify({ userId: id, sessionScope: 'food-conversation', model: config.model, agent: config.agent, variant: config.variant })).digest('hex');
   traceFoodSession(trace, 'session_resolution_started');
+  const result = (sessionId, reused) => returnMetadata ? { sessionId, reused } : sessionId;
   return withUserLock(id, async () => {
     const cached = verifiedFoodSessions.get(id);
     if (cached?.fingerprint === configFingerprint) {
@@ -265,7 +266,7 @@ async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpen
       if (current.status >= 200 && current.status < 300
         && current.data?.metadata?.foodUserId === id && current.data?.metadata?.foodConfigSha256 === configFingerprint) {
         traceFoodSession(trace, 'session_ready', { reused: true, session: shortSessionId(cached.sessionId) });
-        return cached.sessionId;
+        return result(cached.sessionId, true);
       }
       if (current.status !== 404 && (current.status < 200 || current.status >= 300)) {
         throw openCodeHttpError(current.status, 'GET /api/session/{id}', 'No se pudo verificar la sesión OpenCode de comidas.');
@@ -282,7 +283,7 @@ async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpen
         if (updated.status < 200 || updated.status >= 300) throw openCodeHttpError(updated.status, 'PATCH /api/session/{id}', 'No se pudieron actualizar los permisos de la sesión de comidas.');
         verifiedFoodSessions.set(id, { sessionId: stored, fingerprint: configFingerprint });
         traceFoodSession(trace, 'session_ready', { reused: true, session: shortSessionId(stored) });
-        return stored;
+        return result(stored, true);
       }
       if (current.status >= 200 && current.status < 300 && current.data?.metadata?.foodUserId === id) {
         const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(stored)}`, undefined, config.requestTimeoutMs);
@@ -307,7 +308,7 @@ async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpen
     await dbQuery(`INSERT INTO sesiones_comidas_opencode(usuario_id,session_id) VALUES (${id},${textSql(sessionId)}) AS incoming ON DUPLICATE KEY UPDATE session_id=incoming.session_id,actualizado_en=CURRENT_TIMESTAMP;`);
     verifiedFoodSessions.set(id, { sessionId, fingerprint: configFingerprint });
     traceFoodSession(trace, 'session_ready', { reused: false, session: shortSessionId(sessionId) });
-    return sessionId;
+    return result(sessionId, false);
   }).catch((error) => {
     traceFoodSession(trace, 'session_resolution_failed', {
       stage: 'session_resolution', errorCode: safeOpenCodeErrorCode(error),
@@ -334,18 +335,19 @@ async function deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode = op
   });
 }
 
-async function requestFoodDescription({ sessionId, description, initialDescription, conversation, comidasDisponibles = [], alimentosPendientes = [], continuacionRegistro = false, diaNutricional, retryFeedback, config, trace, requestOpenCode = openCodeRequest }) {
+async function requestFoodDescription({ sessionId, description, initialDescription, conversation, comidasDisponibles = [], alimentosPendientes = [], continuacionRegistro = false, diaNutricional, genericEstimateApproved = false, retryFeedback, config, trace, requestOpenCode = openCodeRequest }) {
   config ||= await readFoodSessionConfig();
   const system = await readFoodSystemPrompt(config.maxFoodItems);
   const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
   const startedAt = Date.now();
-  traceFoodSession(trace, 'message_sent', { stage: 'separar_alimentos', session: shortSessionId(sessionId), enabledTools: ['websearch', 'webfetch'] });
-  const requestContext = { description, ...(initialDescription ? { initialDescription } : {}), ...(conversation ? { conversation } : {}), ...(diaNutricional ? { diaNutricional } : {}), ...(retryFeedback ? { correccionFormato: retryFeedback } : {}), ...(comidasDisponibles.length ? { comidasDisponibles } : {}), ...(alimentosPendientes.length ? { alimentosPendientes } : {}), ...(continuacionRegistro ? { continuacionRegistro: true } : {}) };
+  const requestContext = { description, ...(initialDescription ? { initialDescription } : {}), ...(conversation ? { conversation } : {}), ...(diaNutricional ? { diaNutricional } : {}), ...(genericEstimateApproved ? { genericEstimateApproved: true } : {}), ...(retryFeedback ? { correccionFormato: retryFeedback } : {}), ...(comidasDisponibles.length ? { comidasDisponibles } : {}), ...(alimentosPendientes.length ? { alimentosPendientes } : {}), ...(continuacionRegistro ? { continuacionRegistro: true } : {}) };
+  const tools = genericEstimateApproved ? {} : { websearch: true, webfetch: true };
+  traceFoodSession(trace, 'message_sent', { stage: 'separar_alimentos', session: shortSessionId(sessionId), enabledTools: Object.keys(tools) });
   let result;
   try {
     result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
       system,
-      tools: { websearch: true, webfetch: true },
+      tools,
       ...(model ? { model } : {}),
       ...(config.agent ? { agent: config.agent } : {}),
       ...(config.variant ? { variant: config.variant } : {}),

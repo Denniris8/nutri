@@ -1,3 +1,13 @@
+function syncKeyboardViewport() {
+  const viewport = window.visualViewport;
+  if (!viewport) return;
+  document.documentElement.style.setProperty('--keyboard-viewport-height', `${viewport.height}px`);
+  document.documentElement.style.setProperty('--keyboard-viewport-top', `${viewport.offsetTop}px`);
+}
+syncKeyboardViewport();
+window.visualViewport?.addEventListener('resize', syncKeyboardViewport);
+window.visualViewport?.addEventListener('scroll', syncKeyboardViewport);
+
 const loginForm = document.querySelector('#loginForm');
 const registerForm = document.querySelector('#registerForm');
 const errorMessage = document.querySelector('#errorMessage');

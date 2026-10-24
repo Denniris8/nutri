@@ -171,7 +171,7 @@ test('food save rejects an invalid OpenCode response without exposing it to the 
     assert.equal(saved.status, 502);
     const result = await saved.json();
     assert.equal(result.entryId, '61');
-    assert.match(result.message, /formato válido/);
+    assert.match(result.message, /No pude validar la respuesta/);
     assert.equal(result.reply, undefined);
     assert.equal(result.trace, undefined);
     assert.equal(storedSession, 'ses_private_food');
@@ -394,6 +394,20 @@ test('food request sends the current description and returns OpenCode parts unch
   assert.equal(sent.format, undefined);
   assert.deepEqual(JSON.parse(sent.parts[0].text), { description: '150 g de pollo cocido' });
   assert.deepEqual(reply, [{ type: 'text', text: '{"items":[],"clarificationQuestion":"Aclara la cantidad."}' }]);
+});
+
+test('food request disables web tools after the server confirms generic authorization', async () => {
+  let sent;
+  await requestFoodDescription({
+    sessionId: 'ses_private_food', description: 'Sí', initialDescription: '24 g salchicha Kir', genericEstimateApproved: true,
+    requestOpenCode: async (_method, _route, body) => {
+      sent = body;
+      return { status: 200, data: { parts: [{ type: 'text', text: '{}' }] } };
+    },
+  });
+  assert.deepEqual(sent.tools, {});
+  assert.equal(JSON.parse(sent.parts[0].text).genericEstimateApproved, true);
+  assert.match(sent.system, /Estimaciones autorizadas/);
 });
 
 test.skip('retired clarification flow: same-description save reprocesses an item-validation clarification', async () => {
