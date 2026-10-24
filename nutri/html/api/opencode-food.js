@@ -140,7 +140,7 @@ const shortSessionId = (sessionId) => `…${String(sessionId).slice(-8)}`;
 function validateServiceUrl(value) {
   const url = new URL(value);
   const host = url.hostname.replace(/^\[|\]$/g, '').toLowerCase();
-  if (!['http:', 'https:'].includes(url.protocol) || !['127.0.0.1', 'localhost', '::1', 'host.docker.internal'].includes(host) || url.username || url.password) {
+  if (!['http:', 'https:'].includes(url.protocol) || !['127.0.0.1', 'localhost', '::1', 'host.docker.internal', 'opencode'].includes(host) || url.username || url.password) {
     throw Object.assign(new Error('OpenCode debe estar disponible en loopback.'), { code: 'SERVICE_CONFIG' });
   }
   return url.origin;
