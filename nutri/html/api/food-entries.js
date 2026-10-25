@@ -841,6 +841,12 @@ SELECT LAST_INSERT_ID();`);
       throw Object.assign(new Error('food_entry_readback_mismatch'), { code: 'FOOD_PERSISTENCE_VERIFY_FAILED' });
     }
     traceFoodSession(trace, 'persistence_verified', { entryId: destinationId, itemCount: persisted.items.length });
+    try { await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode }); }
+    catch (error) {
+      traceFoodSession(trace, 'session_cleanup_failed', { stage: 'after_food_saved', errorCode: safeOpenCodeErrorCode(error) });
+      try { await recordFoodError({ dbQuery, textSql, userId, trace, stage: 'after_food_saved', error, httpStatus: 200, action: 'DELETE /api/session/{id}' }); }
+      catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: trace.id })); }
+    }
     json(response, 200, { state: 'completado', entryId: append || updating ? destinationId : entryId, fecha: savedDate, requestId: entry.requestId, appended: append, updated: updating, records, messages: Array.isArray(messages) ? messages : [], message: confirmation });
   } catch (error) {
     traceFoodSession(trace, 'save_failed', { entryId: entryId || null, stage, errorCode: safeOpenCodeErrorCode(error) });

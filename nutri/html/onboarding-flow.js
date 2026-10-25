@@ -1527,7 +1527,9 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     }
     trainingSaving = false;
     trainingOpenCodeSessionActive = false;
-    await loadTrainingEntries(nutritionDate);
+    trainingSessionReady = trainingSessionUiInitialized = false;
+    trainingDialog.close();
+    try { await loadTrainingEntries(nutritionDate); } catch {}
     pendingTrainingSave = null;
     try { sessionStorage.removeItem(pendingTrainingSaveKey); } catch {}
     trainingSavedAt = null;
@@ -1808,19 +1810,22 @@ foodForm?.addEventListener('submit', async (event) => {
     } else {
       if (result.appended) { await audioReady; playFoodAddedSound(); }
       if (result.fecha && result.fecha !== foodDate()) {
+        foodDialog.close();
         const url = new URL(window.location.href);
         url.searchParams.set('date', result.fecha);
         navigateWithNotice(result.message || 'Comida guardada en la fecha calendario anterior.', `${url.pathname}${url.search}${url.hash}`);
         return;
       }
-      await loadFoodEntries(foodDate());
+      try { await loadFoodEntries(foodDate()); } catch {}
+      foodSessionReady = foodOpenCodeSessionActive = false;
+      foodDialog.close();
       foodRequestId = createFoodRequestId();
       foodEntryDate = foodDate();
       foodTargetEntryId = result.entryId;
       document.querySelector('#foodDescriptionLabel').textContent = 'Agregar o corregir alimentos';
       description.placeholder = 'Indica qué alimento agregar o corregir en esta comida…';
       saveButton.textContent = 'Enviar mensaje';
-      feedback.textContent = `${result.message || 'Comida guardada.'} Puedes agregar alimentos o corregirlos; cierra el registro para empezar otra comida.`;
+      feedback.textContent = result.message || 'Comida guardada.';
       notifyApp(feedback.textContent, 'success');
       resultNotificationHandled = true;
       await notifyResultIfHidden(foodDialog, 'comida', 'guardado', 'Comida guardada', result.message || 'El registro de comida quedó guardado.', result.entryId);
