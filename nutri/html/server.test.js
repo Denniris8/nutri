@@ -1083,3 +1083,45 @@ test('authenticated user can generate and save a training plan through the API',
     },
   });
 });
+
+test('training plan save logs a sanitized MySQL error code', async () => {
+  const statements = [];
+  const opencodeCalls = [];
+  const disclosure = 'Las metas de calorías y carbohidratos se ajustan según los entrenamientos registrados para el día seleccionado.';
+  const goals = 'Ganar fuerza';
+  const plan = `[Datos Registrados]\nEdad: 32 años; sexo masculino; estatura 175 cm.\n[Estimaciones Calculadas]\nMacros estimados.\n[Supuestos Adoptados]\nDisponibilidad asumida.\n${disclosure}`;
+  const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
+  await withServer(async (sql) => {
+    statements.push(sql);
+    if (sql.includes('SELECT s.usuario_id')) return '27';
+    if (sql.includes("SELECT JSON_OBJECT('accountName'")) return JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null });
+    if (sql.includes("SELECT JSON_OBJECT('age',edad)")) return JSON.stringify({ age: 32 });
+    if (sql.includes("SELECT JSON_OBJECT('age',(SELECT edad")) return JSON.stringify({
+      age: 32, hasWeight: false,
+      bodyFacts: { bmi: false, bodyFatPct: false, musclePct: false, visceralFat: false, bodyAge: false, restingMetabolismKcal: false },
+      plicometryFacts: { tricepsMm: false, bicepsMm: false, subescapularMm: false, suprailiacoMm: false, abdominalMm: false, musloAnteriorMm: false, pantorrillaMm: false },
+    });
+    if (sql.includes('INSERT INTO planes_entrenamiento')) throw new Error('ERROR 1364 (HY000): private db detail');
+    return '';
+  }, async (base) => {
+    const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
+    const generatedResponse = await post(base + '/api/training-plan', { goals, suppressNotification: true }, { Cookie: cookie });
+    assert.equal(generatedResponse.status, 200);
+    const generated = await generatedResponse.json();
+    assert.equal(generated.plan, plan);
+    const saveResponse = await post(base + '/api/training-plans', {
+      runId: generated.runId, goals, plan: generated.plan, macros: generated.macros, suppressNotification: true,
+    }, { Cookie: cookie });
+    assert.equal(saveResponse.status, 503);
+    assert.deepEqual(opencodeCalls, ['POST /session', 'POST /session/ses_plan123/message']);
+    assert.ok(statements.some((sql) => sql.includes(Buffer.from('MYSQL_1364_HY000').toString('hex'))));
+    assert.ok(statements.every((sql) => !sql.includes('private db detail')));
+  }, { openCodeRequest: async (method, endpoint) => {
+    opencodeCalls.push(`${method} ${endpoint}`);
+    if (endpoint === '/session') return { status: 200, data: { id: 'ses_plan123' } };
+    if (endpoint === '/session/ses_plan123/message') return {
+      status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({ plan_markdown: plan, macros_objetivo: macros }) }] },
+    };
+    return { status: 200, data: {} };
+  } });
+});

@@ -992,7 +992,9 @@ SELECT JSON_OBJECT('days',${days},'current',JSON_OBJECT(
         if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'error', title: 'No se pudo guardar el plan', message: 'Intenta guardar el plan nuevamente.', dbQuery, textSql }); } catch {}
         const traceId = randomUUID();
         const status = Number.isInteger(error.status) && error.status >= 400 && error.status <= 599 ? error.status : 503;
-        const code = typeof error.code === 'string' && /^[A-Z][A-Z0-9_]{0,55}$/.test(error.code) ? error.code : 'TRAINING_PLAN_SAVE_FAILED';
+        const mysqlError = String(error.message || '').match(/\bERROR\s+(\d+)\s+\(([A-Z0-9]{5})\)/);
+        const code = mysqlError ? `MYSQL_${mysqlError[1]}_${mysqlError[2]}`
+          : typeof error.code === 'string' && /^[A-Z][A-Z0-9_]{0,55}$/.test(error.code) ? error.code : 'TRAINING_PLAN_SAVE_FAILED';
         const name = typeof error.name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error.name) ? error.name : 'Error';
         try {
           await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,usuario_id,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('training-plan-save')},${textSql(traceId)},${textSql('plan_save_failed')},${textSql('persistence')},${textSql('POST /api/training-plans')},${textSql('POST')},${textSql('/api/training-plans')},${claims.sub},${textSql(code)},${textSql(name)},${status},${textSql('No se pudo guardar el plan de entrenamiento.')});`);
