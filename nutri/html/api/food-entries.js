@@ -1,5 +1,5 @@
 const { randomUUID } = require('node:crypto');
-const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, recordFoodError, requestFoodDescription, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock } = require('./opencode-food.js');
+const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, recordFoodError, requestFoodDescription, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock } = require('./opencode-food.js');
 const { notificationInsertSql, resolveNotificationsSql } = require('./notifications.js');
 
 function validateFoodEntry(data) {
@@ -76,6 +76,13 @@ function applyFoodMacroReferences(items, referenceItems) {
       sourceQuote: source.sourceQuote,
       macros: Object.fromEntries(['energyKcal', 'proteinG', 'carbohydrateG', 'fatG', 'fiberG'].map((key) => [key, source[key] == null ? null : Math.round((Number(source[key]) * factor + Number.EPSILON) * 100) / 100])),
     };
+  });
+}
+
+function applyOpenFoodFactsMacros(items, products) {
+  return items.map((item) => {
+    const product = products.find((candidate) => candidate.name === item.name);
+    return product && item.targetItemId == null && item.macroSource !== 'declarado_usuario' ? { ...item, ...product } : item;
   });
 }
 
@@ -619,7 +626,8 @@ SELECT LAST_INSERT_ID();`);
     let sessionId = session.sessionId;
     const conversation = await readFoodConversationText({ entryId, dbQuery, fallback: '', excludeLatestUser: true });
     stage = 'analysis';
-    const requestArgs = { sessionId, description: modelDescription, initialDescription: saved.description, genericEstimateApproved, ...(reuseAsNewMeal ? { referenciaComidaSolicitada: true } : {}), ...(!session.reused && conversation ? { conversation } : {}), comidasDisponibles: mealsForModel, ...(reuseAsNewMeal && referenceMeals.length ? { comidasReferencia: referenceMeals } : {}), alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
+    const openFoodFactsFirstPass = !saved.question && !genericEstimateApproved && !reuseAsNewMeal && !correctionIntent && !activeTarget;
+    const requestArgs = { sessionId, description: modelDescription, initialDescription: saved.description, genericEstimateApproved, allowWebSearch: Boolean(saved.question || correctionIntent || activeTarget), openFoodFactsFirstPass, ...(reuseAsNewMeal ? { referenciaComidaSolicitada: true } : {}), ...(!session.reused && conversation ? { conversation } : {}), comidasDisponibles: mealsForModel, ...(reuseAsNewMeal && referenceMeals.length ? { comidasReferencia: referenceMeals } : {}), alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
     let parts = await withFoodSessionLock(userId, () => requestFoodDescription(requestArgs));
     stage = 'parse';
     let result;
@@ -642,11 +650,34 @@ SELECT LAST_INSERT_ID();`);
       stage = 'parse';
       result = parseReply(parts);
     }
+    let openFoodFactsProducts = [];
+    if (result?.items?.length && openFoodFactsFirstPass) {
+      const names = [...new Set(result.items.filter((item) => item.targetItemId == null && item.macroSource !== 'declarado_usuario').map((item) => item.name).filter(Boolean))];
+      for (const name of names) {
+        const product = await findOpenFoodFactsProduct(name);
+        if (product) openFoodFactsProducts.push(product);
+      }
+      traceFoodSession(trace, 'openfoodfacts_lookup', { queried: names.length, matched: openFoodFactsProducts.length });
+      const unresolved = result.items.some((item) => item.targetItemId == null && item.macroSource !== 'declarado_usuario' && !openFoodFactsProducts.some((product) => product.name === item.name));
+      if (unresolved) {
+        requestArgs.allowWebSearch = true;
+        requestArgs.openFoodFactsFirstPass = false;
+        requestArgs.openFoodFactsCandidates = openFoodFactsProducts;
+        parts = await withFoodSessionLock(userId, () => requestFoodDescription({
+          ...requestArgs, retryFeedback: 'Primero se consultó Open Food Facts. Usa sus candidatos solo si el producto coincide exactamente; conserva esos macros y su procedencia sin sustituirlos. Usa websearch/webfetch únicamente para los alimentos que no tengan candidato coincidente. No inventes ni cambies productos.',
+        }));
+        stage = 'parse';
+        result = parseReply(parts);
+      }
+    } else if (openFoodFactsFirstPass && !result?.clarificationQuestion) {
+      requestArgs.allowWebSearch = true;
+      requestArgs.openFoodFactsFirstPass = false;
+    }
     if (reuseAsNewMeal && result) { result.action = 'new'; result.targetEntryId = null; }
     const quantityContext = [saved.description, conversation, entry.descripcion].filter(Boolean);
     const pendingMasses = [...new Set(quantityContext.flatMap(explicitFoodMasses))];
     const answeredPendingQuantity = isQuantityQuestion(saved.question) && pendingMasses.length === 1;
-    let items = applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems);
+    let items = applyOpenFoodFactsMacros(applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems), openFoodFactsProducts);
     if (result) result.items = items;
     const getReplyIssues = () => [
       ...(!['new', 'append', 'update'].includes(result?.action) ? ['action'] : []),
@@ -667,7 +698,7 @@ SELECT LAST_INSERT_ID();`);
       stage = 'parse';
       result = parseReply(parts);
       if (reuseAsNewMeal && result) { result.action = 'new'; result.targetEntryId = null; }
-      items = applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems);
+      items = applyOpenFoodFactsMacros(applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems), openFoodFactsProducts);
       if (result) result.items = items;
       replyIssues = getReplyIssues();
       if ((replyIssues.length || (!items.length && !result?.clarificationQuestion)) && attempt === retryLimit) {

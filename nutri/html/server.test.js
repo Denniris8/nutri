@@ -417,6 +417,35 @@ test('food request disables web tools after the server confirms generic authoriz
   assert.match(sent.system, /Estimaciones autorizadas/);
 });
 
+test('food first pass has web tools disabled and carries the exact Open Food Facts candidate', async () => {
+  let sent;
+  await requestFoodDescription({
+    sessionId: 'ses_private_food', description: 'Yogur Griego Natural', allowWebSearch: false,
+    openFoodFactsCandidates: [{ name: 'Yogur Griego Natural', sourceName: 'Open Food Facts (dato colaborativo)' }],
+    requestOpenCode: async (_method, _route, body) => {
+      sent = body;
+      return { status: 200, data: { parts: [{ type: 'text', text: '{"items":[],"clarificationQuestion":null}' }] } };
+    },
+  });
+  assert.deepEqual(sent.tools, {});
+  assert.deepEqual(JSON.parse(sent.parts[0].text).candidatosOpenFoodFacts, [
+    { name: 'Yogur Griego Natural', sourceName: 'Open Food Facts (dato colaborativo)' },
+  ]);
+});
+
+test('food Open Food Facts extraction pass disables web tools and marks the pass', async () => {
+  let sent;
+  await requestFoodDescription({
+    sessionId: 'ses_private_food', description: 'Yogur Griego Natural', allowWebSearch: false, openFoodFactsFirstPass: true,
+    requestOpenCode: async (_method, _route, body) => {
+      sent = body;
+      return { status: 200, data: { parts: [{ type: 'text', text: '{"items":[],"clarificationQuestion":null}' }] } };
+    },
+  });
+  assert.deepEqual(sent.tools, {});
+  assert.equal(JSON.parse(sent.parts[0].text).openFoodFactsFirstPass, true);
+});
+
 test.skip('retired clarification flow: same-description save reprocesses an item-validation clarification', async () => {
   const description = '100g frijoles negros cocidos';
   const oldQuestion = 'No pude confirmar que “black beans” corresponda a lo escrito. Aclara su nombre en la misma descripción.';

@@ -10,6 +10,7 @@ let localServer;
 let localServerStart;
 const sessionLocks = new Map();
 const verifiedFoodSessions = new Map();
+const openFoodFactsCache = new Map();
 const foodConfigPath = path.resolve(__dirname, '../../configuracion-sesion.json');
 const foodBehaviorPath = path.resolve(__dirname, '../../comportamiento-sesion-comidas.md');
 
@@ -53,6 +54,59 @@ async function readFoodSystemPrompt(maxFoodItems) {
   const prompt = document.match(/<!-- FOOD_OPENCODE_PROMPT_START -->([\s\S]*?)<!-- FOOD_OPENCODE_PROMPT_END -->/);
   if (!prompt) throw new Error('No se encontró el prompt canónico de registro de comidas.');
   return prompt[1].trim().replace(/\{\{MAX_FOOD_ITEMS\}\}/g, String(maxFoodItems));
+}
+
+function normalizeOffName(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+async function findOpenFoodFactsProduct(name, { timeoutMs = 8000, fetchImpl = fetch } = {}) {
+  if (typeof name !== 'string' || !name.trim()) return null;
+  const cacheKey = normalizeOffName(name);
+  const cached = openFoodFactsCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.product;
+  openFoodFactsCache.delete(cacheKey);
+  const url = 'https://search.openfoodfacts.org/search';
+  try {
+    const response = await fetchImpl(url, {
+      method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'NutriApp/1.0 (food nutrition lookup)' },
+      body: JSON.stringify({ q: `"${name.trim()}"`, langs: ['es', 'en'], page_size: 10, fields: ['code', 'product_name', 'brands', 'nutriments'], boost_phrase: true }),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const isNumber = (value) => value != null && String(value).trim() !== '' && Number.isFinite(Number(value));
+    const matches = (Array.isArray(data.hits) ? data.hits : []).filter((candidate) =>
+      normalizeOffName(candidate.product_name) === normalizeOffName(name)
+      && /^\d{8,14}$/.test(String(candidate.code || ''))
+      && ['energy-kcal_100g', 'proteins_100g', 'carbohydrates_100g', 'fat_100g'].every((key) => isNumber(candidate.nutriments?.[key])));
+    const signature = (candidate) => JSON.stringify([normalizeOffName(candidate.brands), ...['energy-kcal_100g', 'proteins_100g', 'carbohydrates_100g', 'fat_100g', 'fiber_100g'].map((key) => candidate.nutriments?.[key] ?? null)]);
+    if (matches.length > 1 && matches.some((candidate) => signature(candidate) !== signature(matches[0]))) return null;
+    const product = matches[0];
+    if (!product) {
+      openFoodFactsCache.set(cacheKey, { product: null, expiresAt: Date.now() + 300000 });
+      if (openFoodFactsCache.size > 300) openFoodFactsCache.delete(openFoodFactsCache.keys().next().value);
+      return null;
+    }
+    const nutriments = product.nutriments;
+    const macros = {
+      energyKcal: Number(nutriments['energy-kcal_100g']), proteinG: Number(nutriments.proteins_100g),
+      carbohydrateG: Number(nutriments.carbohydrates_100g), fatG: Number(nutriments.fat_100g),
+      fiberG: nutriments.fiber_100g != null && Number.isFinite(Number(nutriments.fiber_100g)) ? Number(nutriments.fiber_100g) : null,
+    };
+    if (Object.values(macros).some((value) => value != null && (value < 0 || value > 99999999.99))) return null;
+    const expectedEnergy = 4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG;
+    if (macros.energyKcal > 950 || Math.abs(macros.energyKcal - expectedEnergy) > Math.max(25, macros.energyKcal * 0.25, (macros.fiberG || 0) * 2)) return null;
+    const result = {
+      name: name.trim(), sourceName: 'Open Food Facts (dato colaborativo)',
+      sourceUrl: `https://world.openfoodfacts.org/product/${product.code}`,
+      sourceQuote: `Valores por 100 g: ${macros.energyKcal} kcal, proteína ${macros.proteinG} g, carbohidratos ${macros.carbohydrateG} g, grasa ${macros.fatG} g${macros.fiberG == null ? '' : `, fibra ${macros.fiberG} g`}.`,
+      macroBasis: 'per_100g', macroStatus: 'declarado', macroSource: 'webfetch', macros,
+    };
+    openFoodFactsCache.set(cacheKey, { product: result, expiresAt: Date.now() + 900000 });
+    if (openFoodFactsCache.size > 300) openFoodFactsCache.delete(openFoodFactsCache.keys().next().value);
+    return result;
+  } catch { return null; }
 }
 const foodSessionPermissions = [
   { permission: '*', pattern: '*', action: 'deny' },
@@ -335,13 +389,13 @@ async function deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode = op
   });
 }
 
-async function requestFoodDescription({ sessionId, description, initialDescription, conversation, comidasDisponibles = [], comidasReferencia = [], referenciaComidaSolicitada = false, alimentosPendientes = [], continuacionRegistro = false, diaNutricional, genericEstimateApproved = false, retryFeedback, config, trace, requestOpenCode = openCodeRequest }) {
+async function requestFoodDescription({ sessionId, description, initialDescription, conversation, comidasDisponibles = [], comidasReferencia = [], referenciaComidaSolicitada = false, openFoodFactsFirstPass = false, alimentosPendientes = [], continuacionRegistro = false, diaNutricional, genericEstimateApproved = false, retryFeedback, allowWebSearch = true, openFoodFactsCandidates = [], config, trace, requestOpenCode = openCodeRequest }) {
   config ||= await readFoodSessionConfig();
   const system = await readFoodSystemPrompt(config.maxFoodItems);
   const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
   const startedAt = Date.now();
-  const requestContext = { description, ...(initialDescription ? { initialDescription } : {}), ...(conversation ? { conversation } : {}), ...(diaNutricional ? { diaNutricional } : {}), ...(genericEstimateApproved ? { genericEstimateApproved: true } : {}), ...(referenciaComidaSolicitada ? { referenciaComidaSolicitada: true } : {}), ...(retryFeedback ? { correccionFormato: retryFeedback } : {}), ...(comidasDisponibles.length ? { comidasDisponibles } : {}), ...(comidasReferencia.length ? { comidasReferencia } : {}), ...(alimentosPendientes.length ? { alimentosPendientes } : {}), ...(continuacionRegistro ? { continuacionRegistro: true } : {}) };
-  const tools = genericEstimateApproved || referenciaComidaSolicitada ? {} : { websearch: true, webfetch: true };
+  const requestContext = { description, ...(initialDescription ? { initialDescription } : {}), ...(conversation ? { conversation } : {}), ...(diaNutricional ? { diaNutricional } : {}), ...(genericEstimateApproved ? { genericEstimateApproved: true } : {}), ...(referenciaComidaSolicitada ? { referenciaComidaSolicitada: true } : {}), ...(openFoodFactsFirstPass ? { openFoodFactsFirstPass: true } : {}), ...(retryFeedback ? { correccionFormato: retryFeedback } : {}), ...(comidasDisponibles.length ? { comidasDisponibles } : {}), ...(comidasReferencia.length ? { comidasReferencia } : {}), ...(openFoodFactsCandidates.length ? { candidatosOpenFoodFacts: openFoodFactsCandidates } : {}), ...(alimentosPendientes.length ? { alimentosPendientes } : {}), ...(continuacionRegistro ? { continuacionRegistro: true } : {}) };
+  const tools = genericEstimateApproved || referenciaComidaSolicitada || !allowWebSearch ? {} : { websearch: true, webfetch: true };
   traceFoodSession(trace, 'message_sent', { stage: 'separar_alimentos', session: shortSessionId(sessionId), enabledTools: Object.keys(tools) });
   let result;
   try {
@@ -378,6 +432,6 @@ async function requestFoodDescription({ sessionId, description, initialDescripti
 }
 
 module.exports = {
-  deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, openCodeRequest, recordFoodError, requestFoodDescription,
+  deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, openCodeRequest, recordFoodError, requestFoodDescription,
   getFoodSessionDefaults, readFoodSessionConfig, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock,
 };

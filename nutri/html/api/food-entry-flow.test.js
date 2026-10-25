@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { applyExplicitQuantities, applyFoodMacroReferences, normalizeFoodReply, parseFoodReferenceTime, parseFoodReply, saveFoodEntry } = require('./food-entries.js');
-const { deleteFoodOpenCodeSession, openCodeRequest } = require('./opencode-food.js');
+const { deleteFoodOpenCodeSession, findOpenFoodFactsProduct, openCodeRequest } = require('./opencode-food.js');
 
 test('registra leche y whey con cantidades del mensaje tras respuesta inválida inicial', async () => {
   const description = '250 ml de leche Alpura Pro baja en grasa deslactosada y 31 g de proteína Gold Standard Whey chocolate el 2026-10-22';
@@ -79,6 +79,40 @@ test('reutiliza macros del alimento referenciado y los escala a la cantidad nuev
   assert.equal(missingQuantity.referenceMacrosReused, undefined);
   assert.deepEqual(parseFoodReferenceTime('60 g de pollo como el de las 4pm a las 7pm').time.hours, [16]);
   assert.deepEqual(parseFoodReferenceTime('60 g de pollo como el de las 4pm a las 7pm').withoutReferenceTime, '60 g de pollo como el de las  a las 7pm');
+});
+
+test('usa Open Food Facts solo para producto exacto con macros por 100 g completos', async () => {
+  let requested;
+  const product = await findOpenFoodFactsProduct('Yogur Griego Natural', {
+    fetchImpl: async (url, options) => {
+      requested = { url, options };
+      return { ok: true, json: async () => ({ hits: [{
+        code: '12345678', product_name: 'Yogur Griego Natural', nutriments: {
+          'energy-kcal_100g': 89, proteins_100g: 9, carbohydrates_100g: 4, fat_100g: 3, fiber_100g: null,
+        },
+      }] }) };
+    },
+  });
+  assert.equal(requested.url, 'https://search.openfoodfacts.org/search');
+  assert.equal(requested.options.method, 'POST');
+  assert.equal(JSON.parse(requested.options.body).q, '"Yogur Griego Natural"');
+  assert.equal(requested.options.headers['user-agent'], 'NutriApp/1.0 (food nutrition lookup)');
+  assert.equal(product.sourceName, 'Open Food Facts (dato colaborativo)');
+  assert.equal(product.macroBasis, 'per_100g');
+  assert.deepEqual(product.macros, { energyKcal: 89, proteinG: 9, carbohydrateG: 4, fatG: 3, fiberG: null });
+  assert.equal(await findOpenFoodFactsProduct('Kefir Natural', {
+    fetchImpl: async () => ({ ok: true, json: async () => ({ hits: [
+      { code: '12345678', product_name: 'Kefir Natural', brands: 'Marca A', nutriments: { 'energy-kcal_100g': 89, proteins_100g: 9, carbohydrates_100g: 4, fat_100g: 3 } },
+      { code: '87654321', product_name: 'Kefir Natural', brands: 'Marca B', nutriments: { 'energy-kcal_100g': 110, proteins_100g: 7, carbohydrates_100g: 5, fat_100g: 6 } },
+    ] }) }),
+  }), null);
+  assert.equal(await findOpenFoodFactsProduct('Yogur', {
+    fetchImpl: async () => ({ ok: true, json: async () => ({ hits: [{
+      code: '12345678', product_name: 'Yogur Griego Natural', nutriments: {
+        'energy-kcal_100g': 89, proteins_100g: 9, carbohydrates_100g: 4, fat_100g: 3,
+      },
+    }] }) }),
+  }), null);
 });
 
 test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { skip: process.env.NUTRI_TEST_OPENCODE_LIVE !== '1' }, async () => {
