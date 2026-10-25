@@ -903,7 +903,8 @@ test('login accepts the stored password and logout revokes the session', async (
       assert.match(cookie, /HttpOnly/);
       assert.match(cookie, /SameSite=Strict/);
       assert.match(cookie, /Secure/);
-      assert.match(queries.find((sql) => sql.includes('INSERT INTO dashboard_sessions')) || '', /INTERVAL 28800 SECOND/);
+      assert.match(cookie, /Max-Age=604800/);
+      assert.match(queries.find((sql) => sql.includes('INSERT INTO dashboard_sessions')) || '', /INTERVAL 604800 SECOND/);
       const logout = await post(base + '/api/auth/logout', {}, { Cookie: cookie });
       assert.equal(logout.status, 200);
       assert.match(queries.join('\n'), /UPDATE dashboard_sessions/);

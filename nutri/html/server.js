@@ -21,7 +21,7 @@ const { addNotification, markNotificationRead, notificationInsertSql, readNotifi
 
 const scrypt = promisify(scryptCallback);
 const sessionCookie = 'nutri_session';
-const sessionSeconds = 8 * 60 * 60;
+const sessionSeconds = 7 * 24 * 60 * 60;
 const termsVersion = 1;
 const appVersion = readFileSync(path.join(__dirname, '..', 'VERSION'), 'utf8').trim();
 const bodyLimit = 32768;
