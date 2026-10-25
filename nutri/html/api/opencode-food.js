@@ -335,13 +335,13 @@ async function deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode = op
   });
 }
 
-async function requestFoodDescription({ sessionId, description, initialDescription, conversation, comidasDisponibles = [], alimentosPendientes = [], continuacionRegistro = false, diaNutricional, genericEstimateApproved = false, retryFeedback, config, trace, requestOpenCode = openCodeRequest }) {
+async function requestFoodDescription({ sessionId, description, initialDescription, conversation, comidasDisponibles = [], comidasReferencia = [], referenciaComidaSolicitada = false, alimentosPendientes = [], continuacionRegistro = false, diaNutricional, genericEstimateApproved = false, retryFeedback, config, trace, requestOpenCode = openCodeRequest }) {
   config ||= await readFoodSessionConfig();
   const system = await readFoodSystemPrompt(config.maxFoodItems);
   const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
   const startedAt = Date.now();
-  const requestContext = { description, ...(initialDescription ? { initialDescription } : {}), ...(conversation ? { conversation } : {}), ...(diaNutricional ? { diaNutricional } : {}), ...(genericEstimateApproved ? { genericEstimateApproved: true } : {}), ...(retryFeedback ? { correccionFormato: retryFeedback } : {}), ...(comidasDisponibles.length ? { comidasDisponibles } : {}), ...(alimentosPendientes.length ? { alimentosPendientes } : {}), ...(continuacionRegistro ? { continuacionRegistro: true } : {}) };
-  const tools = genericEstimateApproved ? {} : { websearch: true, webfetch: true };
+  const requestContext = { description, ...(initialDescription ? { initialDescription } : {}), ...(conversation ? { conversation } : {}), ...(diaNutricional ? { diaNutricional } : {}), ...(genericEstimateApproved ? { genericEstimateApproved: true } : {}), ...(referenciaComidaSolicitada ? { referenciaComidaSolicitada: true } : {}), ...(retryFeedback ? { correccionFormato: retryFeedback } : {}), ...(comidasDisponibles.length ? { comidasDisponibles } : {}), ...(comidasReferencia.length ? { comidasReferencia } : {}), ...(alimentosPendientes.length ? { alimentosPendientes } : {}), ...(continuacionRegistro ? { continuacionRegistro: true } : {}) };
+  const tools = genericEstimateApproved || referenciaComidaSolicitada ? {} : { websearch: true, webfetch: true };
   traceFoodSession(trace, 'message_sent', { stage: 'separar_alimentos', session: shortSessionId(sessionId), enabledTools: Object.keys(tools) });
   let result;
   try {

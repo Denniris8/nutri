@@ -45,6 +45,40 @@ function parseFoodTime(text) {
     : { hours: [hour], minute, precision };
 }
 
+function parseFoodReferenceTime(text) {
+  const normalized = String(text).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\./g, '');
+  const match = /\b(?:como|igual(?:\s+que)?|el mismo|la misma|mismo|misma)\b.{0,60}?\b(?:de\s+)?(?:a\s+)?las?\s+(\d{1,2}(?::\d{2})?(?:\s*(?:am|pm|a\s*m|p\s*m|de la manana|de la tarde|de la noche))?)\b/i.exec(normalized);
+  if (!match) return null;
+  const value = match[1].trim();
+  const start = match.index + match[0].lastIndexOf(match[1]);
+  return { time: parseFoodTime(/(?:am|pm|a\s*m|p\s*m|de la manana|de la tarde|de la noche)$/.test(value) ? value : `a las ${value}`), withoutReferenceTime: `${normalized.slice(0, start)} ${normalized.slice(start + match[1].length)}` };
+}
+
+function applyFoodMacroReferences(items, referenceItems) {
+  return items.map((item) => {
+    const sameName = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+    const matches = referenceItems.filter((candidate) => sameName(candidate.name) === sameName(item.name));
+    const signature = (candidate) => JSON.stringify(['quantityGrams', 'energyKcal', 'proteinG', 'carbohydrateG', 'fatG', 'fiberG', 'macroStatus', 'macroSource', 'sourceName', 'sourceUrl', 'sourceQuote'].map((key) => candidate[key] ?? null));
+    const ambiguousSource = matches.length > 1 && matches.some((candidate) => signature(candidate) !== signature(matches[0]));
+    const source = ambiguousSource ? null : item.referenceItemId == null ? matches[0]
+      : matches.find((candidate) => String(candidate.itemId ?? candidate.targetItemId) === String(item.referenceItemId));
+    const sourceGrams = Number(source?.quantityGrams);
+    const quantityGrams = Number(item.quantityGrams);
+    const completeMacros = source && ['energyKcal', 'proteinG', 'carbohydrateG', 'fatG'].every((key) => source[key] != null && Number.isFinite(Number(source[key])));
+    if (!completeMacros || !source || sameName(item.name) !== sameName(source.name) || !Number.isFinite(sourceGrams) || sourceGrams <= 0) return item;
+    const reference = { ...item, referenceItemId: String(source.itemId ?? source.targetItemId), referenceSourceMatched: true };
+    if (!Number.isFinite(quantityGrams) || quantityGrams <= 0) return reference;
+    const factor = quantityGrams / sourceGrams;
+    return {
+      ...reference, referenceMacrosReused: true,
+      name: source.name, macroBasis: 'per_portion', macroStatus: source.macroStatus,
+      macroSource: source.macroSource, sourceName: source.sourceName, sourceUrl: source.sourceUrl,
+      sourceQuote: source.sourceQuote,
+      macros: Object.fromEntries(['energyKcal', 'proteinG', 'carbohydrateG', 'fatG', 'fiberG'].map((key) => [key, source[key] == null ? null : Math.round((Number(source[key]) * factor + Number.EPSILON) * 100) / 100])),
+    };
+  });
+}
+
 function formatFoodTime(hour, minute) {
   return `${hour % 12 || 12}:${String(minute).padStart(2, '0')} ${hour < 12 ? 'a. m.' : 'p. m.'}`;
 }
@@ -503,7 +537,13 @@ SELECT LAST_INSERT_ID();`);
     const asksDayChoice = /¿Esta comida pertenece al día nutricional seleccionado(?:\s*\([^)]*\))? o al anterior(?:\s*\([^)]*\))?\?/i.test(saved.question || '');
     const asksPreviousDayConfirmation = /¿La guardo en el día nutricional anterior .*11:59:59 p\. m\./i.test(saved.question || '');
     const priorUserText = asksTimeChoice || asksDayChoice || asksPreviousDayConfirmation ? await readFoodUserText({ entryId, dbQuery }) : '';
-    const requestedTime = parseFoodTime(entry.descripcion) || (priorUserText ? parseFoodTime(priorUserText) : null);
+    const parsedFoodReference = parseFoodReferenceTime(entry.descripcion) || parseFoodReferenceTime(saved.description);
+    const foodReference = parsedFoodReference?.time && !parsedFoodReference.time.invalid ? parsedFoodReference : null;
+    const requestedTime = parseFoodTime(foodReference?.withoutReferenceTime || entry.descripcion) || (priorUserText ? parseFoodTime(priorUserText) : null);
+    const correctionIntent = /\b(corrige|corregir|actualiza|actualizar|reemplaza|reemplazar|cambia|cambiar)\b/i.test(entry.descripcion)
+      || /\b(?:complet(?:a|ar|en)|recalcul(?:a|ar|en))\b.{0,60}\bmacros?\b|\bmacros?\b.{0,60}\b(?:faltantes?|incompletos?|recalcular)\b/i.test(entry.descripcion);
+    const asksAddition = /\b(agrega|agregar|añade|añadir|incorpora|incorporar)\b/i.test(entry.descripcion);
+    const reuseAsNewMeal = Boolean(foodReference) && !correctionIntent && !asksAddition;
     const dayChoice = asksDayChoice ? earlyFoodDayChoice(saved.question, entry.descripcion) : null;
     const previousSaveAnswer = asksPreviousDayConfirmation ? previousDaySaveAnswer(saved.question, entry.descripcion) : null;
     const confirmedDate = confirmedFoodDate(saved.question, entry.descripcion, entry.timezone, previousSaveAnswer);
@@ -522,6 +562,10 @@ SELECT LAST_INSERT_ID();`);
         ...(record.items.length ? {} : { descripcion: record.description }),
       };
     });
+    const referenceMeals = foodReference?.time && !foodReference.time.invalid
+      ? dayMeals.filter((meal) => foodReference.time.hours.includes(meal.hour24) && (foodReference.time.precision === 'hour' || foodReference.time.minute === meal.minute))
+      : [];
+    const referenceItems = referenceMeals.flatMap((meal) => meal.items);
     const continuationTarget = entry.targetEntryId == null ? null : dayMeals.find((meal) => String(meal.id) === String(entry.targetEntryId));
     const pendingTarget = !requestedTime && saved.question && saved.targetEntryId != null
       ? dayMeals.find((meal) => String(meal.id) === String(saved.targetEntryId))
@@ -532,8 +576,6 @@ SELECT LAST_INSERT_ID();`);
       : dayMeals;
     if (requestedTime?.ambiguous && matchedMeals.length === 1) requestedTime.hours = [matchedMeals[0].hour24];
     const mealsForModel = matchedMeals;
-    const correctionIntent = /\b(corrige|corregir|actualiza|actualizar|reemplaza|reemplazar|cambia|cambiar)\b/i.test(entry.descripcion)
-      || /\b(?:complet(?:a|ar|en)|recalcul(?:a|ar|en))\b.{0,60}\bmacros?\b|\bmacros?\b.{0,60}\b(?:faltantes?|incompletos?|recalcular)\b/i.test(entry.descripcion);
     const localClock = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
       timeZone: entry.timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit',
     }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
@@ -577,7 +619,7 @@ SELECT LAST_INSERT_ID();`);
     let sessionId = session.sessionId;
     const conversation = await readFoodConversationText({ entryId, dbQuery, fallback: '', excludeLatestUser: true });
     stage = 'analysis';
-    const requestArgs = { sessionId, description: modelDescription, initialDescription: saved.description, genericEstimateApproved, ...(!session.reused && conversation ? { conversation } : {}), comidasDisponibles: mealsForModel, alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
+    const requestArgs = { sessionId, description: modelDescription, initialDescription: saved.description, genericEstimateApproved, ...(reuseAsNewMeal ? { referenciaComidaSolicitada: true } : {}), ...(!session.reused && conversation ? { conversation } : {}), comidasDisponibles: mealsForModel, ...(reuseAsNewMeal && referenceMeals.length ? { comidasReferencia: referenceMeals } : {}), alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
     let parts = await withFoodSessionLock(userId, () => requestFoodDescription(requestArgs));
     stage = 'parse';
     let result;
@@ -600,10 +642,11 @@ SELECT LAST_INSERT_ID();`);
       stage = 'parse';
       result = parseReply(parts);
     }
+    if (reuseAsNewMeal && result) { result.action = 'new'; result.targetEntryId = null; }
     const quantityContext = [saved.description, conversation, entry.descripcion].filter(Boolean);
     const pendingMasses = [...new Set(quantityContext.flatMap(explicitFoodMasses))];
     const answeredPendingQuantity = isQuantityQuestion(saved.question) && pendingMasses.length === 1;
-    let items = applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity);
+    let items = applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems);
     if (result) result.items = items;
     const getReplyIssues = () => [
       ...(!['new', 'append', 'update'].includes(result?.action) ? ['action'] : []),
@@ -623,7 +666,8 @@ SELECT LAST_INSERT_ID();`);
       }));
       stage = 'parse';
       result = parseReply(parts);
-      items = applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity);
+      if (reuseAsNewMeal && result) { result.action = 'new'; result.targetEntryId = null; }
+      items = applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems);
       if (result) result.items = items;
       replyIssues = getReplyIssues();
       if ((replyIssues.length || (!items.length && !result?.clarificationQuestion)) && attempt === retryLimit) {
@@ -637,6 +681,13 @@ SELECT LAST_INSERT_ID();`);
         && !/(?:a cu[aá]l comida|qu[eé] comida|which meal|no hay comidas guardadas|no existe una comida)/i.test(message)).map((message) => message.slice(0, 5000))
       : [];
     let clarification = result?.clarificationQuestion;
+    if (reuseAsNewMeal && !items.some((item) => item.referenceSourceMatched)) {
+      const sourceTime = foodReference.time.hours.map((hour) => formatFoodTime(hour, foodReference.time.minute)).join(' o ');
+      const candidates = referenceItems.map((item) => `${item.name}${item.quantity ? ` (${item.quantity})` : ''}`).join('; ');
+      clarification = candidates
+        ? `No pude identificar con seguridad qué alimento de la comida de las ${sourceTime} debo reutilizar. Elige uno: ${candidates}.`
+        : `No encontré una comida guardada a las ${sourceTime} para reutilizar sus macros. Confirma la hora o indica los macros del alimento.`;
+    }
     if (isQuantityQuestion(saved.question) && pendingMasses.length > 1 && items.some((item) => item.quantityGrams == null)) {
       const names = pendingFoodItems.filter((item) => item.quantityGrams == null).map((item) => item.name).join(', ');
       clarification = `Mencionaste varias cantidades (${pendingMasses.join(' g, ')} g). Indica cuál corresponde a cada alimento${names ? `: ${names}` : ''}, por ejemplo “lentejas 150g”.`;
@@ -652,7 +703,7 @@ SELECT LAST_INSERT_ID();`);
       timeClarification = `¿Te refieres a las ${label} a. m. o p. m.?`;
       effectiveTime = null;
     }
-    if (!activeTarget && matchedMeals.length > 1 && !timeClarification
+    if (!reuseAsNewMeal && !activeTarget && matchedMeals.length > 1 && !timeClarification
       && (result.action === 'update' || requestedTime && !requestedTime.invalid)) {
       timeClarification = `Hay varias comidas${requestedTime ? ' a esa hora' : ' guardadas este día'}. ¿A cuál deseas ${result.action === 'update' ? 'corregir' : 'agregar alimentos'}? ${matchedMeals.map((meal) => `${meal.hora}: ${(meal.alimentos || []).join(', ') || meal.descripcion}`).join('; ')}`;
     }
@@ -673,7 +724,7 @@ SELECT LAST_INSERT_ID();`);
     } else if (!clarification && result.action === 'update') {
       updateTargetId = selectedMeal?.id || null;
       if (updateTargetId == null) clarification = 'No pude identificar una sola comida guardada para corregir. Indica cuál por alimento, hora o fecha.';
-    } else if (!clarification && !timeClarification && (requestedTime && !requestedTime.invalid || pendingTarget)) {
+    } else if (!reuseAsNewMeal && !clarification && !timeClarification && (requestedTime && !requestedTime.invalid || pendingTarget)) {
       appendTargetId = selectedMeal?.id || null;
     }
     const targetEntryId = updateTargetId || appendTargetId;
@@ -682,7 +733,6 @@ SELECT LAST_INSERT_ID();`);
     if (targetEntryId != null && !ownedTarget) { appendTargetId = null; updateTargetId = null; clarification = 'La comida seleccionada ya no está disponible. Indica cuál quieres modificar.'; }
     const asksMacroRepair = /\b(?:recalcul(?:a|ar|en)|complet(?:a|ar|en)|rellen(?:a|ar|en)|faltan|falta)\b.{0,60}\bmacros?\b|\bmacros?\b.{0,60}\b(?:faltantes?|incompletos?|recalcular)\b/i.test(entry.descripcion);
     const asksCorrection = asksMacroRepair || /\b(corrige|corregir|actualiza|actualizar|reemplaza|reemplazar|cambia|cambiar)\b/i.test(entry.descripcion);
-    const asksAddition = /\b(agrega|agregar|añade|añadir|incorpora|incorporar)\b/i.test(entry.descripcion);
     if (asksMacroRepair && result.action !== 'update') {
       clarification = matchedMeals.length === 1
         ? `No pude identificar los alimentos que necesitan macros en la comida de las ${matchedMeals[0].hora}. Indica cuáles quieres completar.`
@@ -870,4 +920,4 @@ SELECT LAST_INSERT_ID();`);
   }
 }
 
-module.exports = { applyExplicitGrams, applyExplicitQuantities, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, localDateTimeToUtc, normalizeFoodReply, parseFoodReply, parseFoodTime, readFoodEntries, readPendingFoodDraft, saveFoodEntry, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, localDateTimeToUtc, normalizeFoodReply, parseFoodReferenceTime, parseFoodReply, parseFoodTime, readFoodEntries, readPendingFoodDraft, saveFoodEntry, validateFoodEntry, validFoodItem };

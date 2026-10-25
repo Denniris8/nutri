@@ -383,6 +383,8 @@ test('food request sends the current description and returns OpenCode parts unch
   let sent;
   const reply = await requestFoodDescription({
     sessionId: 'ses_private_food', description: '150 g de pollo cocido',
+    comidasReferencia: [{ id: 'meal-4pm', items: [{ targetItemId: '41', name: 'Pollo asado', quantityGrams: 100 }] }],
+    referenciaComidaSolicitada: true,
     originalDescription: 'texto anterior', replies: [{ role: 'assistant', content: 'pregunta anterior' }],
     requestOpenCode: async (method, route, body) => {
       sent = body;
@@ -392,7 +394,12 @@ test('food request sends the current description and returns OpenCode parts unch
   assert.match(sent.system, /macros:\{energyKcal,proteinG,carbohydrateG,fatG,fiberG\}/);
   assert.match(sent.system, /macroStatus:"estimado"/);
   assert.equal(sent.format, undefined);
-  assert.deepEqual(JSON.parse(sent.parts[0].text), { description: '150 g de pollo cocido' });
+  assert.deepEqual(sent.tools, {});
+  assert.deepEqual(JSON.parse(sent.parts[0].text), {
+    description: '150 g de pollo cocido',
+    referenciaComidaSolicitada: true,
+    comidasReferencia: [{ id: 'meal-4pm', items: [{ targetItemId: '41', name: 'Pollo asado', quantityGrams: 100 }] }],
+  });
   assert.deepEqual(reply, [{ type: 'text', text: '{"items":[],"clarificationQuestion":"Aclara la cantidad."}' }]);
 });
 

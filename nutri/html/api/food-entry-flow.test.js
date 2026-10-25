@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitQuantities, normalizeFoodReply, parseFoodReply, saveFoodEntry } = require('./food-entries.js');
+const { applyExplicitQuantities, applyFoodMacroReferences, normalizeFoodReply, parseFoodReferenceTime, parseFoodReply, saveFoodEntry } = require('./food-entries.js');
 const { deleteFoodOpenCodeSession, openCodeRequest } = require('./opencode-food.js');
 
 test('registra leche y whey con cantidades del mensaje tras respuesta inválida inicial', async () => {
@@ -62,6 +62,23 @@ test('registra leche y whey con cantidades del mensaje tras respuesta inválida 
   assert.match(insert, /'250 ml',null/i);
   assert.match(insert, /'31 g',31/i);
   assert.match(insert, /111,111,9,12,3,null\)/i);
+});
+
+test('reutiliza macros del alimento referenciado y los escala a la cantidad nueva', () => {
+  const item = { name: 'Pollo asado', quantityGrams: 60, quantityText: '60 g', macroBasis: 'per_portion', macros: {} };
+  const source = { itemId: '41', name: 'Pollo asado', quantityGrams: 100, energyKcal: 165, proteinG: 31, carbohydrateG: 0, fatG: 3.6, fiberG: null, macroStatus: 'declarado', macroSource: 'webfetch', sourceName: 'USDA', sourceUrl: 'https://fdc.nal.usda.gov/food/1', sourceQuote: 'Datos por porción.' };
+  const [reused] = applyFoodMacroReferences([item], [source]);
+  assert.deepEqual(reused.macros, { energyKcal: 99, proteinG: 18.6, carbohydrateG: 0, fatG: 2.16, fiberG: null });
+  assert.equal(reused.macroSource, 'webfetch');
+  assert.equal(reused.sourceUrl, source.sourceUrl);
+  assert.equal(reused.referenceMacrosReused, true);
+  const [ambiguous] = applyFoodMacroReferences([item], [source, { ...source, itemId: '42', energyKcal: 160 }]);
+  assert.equal(ambiguous.referenceMacrosReused, undefined);
+  const [missingQuantity] = applyFoodMacroReferences([{ name: 'Pollo asado', quantityGrams: null }], [source]);
+  assert.equal(missingQuantity.referenceSourceMatched, true);
+  assert.equal(missingQuantity.referenceMacrosReused, undefined);
+  assert.deepEqual(parseFoodReferenceTime('60 g de pollo como el de las 4pm a las 7pm').time.hours, [16]);
+  assert.deepEqual(parseFoodReferenceTime('60 g de pollo como el de las 4pm a las 7pm').withoutReferenceTime, '60 g de pollo como el de las  a las 7pm');
 });
 
 test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { skip: process.env.NUTRI_TEST_OPENCODE_LIVE !== '1' }, async () => {
