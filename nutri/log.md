@@ -569,3 +569,5 @@
 - 2026-10-26 — Preparación del commit solicitado: VERSION incrementada de 0.1.25 a 0.1.26; el dashboard sigue leyendo la versión desde ese archivo. No se ejecutaron pruebas.
 - 2026-10-26 — Navegación del dashboard: la pestaña activa ahora se distingue con fondo de contenedor, mayor peso tipográfico y un marcador de acento lateral; en móvil el marcador pasa al borde inferior. Corrige la regla general de botones que igualaba los estilos de las pestañas. No se ejecutaron pruebas.
 - 2026-10-26 — Preparación del commit solicitado: VERSION incrementada de 0.1.26 a 0.1.27; el dashboard sigue leyendo la versión desde ese archivo. No se ejecutaron pruebas.
+- 2026-10-26 — Navegación del dashboard: se corrigió el selector del estado activo para apuntar a `.shell-sidebar`, donde vive la navegación; antes estaba limitado a `.dashboard-workspace` y no persistía al seleccionar. El fondo activo coincide con hover y conserva contraste en escritorio y móvil. No se ejecutaron pruebas.
+- 2026-10-26 — Preparación del commit solicitado: VERSION incrementada de 0.1.27 a 0.1.28; el dashboard sigue leyendo la versión desde ese archivo. No se ejecutaron pruebas.
