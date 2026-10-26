@@ -1,7 +1,7 @@
 # Tunel publico gratuito para el Dashboard Nutricional - app/tunnel
 # Se levanta con:  sudo docker compose up -d --build
 #
-# - Usa red host para alcanzar el dashboard, limitado a 127.0.0.1:8080.
+# - Usa red host para alcanzar el dashboard en 127.0.0.1:80.
 # - El token del bot viene de ../grammy/.env (se reutiliza) y los IDs de
 #   notificacion estan en ./.env (NOTIFY_CHAT_IDS).
 # - El monitor conserva la URL con HTTP 200; ante otro estado o error de red,
@@ -19,7 +19,7 @@ services:
       - ../../app/grammy/.env
     network_mode: host
     environment:
-      TUNNEL_TARGET: http://127.0.0.1:8080
+      TUNNEL_TARGET: http://127.0.0.1:80
     logging:
       driver: json-file
       options:
