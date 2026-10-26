@@ -10,7 +10,6 @@ const permissions = [{ permission: '*', pattern: '*', action: 'deny' }];
 const sessions = new Map();
 const pendingPlanSessions = new Map();
 const locks = new Map();
-const idleSessionMs = 2 * 60 * 60 * 1000;
 const trainingPromptPath = path.resolve(__dirname, '../../comportamiento-sesion-entrenamientos.md');
 const trainingPlanPromptPath = path.resolve(__dirname, '../../comportamiento-sesion-plan.md');
 
@@ -68,7 +67,6 @@ async function openTrainingSession(userId, config, request) {
   if (cached?.fingerprint === fingerprint) {
     const current = await request('GET', `/session/${encodeURIComponent(cached.id)}`, undefined, config.requestTimeoutMs);
     if (current.status >= 200 && current.status < 300 && current.data?.metadata?.trainingUserId === userId && current.data?.metadata?.trainingConfigSha256 === fingerprint) {
-      cached.lastActivityAt = Date.now();
       return cached.id;
     }
     sessions.delete(userId);
@@ -83,7 +81,7 @@ async function openTrainingSession(userId, config, request) {
   }, config.requestTimeoutMs);
   const id = created.data?.id;
   if (created.status < 200 || created.status >= 300 || !/^ses_[A-Za-z0-9_-]{4,120}$/.test(id || '')) throw new Error('No se pudo iniciar la sesión OpenCode de entrenamiento.');
-  sessions.set(userId, { id, fingerprint, lastActivityAt: Date.now() });
+  sessions.set(userId, { id, fingerprint });
   return id;
 }
 
@@ -240,7 +238,7 @@ async function generateTrainingPlan({ userId, goals, context, requestOpenCode = 
       if (result.status < 200 || result.status >= 300) throw new Error('OpenCode no pudo generar el plan.');
       const plan = parseTrainingPlanReply(result.data?.parts || [], systemPrompt, context);
       const runId = randomUUID();
-      pendingPlanSessions.set(id, { sessionId, runId, lastActivityAt: Date.now() });
+      pendingPlanSessions.set(id, { sessionId, runId });
       retained = true;
       return { ...plan, runId };
     } finally {
@@ -254,34 +252,4 @@ async function generateTrainingPlan({ userId, goals, context, requestOpenCode = 
   });
 }
 
-async function cleanupIdleTrainingSessions({ requestOpenCode = openCodeRequest } = {}) {
-  const cutoff = Date.now() - idleSessionMs;
-  let deletedCount = 0;
-  for (const [userId, session] of sessions) {
-    if (session.lastActivityAt >= cutoff) continue;
-    await deleteTrainingSession({ userId, requestOpenCode });
-    deletedCount += 1;
-  }
-  for (const [userId, session] of pendingPlanSessions) {
-    if (session.lastActivityAt >= cutoff) continue;
-    if (await deleteTrainingPlanSession({ userId, runId: session.runId, requestOpenCode })) deletedCount += 1;
-  }
-  const listed = await requestOpenCode('GET', '/session');
-  if (listed.status < 200 || listed.status >= 300 || !Array.isArray(listed.data)) throw new Error('No se pudieron listar las sesiones OpenCode inactivas.');
-  for (const session of listed.data) {
-    const metadata = session.metadata || {};
-    const userId = metadata.trainingUserId || metadata.trainingPlanUserId;
-    let lastActivity = Number(session.time?.updated);
-    if (!Number.isFinite(lastActivity) && typeof session.time?.updated === 'string') lastActivity = Date.parse(session.time.updated);
-    if (!Number.isFinite(lastActivity) || lastActivity <= 0 || !/^\d+$/.test(String(userId || ''))
-      || !/^ses_[A-Za-z0-9_-]{4,120}$/.test(session.id || '')) continue;
-    if (lastActivity < 1e12) lastActivity *= 1000;
-    if (lastActivity >= cutoff || sessions.get(String(userId))?.id === session.id
-      || pendingPlanSessions.get(String(userId))?.sessionId === session.id) continue;
-    const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(session.id)}`);
-    if ((deleted.status >= 200 && deleted.status < 300) || deleted.status === 404) deletedCount += 1;
-  }
-  return deletedCount;
-}
-
-module.exports = { analyzeTraining, cleanupIdleTrainingSessions, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, parseTrainingPlanReply, readTrainingPlanPrompt };
+module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, parseTrainingPlanReply, readTrainingPlanPrompt };
