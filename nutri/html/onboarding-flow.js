@@ -42,6 +42,8 @@ let screenWakeLock = null;
 let screenWakeLockRequest = null;
 const analysisDialogs = ['#registerFoodDialog', '#trainingModal', '#trainingPlanDialog'];
 function hasAnalysisDialogOpen() { return analysisDialogs.some((selector) => document.querySelector(selector)?.open); }
+let analysisHistoryActive = false;
+let analysisHistoryState;
 async function requestScreenWakeLock() {
   if (!hasAnalysisDialogOpen() || !navigator.wakeLock || document.visibilityState !== 'visible' || screenWakeLock || screenWakeLockRequest) return;
   screenWakeLockRequest = navigator.wakeLock.request('screen').then((sentinel) => {
@@ -53,8 +55,20 @@ async function requestScreenWakeLock() {
 }
 if (document.querySelector('#todayView')) {
   const wakeLockObserver = new MutationObserver(() => {
-    if (hasAnalysisDialogOpen()) void requestScreenWakeLock();
-    else if (screenWakeLock) { void screenWakeLock.release(); screenWakeLock = null; }
+    if (hasAnalysisDialogOpen()) {
+      void requestScreenWakeLock();
+      if (!analysisHistoryActive) {
+        analysisHistoryState = history.state;
+        history.pushState({ ...(history.state && typeof history.state === 'object' ? history.state : {}), nutriAnalysisDialog: true }, '');
+        analysisHistoryActive = true;
+      }
+    } else {
+      if (screenWakeLock) { void screenWakeLock.release(); screenWakeLock = null; }
+      if (analysisHistoryActive) {
+        history.replaceState(analysisHistoryState, '');
+        analysisHistoryActive = false;
+      }
+    }
   });
   for (const selector of analysisDialogs) {
     const dialog = document.querySelector(selector);
@@ -301,8 +315,10 @@ trainingPlanTrigger?.addEventListener('click', () => {
 async function cancelTrainingPlan() {
   if (trainingPlanSaving) { notifyApp('Espera a que termine el guardado del plan antes de cancelar.', 'info'); return; }
   if (trainingPlanCancelPending) return;
-  const hasSession = trainingPlanSessionActive || Boolean(generatedTrainingPlanRunId) || !planLoading.hidden;
+  const hasSession = trainingPlanSessionActive || Boolean(generatedTrainingPlanRunId) || !planLoading.hidden
+    || Boolean(trainingPlanGoalsInput?.value.trim()) || !savedTrainingPlan && Boolean(planChatMessages?.querySelector('[data-role="user"]'));
   if (!hasSession) { trainingPlanDialog?.close(); return; }
+  if (!await confirmFlowExit('El plan generado y su conversación no guardados se eliminarán. ¿Quieres salir?')) return;
   const generation = ++trainingPlanGeneration;
   trainingPlanCancelPending = true;
   trainingPlanTrigger.disabled = true;
@@ -328,6 +344,7 @@ async function cancelTrainingPlan() {
 }
 document.querySelector('#closeTrainingPlanDialog')?.addEventListener('click', cancelTrainingPlan);
 trainingPlanDialog?.addEventListener('cancel', (event) => { event.preventDefault(); void cancelTrainingPlan(); });
+trainingPlanDialog?.addEventListener('click', (event) => { if (event.target === trainingPlanDialog) void cancelTrainingPlan(); });
 trainingPlanDialog?.addEventListener('close', () => trainingPlanTrigger?.focus());
 
 trainingPlanSendButton?.addEventListener('click', async () => {
@@ -446,6 +463,7 @@ goToSavedTrainingPlansButton?.addEventListener('click', async () => {
   savedTrainingPlansList?.focus({ preventScroll: true });
 });
 
+let flowExitConfirmationPending = false;
 function confirmRecordDelete(message) {
   if (!recordDeleteConfirmDialog) return Promise.resolve(false);
   document.querySelector('#recordDeleteConfirmMessage').textContent = message;
@@ -454,6 +472,29 @@ function confirmRecordDelete(message) {
     recordDeleteConfirmDialog.addEventListener('close', () => resolve(recordDeleteConfirmDialog.returnValue === 'confirm'), { once: true });
     recordDeleteConfirmDialog.showModal();
   });
+}
+
+async function confirmFlowExit(message) {
+  if (flowExitConfirmationPending) return false;
+  flowExitConfirmationPending = true;
+  const title = document.querySelector('#recordDeleteConfirmTitle');
+  const action = document.querySelector('#acceptRecordDeleteConfirm');
+  const previousTitle = title.textContent;
+  const previousAction = action.textContent;
+  title.textContent = 'Salir sin guardar';
+  action.textContent = 'Salir y limpiar';
+  try {
+    const confirmed = await confirmRecordDelete(message);
+    if (!confirmed && !analysisHistoryActive && hasAnalysisDialogOpen()) {
+      history.pushState({ ...(history.state && typeof history.state === 'object' ? history.state : {}), nutriAnalysisDialog: true }, '');
+      analysisHistoryActive = true;
+    }
+    return confirmed;
+  } finally {
+    title.textContent = previousTitle;
+    action.textContent = previousAction;
+    flowExitConfirmationPending = false;
+  }
 }
 
 document.querySelector('#closeRecordDeleteConfirm')?.addEventListener('click', () => recordDeleteConfirmDialog.close('cancel'));
@@ -1410,7 +1451,10 @@ syncGarminTrainingButton?.addEventListener('click', async () => {
 });
 async function cancelTrainingDialog() {
   if (trainingSaving) { notifyApp('Espera a que termine el guardado antes de cancelar.', 'info'); return; }
-  if (!trainingOpenCodeSessionActive && !trainingPending) { trainingDialog?.close(); return; }
+  const hasWork = trainingOpenCodeSessionActive || trainingPending || Boolean(trainingInput?.value.trim())
+    || Boolean(trainingChatMessages?.querySelector('[data-role="user"]'));
+  if (!hasWork) { trainingDialog?.close(); return; }
+  if (!await confirmFlowExit('El análisis y la conversación de entrenamiento sin guardar se eliminarán. ¿Quieres salir?')) return;
   const generation = ++trainingOpenGeneration;
   try {
     const response = await fetch('/api/training/session', { method: 'DELETE', credentials: 'same-origin' });
@@ -1434,6 +1478,7 @@ async function cancelTrainingDialog() {
 }
 document.querySelector('#closeTrainingModal')?.addEventListener('click', cancelTrainingDialog);
 trainingDialog?.addEventListener('cancel', (event) => { event.preventDefault(); void cancelTrainingDialog(); });
+trainingDialog?.addEventListener('click', (event) => { if (event.target === trainingDialog) void cancelTrainingDialog(); });
 trainingDialog?.addEventListener('close', () => trainingTrigger?.focus());
 function appendTrainingMessage(role, content) {
   const bubble = document.createElement('div');
@@ -1731,6 +1776,9 @@ async function closeFoodDialog() {
   const description = document.querySelector('#foodDescription');
   const saveButton = document.querySelector('#saveFoodButton');
   if (foodPending) { notifyApp('Espera a que termine el registro antes de cancelar.', 'info'); return; }
+  const hasWork = foodOpenCodeSessionActive || foodSessionPreparing || Boolean(description.value.trim())
+    || Boolean(document.querySelector('#foodChatMessages')?.querySelector('[data-role="user"]'));
+  if (hasWork && !await confirmFlowExit('La conversación y el borrador de comida sin guardar se eliminarán. ¿Quieres salir?')) return;
   const generation = ++foodSessionGeneration;
   foodSessionReady = foodSessionPreparing = false;
   try {
@@ -1757,6 +1805,14 @@ async function closeFoodDialog() {
 }
 document.querySelector('#closeFoodDialog')?.addEventListener('click', closeFoodDialog);
 foodDialog?.addEventListener('cancel', (event) => { event.preventDefault(); void closeFoodDialog(); });
+foodDialog?.addEventListener('click', (event) => { if (event.target === foodDialog) void closeFoodDialog(); });
+window.addEventListener('popstate', () => {
+  if (!analysisHistoryActive || !hasAnalysisDialogOpen()) return;
+  analysisHistoryActive = false;
+  if (foodDialog.open) void closeFoodDialog();
+  else if (trainingDialog.open) void cancelTrainingDialog();
+  else if (trainingPlanDialog.open) void cancelTrainingPlan();
+});
 foodDialog?.addEventListener('close', () => foodTrigger?.focus());
 foodForm?.addEventListener('submit', async (event) => {
   event.preventDefault();

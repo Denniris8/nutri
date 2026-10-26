@@ -13,8 +13,8 @@ const { readBiometrics, saveBiometric } = require('./api/biometrics.js');
 const { readPlicometrics, savePlicometric } = require('./api/plicometrics.js');
 const { clearFoodChatHistory, deleteFoodEntry, readFoodEntries, readPendingFoodDraft, saveFoodEntry } = require('./api/food-entries.js');
 const { calendarDayRange, readCalendarTimezone } = require('./api/calendar-day.js');
-const { deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError } = require('./api/opencode-food.js');
-const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, readTrainingPlanPrompt } = require('./api/training-analysis.js');
+const { cleanupIdleFoodSessions, deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError } = require('./api/opencode-food.js');
+const { analyzeTraining, cleanupIdleTrainingSessions, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, readTrainingPlanPrompt } = require('./api/training-analysis.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
 const { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
 const { addNotification, markNotificationRead, notificationInsertSql, readNotifications, resolveNotificationsSql } = require('./api/notifications.js');
@@ -1133,6 +1133,21 @@ if (require.main === module) {
   const port = Number(process.env.PORT || 8080);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT debe ser un entero entre 1 y 65535');
   if (!process.env.DASHBOARD_JWT_SECRET || Buffer.byteLength(process.env.DASHBOARD_JWT_SECRET) < 32) throw new Error('DASHBOARD_JWT_SECRET debe tener al menos 32 bytes');
+  const cleanupIdleSessions = async () => {
+    for (const [area, cleanup] of [
+      ['food-opencode-session-cleanup', () => cleanupIdleFoodSessions({ dbQuery: mysql, textSql })],
+      ['training-opencode-session-cleanup', () => cleanupIdleTrainingSessions()],
+    ]) {
+      try { await cleanup(); }
+      catch {
+        const traceId = randomUUID();
+        try { await mysql(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql(area)},${textSql(traceId)},${textSql('idle_session_cleanup_failed')},${textSql('scheduled_cleanup')},${textSql('server interval')},${textSql('OPENCODE_IDLE_SESSION_CLEANUP_FAILED')},${textSql('Error')},503,${textSql('No se pudieron limpiar sesiones OpenCode inactivas.')});`); } catch {}
+      }
+    }
+  };
+  const cleanupTimer = setInterval(() => { void cleanupIdleSessions(); }, 15 * 60 * 1000);
+  cleanupTimer.unref();
+  void cleanupIdleSessions();
   createServer().listen(port, host, () => console.log(`Vistas disponibles en http://${host}:${port}`));
 }
 

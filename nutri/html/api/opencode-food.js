@@ -332,6 +332,7 @@ async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpen
       const current = await requestOpenCode('GET', `/session/${encodeURIComponent(cached.sessionId)}`, undefined, config.requestTimeoutMs);
       if (current.status >= 200 && current.status < 300
         && current.data?.metadata?.foodUserId === id && current.data?.metadata?.foodConfigSha256 === configFingerprint) {
+        await dbQuery(`UPDATE sesiones_comidas_opencode SET actualizado_en=UTC_TIMESTAMP() WHERE usuario_id=${id} AND session_id=${textSql(cached.sessionId)};`);
         traceFoodSession(trace, 'session_ready', { reused: true, session: shortSessionId(cached.sessionId) });
         return result(cached.sessionId, true);
       }
@@ -348,6 +349,7 @@ async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpen
         && current.data?.metadata?.foodConfigSha256 === configFingerprint) {
         const updated = await requestOpenCode('PATCH', `/session/${encodeURIComponent(stored)}`, { permission: foodSessionPermissions }, config.requestTimeoutMs);
         if (updated.status < 200 || updated.status >= 300) throw openCodeHttpError(updated.status, 'PATCH /api/session/{id}', 'No se pudieron actualizar los permisos de la sesión de comidas.');
+        await dbQuery(`UPDATE sesiones_comidas_opencode SET actualizado_en=UTC_TIMESTAMP() WHERE usuario_id=${id} AND session_id=${textSql(stored)};`);
         verifiedFoodSessions.set(id, { sessionId: stored, fingerprint: configFingerprint });
         traceFoodSession(trace, 'session_ready', { reused: true, session: shortSessionId(stored) });
         return result(stored, true);
@@ -402,6 +404,25 @@ async function deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode = op
   });
 }
 
+async function cleanupIdleFoodSessions({ dbQuery, textSql, requestOpenCode = openCodeRequest }) {
+  const rows = await dbQuery("SELECT CONCAT(usuario_id,'\\t',session_id) FROM sesiones_comidas_opencode WHERE actualizado_en < UTC_TIMESTAMP()-INTERVAL 2 HOUR;");
+  let deletedCount = 0;
+  for (const row of rows.split(/\r?\n/).filter(Boolean)) {
+    const [userId, listedSessionId] = row.split('\t');
+    if (!/^\d+$/.test(userId || '') || !/^ses_[A-Za-z0-9_-]{4,120}$/.test(listedSessionId || '')) continue;
+    await withUserLock(userId, async () => {
+      const sessionId = await dbQuery(`SELECT session_id FROM sesiones_comidas_opencode WHERE usuario_id=${userId} AND actualizado_en < UTC_TIMESTAMP()-INTERVAL 2 HOUR LIMIT 1;`);
+      if (sessionId !== listedSessionId) return;
+      const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(sessionId)}`);
+      if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) throw new Error('OpenCode no eliminó la sesión inactiva.');
+      await dbQuery(`DELETE FROM sesiones_comidas_opencode WHERE usuario_id=${userId} AND session_id=${textSql(sessionId)} AND actualizado_en < UTC_TIMESTAMP()-INTERVAL 2 HOUR;`);
+      verifiedFoodSessions.delete(userId);
+      deletedCount += 1;
+    });
+  }
+  return deletedCount;
+}
+
 async function requestFoodDescription({ sessionId, description, initialDescription, conversation, comidasDisponibles = [], comidasReferencia = [], referenciaComidaSolicitada = false, openFoodFactsFirstPass = false, alimentosPendientes = [], continuacionRegistro = false, diaNutricional, genericEstimateApproved = false, retryFeedback, allowWebSearch = true, openFoodFactsCandidates = [], config, trace, requestOpenCode = openCodeRequest }) {
   config ||= await readFoodSessionConfig();
   const system = await readFoodSystemPrompt(config.maxFoodItems);
@@ -445,6 +466,6 @@ async function requestFoodDescription({ sessionId, description, initialDescripti
 }
 
 module.exports = {
-  deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, openCodeRequest, recordFoodError, requestFoodDescription,
+  cleanupIdleFoodSessions, deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, openCodeRequest, recordFoodError, requestFoodDescription,
   getFoodSessionDefaults, readFoodSessionConfig, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock,
 };
