@@ -1,7 +1,3 @@
-#!/bin/sh
-<<<<<<< Updated upstream
-exec cloudflared tunnel --url "${TUNNEL_TARGET:-http://127.0.0.1:8080}"
-=======
 # =============================================================================
 # Túnel público del dashboard (Cloudflare quick tunnel).
 # - Arranca cloudflared contra el contenedor del dashboard.
@@ -12,7 +8,7 @@ exec cloudflared tunnel --url "${TUNNEL_TARGET:-http://127.0.0.1:8080}"
 # =============================================================================
 set -u
 
-TARGET_URL="${TUNNEL_TARGET:-http://127.0.0.1:8080}"
+TARGET_URL="${TUNNEL_TARGET:-http://127.0.0.1:80}"
 TOKEN="${BOT_TOKEN:-}"
 IDS="${NOTIFY_CHAT_IDS:-}"
 LOG=/tmp/cloudflared.log
@@ -93,4 +89,3 @@ CF_STATUS=$?
 kill "$MONITOR_PID" 2>/dev/null || true
 wait "$MONITOR_PID" 2>/dev/null || true
 exit "$CF_STATUS"
->>>>>>> Stashed changes

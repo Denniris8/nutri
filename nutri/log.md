@@ -575,3 +575,4 @@
 - 2026-10-26 11:36 CST — Puerto del dashboard: Nutri ahora escucha y publica en el puerto 80; healthcheck y URL predeterminada de la API de grammY alineados. No se ejecutaron pruebas ni se reiniciaron servicios.
 - 2026-10-26 11:37 CST — Corrección de puerto: la app vuelve a escuchar internamente en 8080 para evitar `EACCES` al enlazar puertos privilegiados; Compose publica el puerto externo 80 como `80:8080`. El túnel y grammY acceden por el puerto 80. No se ejecutaron pruebas ni se reiniciaron servicios.
 - 2026-10-26 — Preparación del commit solicitado: VERSION incrementada de 0.1.28 a 0.1.29; el dashboard lee la versión desde ese archivo. No se ejecutaron pruebas.
+- 2026-10-26 12:30 CST — Reconciliación de `tunnel/notify-tunnel.sh`: retirados los marcadores de conflicto y conservada la implementación local de notificación y botón Dashboard; destino predeterminado alineado al puerto 80. No se ejecutaron pruebas.
