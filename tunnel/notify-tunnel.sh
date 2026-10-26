@@ -8,7 +8,7 @@
 # =============================================================================
 set -u
 
-TARGET_URL="${TUNNEL_TARGET:-http://127.0.0.1:80}"
+TARGET_URL="${TUNNEL_TARGET:-http://127.0.0.1:8080}"
 TOKEN="${BOT_TOKEN:-}"
 IDS="${NOTIFY_CHAT_IDS:-}"
 LOG=/tmp/cloudflared.log

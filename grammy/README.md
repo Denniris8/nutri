@@ -61,7 +61,7 @@ Telegram ⇄ grammY (contenedor, red host)
 Añade al `.env` del bot las credenciales de la cuenta que iniciará sesión:
 
 ```env
-NUTRI_API_URL=http://127.0.0.1:80
+NUTRI_API_URL=http://127.0.0.1:8080
 NUTRI_API_PHONE=+52...
 NUTRI_API_PASSWORD=...
 ```

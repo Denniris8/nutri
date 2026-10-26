@@ -16,7 +16,7 @@ const routes = [
 
 const routePattern = (route) => new RegExp(`^${route.replaceAll(':id', '[1-9]\\d{0,19}')}$`);
 const API_ROUTES = routes.map(([path, methods]) => ({ path, methods, pattern: routePattern(path) }));
-const base = (process.env.NUTRI_API_URL || 'http://127.0.0.1:80').replace(/\/$/, '');
+const base = (process.env.NUTRI_API_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
 let session = '';
 let sessionExpires = 0;
 
