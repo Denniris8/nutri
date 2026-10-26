@@ -344,6 +344,7 @@ trainingPlanSendButton?.addEventListener('click', async () => {
   setTrainingPlanTargets(selectedActiveTrainingPlan?.macros || null);
   planSummaryText.textContent = 'Generando plan…';
   planLoading.hidden = false;
+  void requestScreenWakeLock();
   trainingPlanTrigger.setAttribute('aria-busy', 'true');
   trainingPlanTriggerLoading.hidden = false;
   appendTrainingPlanMessage('user', goals);
@@ -1449,6 +1450,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
   document.querySelector('#trainingButtonLoading').hidden = false;
   trainingFeedback.textContent = 'Enviando la descripción…';
   trainingLoading.hidden = false;
+  void requestScreenWakeLock();
   trainingLoadingText.textContent = 'Analizando entrenamiento…';
   trainingInput.disabled = true;
   trainingAnalyzeButton.disabled = true;
@@ -1680,6 +1682,7 @@ document.querySelector('#registerFoodButton')?.addEventListener('click', async (
     feedback.classList.remove('food-session-error');
   }
   foodLoading.hidden = false;
+  void requestScreenWakeLock();
   document.querySelector('#foodLoadingText').textContent = foodPending ? 'Esperando respuesta…' : 'Preparando el registro…';
   saveButton.disabled = true;
   foodForm.hidden = false;
@@ -1767,6 +1770,7 @@ foodForm?.addEventListener('submit', async (event) => {
   const pendingMessage = appendFoodChatMessage('user', text);
   feedback.textContent = 'Enviando la descripción…';
   foodLoading.hidden = false;
+  void requestScreenWakeLock();
   document.querySelector('#foodLoadingText').textContent = 'Analizando los alimentos…';
   const foodChatThread = document.querySelector('#foodChatThread');
   foodChatThread.hidden = false;
