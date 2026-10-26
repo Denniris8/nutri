@@ -27,6 +27,8 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-25 23:40 CST — Flujo de comidas: el atajo declarado ahora omite la lectura/preparación de comidas del día cuando no hay hora, destino, referencia, corrección ni aclaración de madrugada; Open Food Facts comparte consultas simultáneas del mismo alimento y los reintentos habilitan web según el uso observado de herramientas, no solo porque estuvieran disponibles. Normalizada la descripción residual al extraer la hora de referencia. Verificación API: 49 pasaron, 1 omitida por requerir OpenCode live; `git diff --check` pasó. VERSION incrementado a 0.1.21 para el commit.
+
 - 2026-10-25 23:18 CST — Flujo de comidas: añadido atajo validado para una comida con cantidad y macros de porción declarados, aplicación temprana de cantidades explícitas, consultas Open Food Facts en lotes de hasta 3 y fallback web agrupado sin repetirlo en reintentos de formato. Se conserva el flujo normal de aclaraciones y validación 4-4-9, incluso sin fibra declarada. Añadidas pruebas unitarias y de flujo; no ejecutadas por falta de autorización. `git diff --check` pasó. VERSION incrementado a 0.1.20 para el commit.
 
 - 2026-10-23 09:49 CST — Versión PATCH incrementada a 0.1.7 antes del commit. Se registra la eliminación local de `DESIGN.md`; el dashboard obtiene su versión dinámicamente desde `VERSION`.

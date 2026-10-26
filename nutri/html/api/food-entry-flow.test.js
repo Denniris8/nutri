@@ -56,8 +56,9 @@ test('registra leche y whey con cantidades del mensaje tras respuesta inválida 
   assert.equal(requests.length, 2);
   const originalContext = JSON.parse(requests[0].parts[0].text);
   assert.equal(originalContext.initialDescription, description);
-  assert.equal(requests[0].tools.websearch, true);
-  assert.equal(requests[0].tools.webfetch, true);
+  assert.equal(requests[0].tools.websearch, undefined);
+  assert.equal(requests[1].tools.websearch, undefined);
+  assert.equal(requests[1].tools.webfetch, undefined);
   const insert = statements.find((sql) => sql.includes('INSERT INTO registros_comida_items('));
   assert.match(insert, /'250 ml',null/i);
   assert.match(insert, /'31 g',31/i);
@@ -93,6 +94,7 @@ test('guarda el formato completo declarado sin crear ni consultar una sesión Op
   }));
   assert.equal(responseBody.state, 'completado');
   assert.ok(statements.some((sql) => sql.includes("'declarado_usuario'")));
+  assert.equal(statements.filter((sql) => sql.includes("SET time_zone='+00:00'; SELECT JSON_OBJECT('id',e.id")).length, 1);
 });
 
 test('reutiliza macros del alimento referenciado y los escala a la cantidad nueva', () => {
@@ -109,7 +111,7 @@ test('reutiliza macros del alimento referenciado y los escala a la cantidad nuev
   assert.equal(missingQuantity.referenceSourceMatched, true);
   assert.equal(missingQuantity.referenceMacrosReused, undefined);
   assert.deepEqual(parseFoodReferenceTime('60 g de pollo como el de las 4pm a las 7pm').time.hours, [16]);
-  assert.deepEqual(parseFoodReferenceTime('60 g de pollo como el de las 4pm a las 7pm').withoutReferenceTime, '60 g de pollo como el de las  a las 7pm');
+  assert.deepEqual(parseFoodReferenceTime('60 g de pollo como el de las 4pm a las 7pm').withoutReferenceTime, '60 g de pollo como el de las a las 7pm');
 });
 
 test('usa Open Food Facts solo para producto exacto con macros por 100 g completos', async () => {
@@ -144,6 +146,22 @@ test('usa Open Food Facts solo para producto exacto con macros por 100 g complet
       },
     }] }) }),
   }), null);
+});
+
+test('comparte una consulta Open Food Facts concurrente para el mismo alimento', async () => {
+  let calls = 0;
+  const fetchImpl = async () => {
+    calls += 1;
+    await new Promise((resolve) => setImmediate(resolve));
+    return { ok: true, json: async () => ({ hits: [] }) };
+  };
+  const name = 'Alimento sin coincidencia concurrente 2026';
+  const results = await Promise.all([
+    findOpenFoodFactsProduct(name, { fetchImpl }),
+    findOpenFoodFactsProduct(name, { fetchImpl }),
+  ]);
+  assert.deepEqual(results, [null, null]);
+  assert.equal(calls, 1);
 });
 
 test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { skip: process.env.NUTRI_TEST_OPENCODE_LIVE !== '1' }, async () => {

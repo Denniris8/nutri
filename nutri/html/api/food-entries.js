@@ -51,7 +51,7 @@ function parseFoodReferenceTime(text) {
   if (!match) return null;
   const value = match[1].trim();
   const start = match.index + match[0].lastIndexOf(match[1]);
-  return { time: parseFoodTime(/(?:am|pm|a\s*m|p\s*m|de la manana|de la tarde|de la noche)$/.test(value) ? value : `a las ${value}`), withoutReferenceTime: `${normalized.slice(0, start)} ${normalized.slice(start + match[1].length)}` };
+  return { time: parseFoodTime(/(?:am|pm|a\s*m|p\s*m|de la manana|de la tarde|de la noche)$/.test(value) ? value : `a las ${value}`), withoutReferenceTime: `${normalized.slice(0, start)} ${normalized.slice(start + match[1].length)}`.replace(/\s+/g, ' ').trim() };
 }
 
 function applyFoodMacroReferences(items, referenceItems) {
@@ -423,6 +423,11 @@ function parseDeclaredFoodShortcut(description) {
   return foodItemIssues(item).length ? null : { action: 'new', targetEntryId: null, items: [item], clarificationQuestion: null };
 }
 
+function usedFoodWebTools(parts) {
+  return Array.isArray(parts) && parts.some((part) => part?.type === 'tool'
+    && /web[\s_-]?(?:search|fetch)|search the web|fetch webpage/i.test(`${part.tool || ''} ${part.state?.title || ''}`));
+}
+
 function explicitFoodMasses(description) {
   return [...new Set([...String(description).matchAll(/(?:^|[^\d])(\d+(?:[.,]\d+)?)\s*(kg|kilogramos?|gr|g|gramos?)\b/gi)]
     .map((match) => Number(match[1].replace(',', '.')) * (/^(?:kg|kilogramos?)$/i.test(match[2]) ? 1000 : 1))
@@ -585,7 +590,17 @@ SELECT LAST_INSERT_ID();`);
       entry.fecha = confirmedDate;
       entry.targetEntryId = null;
     }
-    const dayMeals = (await readFoodEntries({ userId, fecha: entry.fecha, dbQuery, textSql })).filter((record) => record.state === 'completado').map((record) => {
+    let modelDescription = asksPreviousDayConfirmation && previousSaveAnswer?.confirmed ? saved.description : entry.descripcion;
+    const conversation = await readFoodConversationText({ entryId, dbQuery, fallback: '', excludeLatestUser: true });
+    const localClock = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
+      timeZone: entry.timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit',
+    }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
+    const localClockMinutes = Number(localClock.hour) * 60 + Number(localClock.minute);
+    const directFastPath = !saved.question && !conversation && !genericEstimateApproved && !reuseAsNewMeal
+      && !correctionIntent && !asksAddition && entry.targetEntryId == null && !requestedTime && !foodReference
+      && (requestedChatDate || !isEarlyNutritionHour(localClockMinutes))
+      ? parseDeclaredFoodShortcut(modelDescription) : null;
+    const dayMeals = directFastPath ? [] : (await readFoodEntries({ userId, fecha: entry.fecha, dbQuery, textSql })).filter((record) => record.state === 'completado').map((record) => {
       const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: entry.timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(record.createdAt)).map(({ type, value }) => [type, value]));
       return {
         id: String(record.id), hora: new Intl.DateTimeFormat('es-MX', { timeZone: entry.timezone, hour: '2-digit', minute: '2-digit' }).format(new Date(record.createdAt)),
@@ -609,10 +624,6 @@ SELECT LAST_INSERT_ID();`);
       : dayMeals;
     if (requestedTime?.ambiguous && matchedMeals.length === 1) requestedTime.hours = [matchedMeals[0].hour24];
     const mealsForModel = matchedMeals;
-    const localClock = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-      timeZone: entry.timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit',
-    }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
-    const localClockMinutes = Number(localClock.hour) * 60 + Number(localClock.minute);
     const statedTimeMinutes = requestedTime && !requestedTime.invalid && requestedTime.hours.length === 1
       ? requestedTime.hours[0] * 60 + requestedTime.minute : null;
     const dayChoiceAnswered = !requestedChatDate && (isEarlyNutritionHour(localClockMinutes) || isEarlyNutritionHour(statedTimeMinutes))
@@ -643,8 +654,6 @@ SELECT LAST_INSERT_ID();`);
       await returnDayClarification(question);
       return;
     }
-    let modelDescription = asksPreviousDayConfirmation && previousSaveAnswer?.confirmed ? saved.description : entry.descripcion;
-    const conversation = await readFoodConversationText({ entryId, dbQuery, fallback: '', excludeLatestUser: true });
     const parseReply = (responseParts) => {
       try { return normalizeFoodReply(parseFoodReply(responseParts)); }
       catch (error) { if (error.code === 'FOOD_IDENTITY_REFUSAL') throw error; return null; }
@@ -653,8 +662,7 @@ SELECT LAST_INSERT_ID();`);
     const quantityContext = [saved.description, conversation, entry.descripcion].filter(Boolean);
     const pendingMasses = [...new Set(quantityContext.flatMap(explicitFoodMasses))];
     const answeredPendingQuantity = isQuantityQuestion(saved.question) && pendingMasses.length === 1;
-    const directReply = !saved.question && !conversation && !genericEstimateApproved && !reuseAsNewMeal
-      && !correctionIntent && !activeTarget && !asksAddition ? parseDeclaredFoodShortcut(modelDescription) : null;
+    const directReply = directFastPath;
     const openFoodFactsFirstPass = !directReply && !saved.question && !genericEstimateApproved && !reuseAsNewMeal && !correctionIntent && !activeTarget;
     let requestArgs;
     let sessionId;
@@ -672,7 +680,7 @@ SELECT LAST_INSERT_ID();`);
       stage = 'analysis';
       requestArgs = { sessionId, description: modelDescription, initialDescription: saved.description, genericEstimateApproved, allowWebSearch: Boolean(saved.question || correctionIntent || activeTarget), openFoodFactsFirstPass, ...(reuseAsNewMeal ? { referenciaComidaSolicitada: true } : {}), ...(!session.reused && conversation ? { conversation } : {}), comidasDisponibles: mealsForModel, ...(reuseAsNewMeal && referenceMeals.length ? { comidasReferencia: referenceMeals } : {}), alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
       let parts = await withFoodSessionLock(userId, () => requestFoodDescription(requestArgs));
-      webSearchUsed = requestArgs.allowWebSearch;
+      webSearchUsed = usedFoodWebTools(parts);
       stage = 'parse';
       try { result = parseReply(parts); }
       catch (error) {
@@ -685,7 +693,7 @@ SELECT LAST_INSERT_ID();`);
         sessionId = renewed.sessionId;
         if (conversation) requestArgs.conversation = conversation;
         parts = await withFoodSessionLock(userId, () => requestFoodDescription({ ...requestArgs, sessionId, description: modelDescription }));
-        webSearchUsed = requestArgs.allowWebSearch;
+        webSearchUsed ||= usedFoodWebTools(parts);
         result = parseReply(parts);
       }
     }
@@ -705,7 +713,7 @@ SELECT LAST_INSERT_ID();`);
         parts = await withFoodSessionLock(userId, () => requestFoodDescription({
           ...requestArgs, retryFeedback: 'Primero se consultó Open Food Facts. Usa sus candidatos solo si el producto coincide exactamente; conserva esos macros y su procedencia sin sustituirlos. Usa websearch/webfetch únicamente para los alimentos que no tengan candidato coincidente. No inventes ni cambies productos.',
         }));
-        webSearchUsed = true;
+        webSearchUsed ||= usedFoodWebTools(parts);
         stage = 'parse';
         result = parseReply(parts);
       }
@@ -733,7 +741,7 @@ SELECT LAST_INSERT_ID();`);
         ...requestArgs, sessionId, description: modelDescription, allowWebSearch: retryAllowsWebSearch,
         retryFeedback: `CORRECCIÓN ${attempt}/${retryLimit}: corrige la respuesta completa en JSON. Problemas: ${replyIssues.length ? replyIssues.join(', ') : 'JSON ausente o ilegible'}. Conserva alimentos, cantidades y aclaraciones confirmados en la sesión y el contexto; no repitas preguntas contestadas. Devuelve todos los campos requeridos. ${macroIssues() ? 'Debes resolver los macros obligatorios de todos los alimentos solicitados: si no hay fuente exacta utilizable, usa valores típicos razonables y marca macroSource:"opencode_estimado" y macroStatus:"estimado"; no dejes macros obligatorios nulos.' : 'No inventes información y pregunta solo si falta un dato necesario.'} Nunca inventes cantidades. Para masa usa quantityGrams; para volumen conserva quantityText y quantityGrams:null, sin convertir volumen a masa por suposición.`,
       }));
-      if (retryAllowsWebSearch) webSearchUsed = true;
+      if (retryAllowsWebSearch) webSearchUsed ||= usedFoodWebTools(parts);
       stage = 'parse';
       result = parseReply(parts);
       if (reuseAsNewMeal && result) { result.action = 'new'; result.targetEntryId = null; }
@@ -990,4 +998,4 @@ SELECT LAST_INSERT_ID();`);
   }
 }
 
-module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, localDateTimeToUtc, normalizeFoodReply, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, readFoodEntries, readPendingFoodDraft, saveFoodEntry, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, localDateTimeToUtc, normalizeFoodReply, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, readFoodEntries, readPendingFoodDraft, saveFoodEntry, usedFoodWebTools, validateFoodEntry, validFoodItem };

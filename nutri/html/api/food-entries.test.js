@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitGrams, foodItemIssues, parseDeclaredFoodShortcut } = require('./food-entries.js');
+const { applyExplicitGrams, foodItemIssues, parseDeclaredFoodShortcut, usedFoodWebTools } = require('./food-entries.js');
 
 test('parses only a complete, validated user-declared single-food shortcut', () => {
   const reply = parseDeclaredFoodShortcut('Yogur natural | cantidad consumida: 150 g | 135 kcal; 15 g proteína; 9 g carbohidratos; 4 g grasa; 0 g fibra');
@@ -8,7 +8,14 @@ test('parses only a complete, validated user-declared single-food shortcut', () 
   assert.equal(reply.items[0].quantityGrams, 150);
   assert.equal(reply.items[0].macros.energyKcal, 135);
   assert.equal(parseDeclaredFoodShortcut('Yogur natural 150 g, 135 kcal'), null);
-  assert.equal(parseDeclaredFoodShortcut('Yogur | cantidad consumida: 150 g | 135 kcal; 15 g proteína; 9 g carbohidratos; 4 g grasa'), null);
+  const noFiber = parseDeclaredFoodShortcut('Yogur | cantidad consumida: 150 g | 135 kcal; 15 g proteína; 9 g carbohidratos; 4 g grasa');
+  assert.equal(noFiber.items[0].macros.fiberG, null);
+});
+
+test('detects actual web tool calls rather than merely enabled tools', () => {
+  assert.equal(usedFoodWebTools([{ type: 'text', text: 'respuesta' }]), false);
+  assert.equal(usedFoodWebTools([{ type: 'tool', tool: 'websearch' }]), true);
+  assert.equal(usedFoodWebTools([{ type: 'tool', state: { title: 'Web Fetch' } }]), true);
 });
 
 test('uses compact explicit gram amounts to resolve a single missing food quantity', () => {

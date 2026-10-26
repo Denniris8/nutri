@@ -11,6 +11,7 @@ let localServerStart;
 const sessionLocks = new Map();
 const verifiedFoodSessions = new Map();
 const openFoodFactsCache = new Map();
+const openFoodFactsInflight = new Map();
 const foodConfigPath = path.resolve(__dirname, '../../configuracion-sesion.json');
 const foodBehaviorPath = path.resolve(__dirname, '../../comportamiento-sesion-comidas.md');
 
@@ -60,7 +61,7 @@ function normalizeOffName(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
-async function findOpenFoodFactsProduct(name, { timeoutMs = 8000, fetchImpl = fetch } = {}) {
+async function lookupOpenFoodFactsProduct(name, { timeoutMs = 8000, fetchImpl = fetch } = {}) {
   if (typeof name !== 'string' || !name.trim()) return null;
   const cacheKey = normalizeOffName(name);
   const cached = openFoodFactsCache.get(cacheKey);
@@ -107,6 +108,18 @@ async function findOpenFoodFactsProduct(name, { timeoutMs = 8000, fetchImpl = fe
     if (openFoodFactsCache.size > 300) openFoodFactsCache.delete(openFoodFactsCache.keys().next().value);
     return result;
   } catch { return null; }
+}
+
+async function findOpenFoodFactsProduct(name, options) {
+  if (typeof name !== 'string' || !name.trim()) return null;
+  const key = normalizeOffName(name);
+  const cached = openFoodFactsCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.product;
+  if (openFoodFactsInflight.has(key)) return openFoodFactsInflight.get(key);
+  const lookup = lookupOpenFoodFactsProduct(name, options);
+  openFoodFactsInflight.set(key, lookup);
+  try { return await lookup; }
+  finally { if (openFoodFactsInflight.get(key) === lookup) openFoodFactsInflight.delete(key); }
 }
 const foodSessionPermissions = [
   { permission: '*', pattern: '*', action: 'deny' },
