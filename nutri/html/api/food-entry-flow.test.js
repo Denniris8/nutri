@@ -64,6 +64,37 @@ test('registra leche y whey con cantidades del mensaje tras respuesta inválida 
   assert.match(insert, /111,111,9,12,3,null\)/i);
 });
 
+test('guarda el formato completo declarado sin crear ni consultar una sesión OpenCode', async () => {
+  const description = 'Yogur natural | cantidad consumida: 150 g | 135 kcal; 15 g proteína; 9 g carbohidratos; 4 g grasa; 0 g fibra';
+  const statements = [];
+  let committed = false;
+  const dbQuery = async (sql) => {
+    statements.push(sql);
+    if (sql.includes('SELECT zona_horaria')) return 'UTC';
+    if (sql.includes('SELECT DATE_FORMAT(fecha_consumo')) return '';
+    if (sql.includes("SELECT JSON_OBJECT('entryId',e.id")) return '';
+    if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return '502';
+    if (sql.includes("SELECT JSON_OBJECT('state',estado")) return JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-22', description, question: null, targetEntryId: null });
+    if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)')) return '';
+    if (sql.includes("SET time_zone='+00:00'; SELECT JSON_OBJECT('id',e.id")) return committed
+      ? JSON.stringify({ id: '502', fecha: '2026-10-22', createdAt: '2026-10-22T12:00:00Z', state: 'completado', description }) : '';
+    if (sql.includes("SELECT JSON_OBJECT('entryId',i.registro_comida_id")) return committed ? JSON.stringify({
+      entryId: '502', itemId: '900', sourceText: '150 g de Yogur natural', name: 'Yogur natural', quantity: '150 g', quantityGrams: 150,
+      basis: 'per_portion', energyKcal: 135, proteinG: 15, carbohydrateG: 9, fatG: 4, fiberG: 0,
+      macroStatus: 'declarado', macroSource: 'declarado_usuario', sourceName: null, sourceUrl: null, sourceQuote: null,
+    }) : '';
+    if (sql.includes('COMMIT')) { committed = true; return ''; }
+    return '';
+  };
+  const responseBody = await new Promise((resolve) => saveFoodEntry({
+    response: {}, data: { fecha: '2026-10-22', descripcion: description, requestId: '8e4d53e9-4268-4b45-8b12-1b510e8db22f', timezone: 'UTC' },
+    userId: 999991, dbQuery, textSql: (value) => `'${String(value).replace(/'/g, "''")}'`, json: (_response, _status, body) => resolve(body),
+    requestOpenCode: async () => { throw new Error('OpenCode must not be called for fully declared data'); },
+  }));
+  assert.equal(responseBody.state, 'completado');
+  assert.ok(statements.some((sql) => sql.includes("'declarado_usuario'")));
+});
+
 test('reutiliza macros del alimento referenciado y los escala a la cantidad nueva', () => {
   const item = { name: 'Pollo asado', quantityGrams: 60, quantityText: '60 g', macroBasis: 'per_portion', macros: {} };
   const source = { itemId: '41', name: 'Pollo asado', quantityGrams: 100, energyKcal: 165, proteinG: 31, carbohydrateG: 0, fatG: 3.6, fiberG: null, macroStatus: 'declarado', macroSource: 'webfetch', sourceName: 'USDA', sourceUrl: 'https://fdc.nal.usda.gov/food/1', sourceQuote: 'Datos por porción.' };

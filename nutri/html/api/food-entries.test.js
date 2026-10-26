@@ -1,6 +1,15 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitGrams, foodItemIssues } = require('./food-entries.js');
+const { applyExplicitGrams, foodItemIssues, parseDeclaredFoodShortcut } = require('./food-entries.js');
+
+test('parses only a complete, validated user-declared single-food shortcut', () => {
+  const reply = parseDeclaredFoodShortcut('Yogur natural | cantidad consumida: 150 g | 135 kcal; 15 g proteína; 9 g carbohidratos; 4 g grasa; 0 g fibra');
+  assert.equal(reply.items[0].macroSource, 'declarado_usuario');
+  assert.equal(reply.items[0].quantityGrams, 150);
+  assert.equal(reply.items[0].macros.energyKcal, 135);
+  assert.equal(parseDeclaredFoodShortcut('Yogur natural 150 g, 135 kcal'), null);
+  assert.equal(parseDeclaredFoodShortcut('Yogur | cantidad consumida: 150 g | 135 kcal; 15 g proteína; 9 g carbohidratos; 4 g grasa'), null);
+});
 
 test('uses compact explicit gram amounts to resolve a single missing food quantity', () => {
   const [item] = applyExplicitGrams([{ name: 'Lentejas', quantityGrams: null }], '150g');
@@ -27,4 +36,12 @@ test('flags macro values that exceed physical or 4-4-9 plausibility bounds', () 
   });
   assert.ok(issues.includes('energy_4_4_9_mismatch'));
   assert.ok(issues.includes('energy_unit_bounds'));
+});
+
+test('checks 4-4-9 energy even when fiber was not declared', () => {
+  const issues = foodItemIssues({
+    name: 'Alimento', sourceText: 'Alimento 100 g', macroBasis: 'per_portion', macroStatus: 'declarado', macroSource: 'declarado_usuario',
+    quantityGrams: 100, macros: { energyKcal: 400, proteinG: 10, carbohydrateG: 10, fatG: 10, fiberG: null },
+  });
+  assert.ok(issues.includes('energy_4_4_9_mismatch'));
 });
