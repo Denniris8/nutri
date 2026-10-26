@@ -47,10 +47,7 @@ test('progress nutrition endpoint returns account-scoped nutrition, body, activi
   await withServer(async (sql) => {
     queries.push(sql);
     if (sql.includes('SELECT s.usuario_id')) return '27';
-    if (sql.includes('WITH daily AS')) return JSON.stringify(nutrition);
-    if (sql.includes("'measurements'")) return JSON.stringify(body);
-    if (sql.includes("'stepDays'")) return JSON.stringify(activity);
-    if (sql.includes('registros_plicometro')) return '{"current":1,"previous":0}';
+    if (sql.includes('WITH daily AS')) return [nutrition, body, activity, { current: 1, previous: 0 }].map(JSON.stringify).join('\n');
     throw new Error('unexpected_query');
   }, async (base) => {
     const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
@@ -58,7 +55,16 @@ test('progress nutrition endpoint returns account-scoped nutrition, body, activi
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { nutrition, body, activity, plicometric: { current: 1, previous: 0 } });
   });
-  assert.ok(queries.filter((sql) => sql.includes('usuario_id=27')).length >= 4);
+  assert.equal(queries.filter((sql) => sql.includes('usuario_id=27')).length, 1);
+});
+
+test('only versioned CSS and JavaScript assets receive immutable caching', async () => {
+  await withServer(async () => { throw new Error('unexpected_query'); }, async (base) => {
+    const versioned = await fetch(`${base}/dashboard_nutricional.css?v=67`);
+    const unversioned = await fetch(`${base}/dashboard_nutricional.css`);
+    assert.equal(versioned.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+    assert.equal(unversioned.headers.get('cache-control'), 'no-store');
+  });
 });
 
 test('dummy registration creates synthetic measurement rows without completing onboarding', async () => {
