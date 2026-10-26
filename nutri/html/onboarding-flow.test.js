@@ -80,10 +80,10 @@ function loadFlow(search = '', fetchOverride) {
     querySelectorAll: (selector) => selector === '[data-mode]' ? modeButtons : [],
     createElement: () => new Element(),
   };
-  const window = { fetch, location: { href: `http://localhost/dashboard_nutricional.html${search}`, search, pathname: '/dashboard_nutricional.html', assign: (url) => destinations.push(url) } };
+  const window = { fetch, addEventListener() {}, location: { href: `http://localhost/dashboard_nutricional.html${search}`, search, pathname: '/dashboard_nutricional.html', assign: (url) => destinations.push(url) } };
   const source = readFileSync(require.resolve('./onboarding-flow.js'), 'utf8');
   const Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'America/Mexico_City' }) }) };
-  vm.runInNewContext(source, { document, window, fetch, Intl, URL, URLSearchParams, setTimeout: () => 0, clearTimeout() {}, crypto: { randomUUID: () => '123e4567-e89b-42d3-a456-426614174000', getRandomValues: (bytes) => bytes.fill(1) } });
+  vm.runInNewContext(source, { document, window, fetch, Intl, URL, URLSearchParams, navigator: { wakeLock: null }, setTimeout: () => 0, clearTimeout() {}, crypto: { randomUUID: () => '123e4567-e89b-42d3-a456-426614174000', getRandomValues: (bytes) => bytes.fill(1) } });
   return { elements, modeButtons, destinations, requests };
 }
 
@@ -237,26 +237,25 @@ test('Register food opens a More-style description form with weighing guidance a
   assert.match(html, /id="registerFoodButton"/);
   assert.match(html, /<dialog id="registerFoodDialog" class="more-form-dialog"/);
   assert.match(html, /pesa los alimentos en báscula para obtener datos más precisos\./);
-  assert.match(html, /Si necesito aclarar algo, te preguntaré antes de guardar\./);
+  assert.match(html, /id="foodEntryFeedback"[^>]*aria-live="polite"/);
   assert.match(html, /id="foodDescription"[\s\S]*required/);
   assert.doesNotMatch(html, /foodEntryTrace|foodEntryResult/);
   assert.match(html, /id="saveFoodButton"[^>]*>Guardar</);
   assert.doesNotMatch(html, /foodClarificationForm|foodClarificationQuestion|Enviar aclaración/);
 });
 
-test('opening Registrar comida asks the authenticated backend for its private OpenCode session', async () => {
+test('opening Registrar comida restores the draft without preparing an unused OpenCode session', async () => {
   const { elements, requests } = loadFlow();
   await elements['#registerFoodButton'].dispatch('click');
-  const openSession = requests.find(([url]) => url === '/api/food/session');
-  assert.ok(openSession);
-  assert.equal(openSession[1].method, 'POST');
-  assert.equal(openSession[1].body, undefined);
+  assert.equal(requests.some(([url]) => url === '/api/food/session'), false);
+  assert.equal(elements['#foodDescription'].disabled, false);
+  assert.equal(elements['#saveFoodButton'].disabled, false);
   assert.equal(elements['#registerFoodDialog'].open, true);
 });
 
 test('food modal can reopen during analysis without resubmitting the request', async () => {
   let finishRequest;
-  const { elements } = loadFlow('', (url) => url === '/api/food-entries'
+  const { elements, requests } = loadFlow('', (url) => url === '/api/food-entries'
     ? new Promise((resolve) => { finishRequest = resolve; })
     : Promise.resolve({ ok: true, json: async () => ({ ok: true }) }));
   await elements['#registerFoodButton'].dispatch('click');
@@ -275,9 +274,10 @@ test('food modal can reopen during analysis without resubmitting the request', a
   await elements['#registerFoodButton'].dispatch('click');
   assert.equal(elements['#registerFoodDialog'].open, true);
   assert.equal(elements['#saveFoodButton'].disabled, true);
-  finishRequest({ ok: true, json: async () => ({ message: 'Descripción enviada.' }) });
+  finishRequest({ ok: true, json: async () => ({ records: [], message: 'Descripción enviada.' }) });
   await submission;
-  assert.match(elements['#foodEntryFeedback'].textContent, /Descripción enviada.*agregar alimentos o corregirlos/);
+  assert.equal(requests.some(([url]) => url.startsWith('/api/food-entries?fecha=')), false);
+  assert.equal(elements['#foodEntryFeedback'].textContent, 'Descripción enviada.');
   assert.equal(elements['#saveFoodButton'].disabled, false);
   assert.equal(elements['#foodDescription'].disabled, false);
   assert.equal(elements['#foodLoading'].hidden, true);
@@ -309,8 +309,8 @@ test('More tab switches the visible dashboard section', () => {
     querySelector: () => null,
     querySelectorAll: (selector) => selector === '[data-dashboard-tab]' ? nodeList(tabs) : selector === '[data-dashboard-view]' ? nodeList(views) : nodeList([]),
   };
-  const window = { fetch: async () => ({ ok: true }), location: { search: '', href: 'http://localhost/dashboard_nutricional.html', pathname: '/dashboard_nutricional.html', assign() {} } };
-  vm.runInNewContext(readFileSync(require.resolve('./onboarding-flow.js'), 'utf8'), { document, window, fetch: async () => ({ ok: true }), Intl, URL, URLSearchParams, setTimeout: () => 0, clearTimeout() {} });
+  const window = { fetch: async () => ({ ok: true }), addEventListener() {}, location: { search: '', href: 'http://localhost/dashboard_nutricional.html', pathname: '/dashboard_nutricional.html', assign() {} } };
+  vm.runInNewContext(readFileSync(require.resolve('./onboarding-flow.js'), 'utf8'), { document, window, fetch: async () => ({ ok: true }), Intl, URL, URLSearchParams, navigator: { wakeLock: null }, setTimeout: () => 0, clearTimeout() {} });
   tabs[2].dispatch('click');
   assert.equal(views[2].hidden, false);
   assert.equal(views[0].hidden, true);

@@ -443,6 +443,7 @@ trainingPlanSaveButton?.addEventListener('click', async () => {
     savedTrainingPlan = true;
     trainingPlanSessionActive = false;
     generatedTrainingPlanRunId = null;
+    trainingPlanSendButton.disabled = true;
     setTrainingPlanTargets(generatedTrainingMacros);
     savedTrainingPlans = [{ id: result.id, createdAt: result.createdAt, goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros }, ...savedTrainingPlans.filter((plan) => plan.id !== result.id)].slice(0, 3);
     renderSavedTrainingPlans();
@@ -1550,7 +1551,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
       context.registeredHeightCm == null ? '' : `Estatura registrada: ${context.registeredHeightCm} cm`,
     ].filter(Boolean).join(' · ');
     const message = analysis.caloriesKcal == null ? analysis.question
-      : `Gasto estimado: ~${new Intl.NumberFormat('es-MX', { maximumFractionDigits: 0 }).format(analysis.caloriesKcal)} kcal.\n${analysis.activity} · ${analysis.durationMinutes} min · ${analysis.weightKg} kg · ${analysis.met} MET.\nFórmula: ${analysis.formula}${profile ? `\nContexto del perfil: ${profile}` : ''}`;
+      : `Gasto bruto estimado: ~${new Intl.NumberFormat('es-MX', { maximumFractionDigits: 0 }).format(analysis.caloriesKcal)} kcal.\n${analysis.activity} · ${analysis.durationMinutes} min · ${analysis.weightKg} kg · ${analysis.met} MET (estimado).\nFórmula: ${analysis.formula}${profile ? `\nContexto del perfil: ${profile}` : ''}`;
     if (message) appendTrainingMessage('assistant', message);
     if (analysis.saveTimeStatus === 'ambiguous') {
       appendTrainingMessage('assistant', 'Indica la hora con a. m./p. m. o en formato de 24 horas para guardarla correctamente.');
@@ -1746,23 +1747,18 @@ document.querySelector('#registerFoodButton')?.addEventListener('click', async (
   }
   foodLoading.hidden = false;
   void requestScreenWakeLock();
-  document.querySelector('#foodLoadingText').textContent = foodPending ? 'Esperando respuesta…' : 'Preparando el registro…';
+  document.querySelector('#foodLoadingText').textContent = foodPending ? 'Esperando respuesta…' : 'Cargando borrador…';
   saveButton.disabled = true;
   foodForm.hidden = false;
-  feedback.textContent = foodPending ? 'Esperando respuesta…' : 'Revisando borradores y preparando el registro…';
+  feedback.textContent = foodPending ? 'Esperando respuesta…' : 'Revisando borradores…';
   foodDialog.showModal();
   if (foodPending) return;
   foodChatThread.hidden = false;
-  notifyApp('Preparando el registro de comida…', 'info');
   try {
-    await restoreFoodDraft(feedback);
-    if (generation !== foodSessionGeneration) return;
-    const response = await fetch('/api/food/session', { method: 'POST', credentials: 'same-origin' });
-    if (!response.ok) throw new Error((await response.json()).error || 'No se pudo preparar una sesión nueva de comida.');
+    const draft = await restoreFoodDraft(feedback);
     if (generation !== foodSessionGeneration) return;
     foodSessionReady = true;
-    foodOpenCodeSessionActive = true;
-    notifyApp('Registro de comida listo.', 'success');
+    foodOpenCodeSessionActive = Boolean(draft);
     description.disabled = false;
     saveButton.disabled = false;
     description.focus();
@@ -1894,7 +1890,8 @@ foodForm?.addEventListener('submit', async (event) => {
         navigateWithNotice(result.message || 'Comida guardada en la fecha calendario anterior.', `${url.pathname}${url.search}${url.hash}`);
         return;
       }
-      try { await loadFoodEntries(foodDate()); } catch {}
+      if (Array.isArray(result.records)) renderFoodEntries(result.records);
+      else await loadFoodEntries(foodDate());
       foodSessionReady = foodOpenCodeSessionActive = false;
       foodDialog.close();
       foodRequestId = createFoodRequestId();

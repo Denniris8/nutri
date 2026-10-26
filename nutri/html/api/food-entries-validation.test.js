@@ -23,6 +23,19 @@ test('normalizes OpenCode estimated status and decimal-comma macros before valid
   assert.deepEqual(foodItemIssues(normalized), []);
 });
 
+test('preserves unresolved macros only as an invalid intermediate Open Food Facts candidate', () => {
+  const [candidate] = normalizeFoodReply({ items: [{
+    name: 'Producto envasado', macroBasis: 'per_100g', macroStatus: 'pendiente', macroSource: 'pendiente',
+    quantityGrams: null, quantityText: null,
+    macros: { energyKcal: null, proteinG: null, carbohydrateG: null, fatG: null, fiberG: null },
+  }] }).items;
+
+  assert.equal(candidate.macroSource, 'pendiente');
+  assert.equal(candidate.macroStatus, 'pendiente');
+  assert.ok(foodItemIssues(candidate).includes('macroSource'));
+  assert.ok(foodItemIssues(candidate).includes('macroStatus'));
+});
+
 test('does not coerce non-decimal macro strings into valid numbers', () => {
   const [normalized] = normalizeFoodReply({ items: [{
     name: 'Alimento', macroBasis: 'per_portion', macroStatus: 'estimado', macroSource: 'opencode_estimado',

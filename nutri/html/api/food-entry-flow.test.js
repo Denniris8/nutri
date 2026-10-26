@@ -20,10 +20,10 @@ test('registra leche y whey con cantidades del mensaje tras respuesta inválida 
     if (sql.includes("SELECT JSON_OBJECT('state',estado")) return JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-22', description, question: null, targetEntryId: null });
     if (sql.includes('SELECT session_id FROM sesiones_comidas_opencode')) return '';
     if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)')) return '';
-    if (sql.includes("SET time_zone='+00:00'; SELECT JSON_OBJECT('id',e.id")) return committed
-      ? JSON.stringify({ id: '501', fecha: '2026-10-22', createdAt: '2026-10-22T12:00:00Z', state: 'completado', description }) : '';
-    if (sql.includes("SELECT JSON_OBJECT('entryId',i.registro_comida_id")) return committed
-      ? savedItems.map((item) => JSON.stringify({ entryId: '501', ...item })).join('\n') : '';
+    if (sql.includes("SELECT 'records';")) return committed ? [
+      'records', JSON.stringify({ id: '501', fecha: '2026-10-22', createdAt: '2026-10-22T12:00:00Z', state: 'completado', description }),
+      'items', ...savedItems.map((item) => JSON.stringify({ entryId: '501', ...item })), 'clarifications',
+    ].join('\n') : 'records\nitems\nclarifications';
     if (sql.includes('COMMIT')) { committed = true; return ''; }
     return '';
   };
@@ -53,6 +53,8 @@ test('registra leche y whey con cantidades del mensaje tras respuesta inválida 
   }));
 
   assert.equal(responseBody.state, 'completado');
+  assert.ok(statements.some((sql) => sql.includes("SELECT 'records';")));
+  assert.ok(!statements.some((sql) => sql.includes('FOOD_PERSISTENCE_VERIFY_FAILED')));
   assert.equal(requests.length, 2);
   const originalContext = JSON.parse(requests[0].parts[0].text);
   assert.equal(originalContext.initialDescription, description);
@@ -77,13 +79,14 @@ test('guarda el formato completo declarado sin crear ni consultar una sesión Op
     if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return '502';
     if (sql.includes("SELECT JSON_OBJECT('state',estado")) return JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-22', description, question: null, targetEntryId: null });
     if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)')) return '';
-    if (sql.includes("SET time_zone='+00:00'; SELECT JSON_OBJECT('id',e.id")) return committed
-      ? JSON.stringify({ id: '502', fecha: '2026-10-22', createdAt: '2026-10-22T12:00:00Z', state: 'completado', description }) : '';
-    if (sql.includes("SELECT JSON_OBJECT('entryId',i.registro_comida_id")) return committed ? JSON.stringify({
+    if (sql.includes("SELECT 'records';")) return committed ? [
+      'records', JSON.stringify({ id: '502', fecha: '2026-10-22', createdAt: '2026-10-22T12:00:00Z', state: 'completado', description }),
+      'items', JSON.stringify({
       entryId: '502', itemId: '900', sourceText: '150 g de Yogur natural', name: 'Yogur natural', quantity: '150 g', quantityGrams: 150,
       basis: 'per_portion', energyKcal: 135, proteinG: 15, carbohydrateG: 9, fatG: 4, fiberG: 0,
       macroStatus: 'declarado', macroSource: 'declarado_usuario', sourceName: null, sourceUrl: null, sourceQuote: null,
-    }) : '';
+      }), 'clarifications',
+    ].join('\n') : 'records\nitems\nclarifications';
     if (sql.includes('COMMIT')) { committed = true; return ''; }
     return '';
   };
@@ -94,7 +97,7 @@ test('guarda el formato completo declarado sin crear ni consultar una sesión Op
   }));
   assert.equal(responseBody.state, 'completado');
   assert.ok(statements.some((sql) => sql.includes("'declarado_usuario'")));
-  assert.equal(statements.filter((sql) => sql.includes("SET time_zone='+00:00'; SELECT JSON_OBJECT('id',e.id")).length, 1);
+  assert.equal(statements.filter((sql) => sql.includes("SELECT 'records';")).length, 1);
 });
 
 test('reutiliza macros del alimento referenciado y los escala a la cantidad nueva', () => {

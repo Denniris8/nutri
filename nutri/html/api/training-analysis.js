@@ -85,48 +85,71 @@ async function openTrainingSession(userId, config, request) {
   return id;
 }
 
-function parseReply(parts, biometricContext, explicitWeightKg) {
+function extractExplicitSteps(description, stepContext = {}) {
+  const text = String(description || '');
+  const matches = [...text.matchAll(/\b(\d{1,3}(?:[.,]\d{3})+|\d+(?:[.,]\d+)?)\s*(mil)?\s*pasos\b/gi)];
+  if (matches.length !== 1) return { stepsCount: null, stepsDate: null };
+  const [, raw, thousands] = matches[0];
+  const amount = raw.includes('.') || raw.includes(',')
+    ? raw.replace(/[.,](?=\d{3}(?:\D|$))/g, '').replace(',', '.')
+    : raw;
+  const stepsCount = Number(amount) * (thousands ? 1000 : 1);
+  const localDate = stepContext.localDate;
+  const parsedLocalDate = typeof localDate === 'string' ? new Date(`${localDate}T00:00:00Z`) : null;
+  if (!Number.isSafeInteger(stepsCount) || stepsCount < 0 || stepsCount > 250000
+    || !/^\d{4}-\d{2}-\d{2}$/.test(localDate || '') || Number.isNaN(parsedLocalDate?.getTime())
+    || parsedLocalDate.toISOString().slice(0, 10) !== localDate) return { stepsCount: null, stepsDate: null };
+  const dateMentions = [...text.matchAll(/\b(anteayer|ayer|hoy|mañana|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{4})\b/gi)];
+  if (dateMentions.length > 1) return { stepsCount: null, stepsDate: null };
+  let day = new Date(`${localDate}T00:00:00Z`);
+  const dateMention = dateMentions[0]?.[1]?.toLowerCase();
+  if (dateMention === 'mañana') return { stepsCount: null, stepsDate: null };
+  if (dateMention === 'ayer') day.setUTCDate(day.getUTCDate() - 1);
+  else if (dateMention === 'anteayer') day.setUTCDate(day.getUTCDate() - 2);
+  else if (dateMention && dateMention !== 'hoy') {
+    const date = dateMention.includes('/') ? dateMention.split('/').reverse().map((part, index) => index === 0 ? (part.length === 2 ? `20${part}` : part) : part.padStart(2, '0')).join('-') : dateMention;
+    day = new Date(`${date}T00:00:00Z`);
+    if (Number.isNaN(day.getTime()) || day.toISOString().slice(0, 10) !== date) return { stepsCount: null, stepsDate: null };
+  }
+  const stepsDate = day.toISOString().slice(0, 10);
+  return stepsDate > localDate ? { stepsCount: null, stepsDate: null } : { stepsCount, stepsDate };
+}
+
+function parseReply(parts, biometricContext, explicitWeightKg, description = '', stepContext = {}) {
   const raw = parts.filter((part) => part.type === 'text').map((part) => part.text || '').join('\n').trim();
   const text = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   let reply;
   try { reply = JSON.parse(text); }
   catch { throw new Error('OpenCode devolvió una respuesta de entrenamiento no válida.'); }
+  const fields = ['trainingSession', 'question', 'activity', 'durationMinutes', 'met'];
   if (!reply || typeof reply !== 'object' || Array.isArray(reply)
+    || Object.keys(reply).length !== fields.length || fields.some((key) => !Object.hasOwn(reply, key))
     || typeof reply.trainingSession !== 'boolean'
-    || !(reply.question === null || typeof reply.question === 'string' && reply.question.length <= 1000)
-    || !(reply.caloriesKcal === null || Number.isFinite(reply.caloriesKcal) && reply.caloriesKcal >= 0 && reply.caloriesKcal <= 100000)) {
+    || !(reply.question === null || typeof reply.question === 'string' && reply.question.trim() && reply.question.length <= 1000)) {
     throw new Error('OpenCode devolvió datos de entrenamiento no válidos.');
   }
-  const stepsCount = reply.stepsCount ?? null;
-  const stepsDate = reply.stepsDate ?? null;
-  const parsedStepsDate = stepsDate === null ? null : new Date(`${stepsDate}T00:00:00Z`);
-  if (!(stepsCount === null || Number.isSafeInteger(stepsCount) && stepsCount >= 0 && stepsCount <= 250000)
-    || !(stepsDate === null || typeof stepsDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(stepsDate)
-      && !Number.isNaN(parsedStepsDate.getTime()) && parsedStepsDate.toISOString().slice(0, 10) === stepsDate)
-    || stepsCount === null && stepsDate !== null) throw new Error('OpenCode devolvió un total de pasos no válido.');
-  if (reply.trainingSession === false && (reply.question !== null || reply.caloriesKcal !== null
-    || ['activity', 'durationMinutes', 'weightKg', 'met', 'formula'].some((key) => reply[key] != null))) {
+  const steps = extractExplicitSteps(description, stepContext);
+  const fieldsAreNull = ['activity', 'durationMinutes', 'met'].every((key) => reply[key] === null);
+  if (reply.trainingSession === false && (reply.question !== null || !fieldsAreNull)) {
     throw new Error('OpenCode mezcló pasos diarios con una sesión de entrenamiento.');
   }
-  if (reply.trainingSession && reply.caloriesKcal !== null && (biometricContext.latestWeightStale || biometricContext.latestWeightKg == null) && explicitWeightKg == null) {
-    reply.caloriesKcal = null;
-    reply.weightKg = null;
-    reply.question = [reply.question, 'Indica tu peso actual aproximado en kg; el peso registrado no está disponible o tiene más de 60 días.'].filter(Boolean).join(' ');
-  }
-  if (reply.trainingSession && reply.caloriesKcal === null && !reply.question?.trim()) throw new Error('OpenCode no calculó calorías ni pidió una aclaración.');
-  reply.stepsCount = stepsCount;
-  reply.stepsDate = stepsDate;
-  if (reply.caloriesKcal !== null) {
-    if (explicitWeightKg != null) reply.weightKg = explicitWeightKg;
-    else if (biometricContext.latestWeightKg != null && !biometricContext.latestWeightStale) reply.weightKg = biometricContext.latestWeightKg;
-    if (typeof reply.activity !== 'string' || !reply.activity.trim() || reply.activity.length > 120
-      || !Number.isFinite(reply.durationMinutes) || reply.durationMinutes <= 0 || reply.durationMinutes > 1440
-      || !Number.isFinite(reply.weightKg) || reply.weightKg <= 0 || reply.weightKg > 350
-      || !Number.isFinite(reply.met) || reply.met <= 0 || reply.met > 30) throw new Error('OpenCode devolvió una estimación incompleta.');
-    reply.caloriesKcal = Math.round(reply.met * 3.5 * reply.weightKg / 200 * reply.durationMinutes * 10) / 10;
-    reply.formula = `${reply.met} MET × 3.5 × ${reply.weightKg} kg / 200 × ${reply.durationMinutes} min`;
-  }
-  return reply;
+  if (!reply.trainingSession) return { ...reply, ...steps, caloriesKcal: null, weightKg: null, formula: null };
+  const activity = typeof reply.activity === 'string' && reply.activity.trim() && reply.activity.length <= 120
+    && !/[\u0000-\u001f]/.test(reply.activity) ? reply.activity.trim() : null;
+  const durationMinutes = Number.isFinite(reply.durationMinutes) && reply.durationMinutes > 0 && reply.durationMinutes <= 1440 ? reply.durationMinutes : null;
+  const met = Number.isFinite(reply.met) && reply.met > 0 && reply.met <= 30 ? reply.met : null;
+  const weightKg = explicitWeightKg ?? (!biometricContext.latestWeightStale ? biometricContext.latestWeightKg : null);
+  const missingDetails = [!activity && 'la actividad', durationMinutes == null && 'la duración', met == null && 'la intensidad'].filter(Boolean);
+  const question = [reply.question || (missingDetails.length ? `Indica ${missingDetails.join(' y ')} del entrenamiento.` : null),
+    weightKg == null ? 'Indica tu peso actual aproximado en kg; el peso registrado no está disponible o tiene más de 60 días.' : null]
+    .filter(Boolean).join(' ') || null;
+  const missing = missingDetails.length > 0 || weightKg == null;
+  const caloriesKcal = missing || question ? null : Math.round(met * 3.5 * weightKg / 200 * durationMinutes * 10) / 10;
+  return {
+    trainingSession: true, question: caloriesKcal == null ? question : null,
+    activity, durationMinutes, met, weightKg, ...steps, caloriesKcal,
+    formula: caloriesKcal == null ? null : `${met} MET × 3.5 × ${weightKg} kg / 200 × ${durationMinutes} min`,
+  };
 }
 
 async function analyzeTraining({ userId, description, userWeightContext = description, biometricData, stepContext, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
@@ -163,7 +186,7 @@ async function analyzeTraining({ userId, description, userWeightContext = descri
     const weightMatches = [...String(userWeightContext || text).matchAll(/(?:peso(?:\s+actual|\s+corporal)?\s*(?:es|de|:|=)?\s*)(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\b|^\s*(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\s*$/gim)];
     const weightMatch = weightMatches.at(-1);
     const explicitWeightKg = weightMatch ? numeric(Number((weightMatch[1] || weightMatch[2]).replace(',', '.')), 20, 400) : null;
-    return { ...parseReply(result.data?.parts || [], biometricContext, explicitWeightKg), biometricContext, requestedSaveTime: savedTime.value, saveTimeStatus: savedTime.status };
+    return { ...parseReply(result.data?.parts || [], biometricContext, explicitWeightKg, text, stepContext), biometricContext, requestedSaveTime: savedTime.value, saveTimeStatus: savedTime.status };
   });
 }
 
@@ -252,4 +275,4 @@ async function generateTrainingPlan({ userId, goals, context, requestOpenCode = 
   });
 }
 
-module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, parseTrainingPlanReply, readTrainingPlanPrompt };
+module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, extractExplicitSteps, generateTrainingPlan, parseReply, parseTrainingPlanReply, readTrainingPlanPrompt };

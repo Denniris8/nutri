@@ -6,9 +6,38 @@ function extractPlanDisclosure(prompt) {
   return disclosure;
 }
 
+function validateMacroPresentation(content, macros, disclosure) {
+  const lines = content.split(/\r?\n/);
+  const labels = { proteinas_g: /prote[ií]nas/i, carbohidratos_g: /carbohidratos/i, grasas_g: /grasas/i, calorias_kcal: /calor[ií]as/i };
+  const rows = Object.entries(labels).map(([key, label]) => {
+    const matches = lines.flatMap((line, index) => {
+      const cells = line.split('|').map((cell) => cell.trim());
+      if (cells.length < 3 || !label.test(cells[1] || '')) return [];
+      return [{ index, value: cells[2] }];
+    });
+    if (matches.length !== 1) throw new Error('El plan debe presentar una sola tabla con los cuatro macros de reposo.');
+    const expected = macros[key] === null ? null : macros[key];
+    const valueText = matches[0].value;
+    const isNumeric = /^(?:\d+(?:[.,]\d+)?)\s*(?:g|kcal)?$/i.test(valueText);
+    const numericValue = isNumeric ? Number(valueText.replace(/\s*(?:g|kcal)\s*$/i, '').replace(',', '.')) : NaN;
+    if (expected === null ? !/^(?:no disponible|n\/a|null)$/i.test(valueText)
+      : !Number.isFinite(numericValue) || numericValue !== expected) {
+      throw new Error('Los macros del informe no coinciden con macros_objetivo.');
+    }
+    return matches[0].index;
+  });
+  const tableEnd = Math.max(...rows);
+  if (content.split(disclosure).length !== 2 || lines.slice(tableEnd + 1).find((line) => line.trim()) !== disclosure) {
+    throw new Error('La frase canónica debe aparecer inmediatamente después de la tabla de macros.');
+  }
+}
+
 function validatePlanSemantics(content, macros, disclosure, context) {
-  if (!['[Datos Registrados]', '[Estimaciones Calculadas]', '[Supuestos Adoptados]'].every((label) => content.toLowerCase().includes(label.toLowerCase()))
+  const sections = ['[Datos Registrados]', '[Estimaciones Calculadas]', '[Supuestos Adoptados]'];
+  const positions = sections.map((label) => content.indexOf(label));
+  if (positions.some((position) => position < 0) || positions.some((position, index) => index > 0 && position <= positions[index - 1])
     || typeof disclosure !== 'string' || !content.includes(disclosure)) throw new Error('El plan debe distinguir datos, estimaciones y supuestos e incluir la nota canónica de ajuste diario.');
+  validateMacroPresentation(content, macros, disclosure);
   if (context) {
     const section = content.match(/\[Datos Registrados\]([\s\S]*?)\[Estimaciones Calculadas\]/i)?.[1] || '';
     const missingAge = context.profile?.age == null && /\b(?:edad(?!\s+corporal)|age)\b.{0,20}\b\d{1,3}\b|\b\d{1,3}\s+años\b/i.test(section);
@@ -168,4 +197,4 @@ COMMIT;`);
   return outcome.deleted === true;
 }
 
-module.exports = { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan, validatePlanSemantics, validateTrainingPlan };
+module.exports = { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan, validateMacroPresentation, validatePlanSemantics, validateTrainingPlan };

@@ -331,8 +331,8 @@ function parseFoodReply(parts) {
 function normalizeFoodReply(reply) {
   if (!reply || typeof reply !== 'object' || !Array.isArray(reply.items)) return reply;
   const bases = { per_portion: 'per_portion', portion: 'per_portion', porcion: 'per_portion', per_100g: 'per_100g', per100g: 'per_100g', '100g': 'per_100g' };
-  const statuses = { estimado: 'estimado', estimated: 'estimado', opencode_estimado: 'estimado', opencode_estimated: 'estimado', declared: 'declarado', declarado: 'declarado', declarado_usuario: 'declarado', verified: 'declarado', verificado: 'declarado' };
-  const sources = { webfetch: 'webfetch', web: 'webfetch', internet: 'webfetch', usda: 'webfetch', declarado_usuario: 'declarado_usuario', declared: 'declarado_usuario', user: 'declarado_usuario', opencode_estimado: 'opencode_estimado', estimated: 'opencode_estimado' };
+  const statuses = { pendiente: 'pendiente', pending: 'pendiente', estimado: 'estimado', estimated: 'estimado', opencode_estimado: 'estimado', opencode_estimated: 'estimado', declared: 'declarado', declarado: 'declarado', declarado_usuario: 'declarado', verified: 'declarado', verificado: 'declarado' };
+  const sources = { pendiente: 'pendiente', pending: 'pendiente', webfetch: 'webfetch', web: 'webfetch', internet: 'webfetch', usda: 'webfetch', declarado_usuario: 'declarado_usuario', declared: 'declarado_usuario', user: 'declarado_usuario', opencode_estimado: 'opencode_estimado', estimated: 'opencode_estimado' };
   const actions = { new: 'new', nueva: 'new', append: 'append', agregar: 'append', anexar: 'append', append_to_existing: 'append', add_to_existing: 'append', update: 'update', actualizar: 'update', corregir: 'update', correction: 'update' };
   const action = actions[String(reply.action || '').toLowerCase()] || null;
   const target = reply.targetEntryId ?? reply.target_entry_id;

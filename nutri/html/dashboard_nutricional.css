@@ -297,6 +297,7 @@ button:disabled { cursor: not-allowed; color: #9ca79e; background: var(--md-sys-
 .saved-training-plan-card, .meal { position: relative; min-width: 0; border: 1px solid var(--line); border-radius: var(--shape-md); background: var(--md-sys-color-surface-container-low); }
 .saved-training-plan { min-width: 0; }
 .saved-training-plan > summary { display: grid; gap: 4px; padding: 10px 64px 10px 12px; cursor: pointer; }
+.saved-training-plan > summary > strong, .meal h3 { color: var(--accent); }
 .saved-training-plan > summary span { color: var(--muted); font-size: 13px; overflow-wrap: anywhere; }
 .saved-training-plan > summary .saved-training-plan-macros { font-size: 12px; }
 .saved-training-plan-content { padding: 0 12px 12px; color: var(--text); font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
