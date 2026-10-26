@@ -1031,6 +1031,7 @@ test('authenticated user can generate and save a training plan through the API',
   await withServer(async (sql) => {
     queries.push(sql);
     if (sql.includes('SELECT s.usuario_id')) return '27';
+    if (sql.includes("SELECT 'profile';")) return ['profile', JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null }), 'preferences', 'biometrics', '[]', 'plicometrics', '[]', 'age', JSON.stringify({ age: 32 }), 'previousPlan'].join('\n');
     if (sql.includes("SELECT JSON_OBJECT('accountName'")) return JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null });
     if (sql.includes("SELECT JSON_OBJECT('age',edad)")) return JSON.stringify({ age: 32 });
     if (sql.includes("SELECT JSON_OBJECT('age',(SELECT edad")) return JSON.stringify({
@@ -1094,6 +1095,7 @@ test('training plan save logs a sanitized MySQL error code', async () => {
   await withServer(async (sql) => {
     statements.push(sql);
     if (sql.includes('SELECT s.usuario_id')) return '27';
+    if (sql.includes("SELECT 'profile';")) return ['profile', JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null }), 'preferences', 'biometrics', '[]', 'plicometrics', '[]', 'age', JSON.stringify({ age: 32 }), 'previousPlan'].join('\n');
     if (sql.includes("SELECT JSON_OBJECT('accountName'")) return JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null });
     if (sql.includes("SELECT JSON_OBJECT('age',edad)")) return JSON.stringify({ age: 32 });
     if (sql.includes("SELECT JSON_OBJECT('age',(SELECT edad")) return JSON.stringify({

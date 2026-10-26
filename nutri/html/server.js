@@ -5,8 +5,8 @@ const { readFile } = require('node:fs/promises');
 const { spawn } = require('node:child_process');
 const { promisify } = require('node:util');
 const { createHmac, randomBytes, randomUUID, scrypt: scryptCallback, timingSafeEqual } = require('node:crypto');
-const { readGarminEmail, readPreferences, savePreferences } = require('./api/preferences.js');
-const { readAccountProfile, saveAccountProfile } = require('./api/account-profile.js');
+const { preferencesSql, readGarminEmail, readPreferences, savePreferences } = require('./api/preferences.js');
+const { accountProfileSql, readAccountProfile, saveAccountProfile } = require('./api/account-profile.js');
 const { verifyGarminAccount } = require('./api/garmin-verification.js');
 const { syncGarminTraining } = require('./api/garmin-training-sync.js');
 const { readBiometrics, saveBiometric } = require('./api/biometrics.js');
@@ -836,17 +836,26 @@ SELECT JSON_OBJECT('days',${days},'current',JSON_OBJECT(
       catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
       const traceId = randomUUID();
       try {
-        const [profile, preferences, biometricRows, plicometricRows, ageRow] = await Promise.all([
-          readAccountProfile({ userId: claims.sub, dbQuery }),
-          readPreferences({ userId: claims.sub, dbQuery }),
-          dbQuery(`SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT('measuredAt',DATE_FORMAT(medido_en,'%Y-%m-%d %H:%i:%s'),'source',fuente,'weightKg',peso_kg,'bodyAge',edad_corporal,'bodyFatPct',grasa_pct,'restingMetabolismKcal',metabolismo_basal_kcal,'visceralFat',grasa_visceral,'bmi',imc,'musclePct',musculo_pct)),JSON_ARRAY()) FROM (SELECT medido_en,fuente,peso_kg,edad_corporal,grasa_pct,metabolismo_basal_kcal,grasa_visceral,imc,musculo_pct FROM registros_biometricos WHERE usuario_id=${claims.sub} ORDER BY medido_en DESC,id DESC LIMIT 24) AS biometric_records;`),
-          dbQuery(`SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT('fecha',fecha,'tricepsMm',triceps_mm,'bicepsMm',biceps_mm,'subescapularMm',subescapular_mm,'suprailiacoMm',suprailiaco_mm,'abdominalMm',abdominal_mm,'musloAnteriorMm',muslo_anterior_mm,'pantorrillaMm',pantorrilla_mm)),JSON_ARRAY()) FROM (SELECT id,fecha,triceps_mm,biceps_mm,subescapular_mm,suprailiaco_mm,abdominal_mm,muslo_anterior_mm,pantorrilla_mm FROM registros_plicometro WHERE usuario_id=${claims.sub} ORDER BY fecha DESC,id DESC LIMIT 24) AS plicometric_records;`),
-          dbQuery(`SELECT JSON_OBJECT('age',edad) FROM usuarios WHERE id=${claims.sub} LIMIT 1;`),
-        ]);
-        const previousPlanRow = await dbQuery(`SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ'),'goals',objetivos,'content',contenido,'macros',JSON_OBJECT('proteinas_g',objetivo_proteinas_g,'carbohidratos_g',objetivo_carbohidratos_g,'grasas_g',objetivo_grasas_g,'calorias_kcal',objetivo_calorias_kcal)) FROM planes_entrenamiento WHERE usuario_id=${claims.sub} ORDER BY creado_en DESC,id DESC LIMIT 1;`);
+        const labels = new Set(['profile', 'preferences', 'biometrics', 'plicometrics', 'age', 'previousPlan']);
+        const contextRows = await dbQuery(`SELECT 'profile'; ${accountProfileSql(claims.sub)}
+SELECT 'preferences'; ${preferencesSql(claims.sub)}
+SELECT 'biometrics'; SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT('measuredAt',DATE_FORMAT(medido_en,'%Y-%m-%d %H:%i:%s'),'source',fuente,'weightKg',peso_kg,'bodyAge',edad_corporal,'bodyFatPct',grasa_pct,'restingMetabolismKcal',metabolismo_basal_kcal,'visceralFat',grasa_visceral,'bmi',imc,'musclePct',musculo_pct)),JSON_ARRAY()) FROM (SELECT medido_en,fuente,peso_kg,edad_corporal,grasa_pct,metabolismo_basal_kcal,grasa_visceral,imc,musculo_pct FROM registros_biometricos WHERE usuario_id=${claims.sub} ORDER BY medido_en DESC,id DESC LIMIT 24) AS biometric_records;
+SELECT 'plicometrics'; SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT('fecha',fecha,'tricepsMm',triceps_mm,'bicepsMm',biceps_mm,'subescapularMm',subescapular_mm,'suprailiacoMm',suprailiaco_mm,'abdominalMm',abdominal_mm,'musloAnteriorMm',muslo_anterior_mm,'pantorrillaMm',pantorrilla_mm)),JSON_ARRAY()) FROM (SELECT id,fecha,triceps_mm,biceps_mm,subescapular_mm,suprailiaco_mm,abdominal_mm,muslo_anterior_mm,pantorrilla_mm FROM registros_plicometro WHERE usuario_id=${claims.sub} ORDER BY fecha DESC,id DESC LIMIT 24) AS plicometric_records;
+SELECT 'age'; SELECT JSON_OBJECT('age',edad) FROM usuarios WHERE id=${claims.sub} LIMIT 1;
+SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ'),'goals',objetivos,'content',contenido,'macros',JSON_OBJECT('proteinas_g',objetivo_proteinas_g,'carbohidratos_g',objetivo_carbohidratos_g,'grasas_g',objetivo_grasas_g,'calorias_kcal',objetivo_calorias_kcal)) FROM planes_entrenamiento WHERE usuario_id=${claims.sub} ORDER BY creado_en DESC,id DESC LIMIT 1;`);
+        const contextData = new Map();
+        let currentLabel = '';
+        for (const row of contextRows.split(/\r?\n/).filter(Boolean)) {
+          if (labels.has(row)) currentLabel = row;
+          else if (currentLabel) { contextData.set(currentLabel, row); currentLabel = ''; }
+        }
+        const profile = contextData.has('profile') ? JSON.parse(contextData.get('profile')) : null;
+        const preferences = contextData.has('preferences') ? JSON.parse(contextData.get('preferences')) : null;
+        const ageRow = contextData.get('age');
         const age = ageRow ? JSON.parse(ageRow).age : null;
-        const biometrics = JSON.parse(biometricRows || '[]');
-        const plicometrics = JSON.parse(plicometricRows || '[]');
+        const biometrics = JSON.parse(contextData.get('biometrics') || '[]');
+        const plicometrics = JSON.parse(contextData.get('plicometrics') || '[]');
+        const previousPlanRow = contextData.get('previousPlan');
         const context = {
           profile: { age, sex: profile?.sex ?? null, heightCm: profile?.heightCm ?? null, restingMetabolismKcal: profile?.restingMetabolismKcal ?? null, restingMetabolismSource: profile?.restingMetabolismSource ?? null },
           preferences: preferences ? {

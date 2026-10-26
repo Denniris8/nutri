@@ -25,9 +25,19 @@ const notificationsFilter = document.querySelector('#notificationsFilter');
 let notificationItems = [];
 const sessionExpiredMessage = 'La sesión expiró. Inicia sesión de nuevo.';
 let redirectingToLogin = false;
+let progressDataCache = null;
+let progressCacheRevision = 0;
+const progressRequests = new Map();
 const fetchWithSessionRedirect = window.fetch.bind(window);
 window.fetch = async (...args) => {
   const response = await fetchWithSessionRedirect(...args);
+  const request = args[0];
+  const method = String(args[1]?.method || request?.method || 'GET').toUpperCase();
+  if (response.ok && method !== 'GET' && String(request?.url || request).includes('/api/')) {
+    progressDataCache = null;
+    progressCacheRevision += 1;
+    progressRequests.clear();
+  }
   if (response.status === 401 && location.pathname !== '/login.html' && !redirectingToLogin) {
     const message = await response.clone().json().then((data) => data.error).catch(() => '');
     if (message === sessionExpiredMessage) {
@@ -257,8 +267,7 @@ function renderSavedTrainingPlans() {
         const result = await response.json();
         if (!response.ok) throw new Error(result.error || 'No se pudo activar el plan.');
         notifyApp(`${startDate.value > localDate() ? 'Vigencia del plan programada' : 'Plan activo'} desde ${startDate.value}.`, 'success');
-        await loadSavedTrainingPlans();
-        await loadTrainingEntries(dayInput?.value || localDate());
+        await Promise.all([loadSavedTrainingPlans(), loadTrainingEntries(dayInput?.value || localDate())]);
       } catch (error) {
         notifyApp(error.message || 'No se pudo activar el plan.', 'error');
       } finally { activate.disabled = false; }
@@ -1998,13 +2007,29 @@ async function loadProgressNutrition() {
   if (!metrics || !summary) return;
   const days = Number(document.querySelector('#rangeSelect')?.value || 30);
   const end = document.querySelector('#daySelect')?.value || localDate();
+  const cacheKey = `${days}:${end}`;
   nutritionPanel.setAttribute('aria-busy', 'true');
   summaryPanel.setAttribute('aria-busy', 'true');
   try {
-    const response = await fetch(`/api/progress/nutrition?dias=${days}&hasta=${encodeURIComponent(end)}`, { credentials: 'same-origin' });
-    if (!response.ok) throw new Error();
+    let data = progressDataCache?.key === cacheKey && Date.now() - progressDataCache.savedAt < 30000 ? progressDataCache.data : null;
+    if (!data) {
+      let pending = progressRequests.get(cacheKey);
+      if (!pending) {
+        const revision = progressCacheRevision;
+        const request = fetch(`/api/progress/nutrition?dias=${days}&hasta=${encodeURIComponent(end)}`, { credentials: 'same-origin' })
+          .then(async (response) => { if (!response.ok) throw new Error(); return response.json(); })
+          .then((result) => {
+            if (revision === progressCacheRevision) progressDataCache = { key: cacheKey, data: result, savedAt: Date.now() };
+            return result;
+          })
+          .finally(() => { if (progressRequests.get(cacheKey) === request) progressRequests.delete(cacheKey); });
+        progressRequests.set(cacheKey, request);
+        pending = request;
+      }
+      data = await pending;
+    }
     if (loadId !== progressLoadId) return;
-    const { nutrition, body, activity, plicometric } = await response.json();
+    const { nutrition, body, activity, plicometric } = data;
     const format = new Intl.NumberFormat('es-MX', { maximumFractionDigits: 1 });
     const labels = [['Calorías', 'kcal', 'kcal', 'var(--kcal)'], ['Proteína', 'protein', 'g', 'var(--protein)'], ['Carbohidratos', 'carbs', 'g', 'var(--carbs)'], ['Grasas', 'fat', 'g', 'var(--fat)']];
     metrics.replaceChildren(...labels.map(([label, key, unit]) => {

@@ -177,18 +177,28 @@ async function readFoodEntries({ userId, fecha, dbQuery, textSql }) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) {
     throw Object.assign(new Error('La fecha no es válida.'), { status: 400 });
   }
-  const rows = await dbQuery(`SET time_zone='+00:00'; SELECT JSON_OBJECT('id',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d'),'createdAt',DATE_FORMAT(e.creado_en,'%Y-%m-%dT%H:%i:%sZ'),'state',e.estado,'description',e.descripcion_original) FROM registros_comidas e WHERE e.usuario_id=${userId} AND e.fecha_consumo=${textSql(date)} AND e.estado<>'borrador_chat' ORDER BY e.creado_en,e.id LIMIT 100;`);
-  const records = rows ? rows.split(/\r?\n/).map((row) => ({ ...JSON.parse(row), items: [], clarifications: [] })) : [];
+  const rows = await dbQuery(`SET time_zone='+00:00';
+SELECT 'records';
+SELECT JSON_OBJECT('id',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d'),'createdAt',DATE_FORMAT(e.creado_en,'%Y-%m-%dT%H:%i:%sZ'),'state',e.estado,'description',e.descripcion_original) FROM registros_comidas e WHERE e.usuario_id=${userId} AND e.fecha_consumo=${textSql(date)} AND e.estado<>'borrador_chat' ORDER BY e.creado_en,e.id LIMIT 100;
+SELECT 'items';
+SELECT JSON_OBJECT('entryId',i.registro_comida_id,'itemId',CAST(i.id AS CHAR),'sourceText',i.fragmento_original,'name',i.nombre_alimento,'quantity',i.cantidad_texto,'quantityGrams',i.cantidad_g,'basis',i.base_macros,'energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g,'fiberG',i.fibra_g,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.fecha_consumo=${textSql(date)} ORDER BY e.creado_en,e.id,i.id;
+SELECT 'clarifications';
+SELECT JSON_OBJECT('entryId',i.registro_comida_id,'content',i.contenido) FROM registros_comida_interacciones i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.fecha_consumo=${textSql(date)} AND e.estado='completado' AND i.role='user' AND i.id>(SELECT MIN(firstTurn.id) FROM registros_comida_interacciones firstTurn WHERE firstTurn.registro_comida_id=i.registro_comida_id AND firstTurn.role='user') ORDER BY i.registro_comida_id,i.id;`);
+  const sections = { records: [], items: [], clarifications: [] };
+  let section = '';
+  for (const row of rows.split(/\r?\n/).filter(Boolean)) {
+    if (Object.hasOwn(sections, row)) section = row;
+    else if (section) sections[section].push(row);
+  }
+  const records = sections.records.map((row) => ({ ...JSON.parse(row), items: [], clarifications: [] }));
   if (!records.length) return records;
-  const items = await dbQuery(`SELECT JSON_OBJECT('entryId',i.registro_comida_id,'itemId',CAST(i.id AS CHAR),'sourceText',i.fragmento_original,'name',i.nombre_alimento,'quantity',i.cantidad_texto,'quantityGrams',i.cantidad_g,'basis',i.base_macros,'energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g,'fiberG',i.fibra_g,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.fecha_consumo=${textSql(date)} ORDER BY e.creado_en,e.id,i.id;`);
   const byEntry = new Map(records.map((record) => [String(record.id), record.items]));
-  if (items) for (const row of items.split(/\r?\n/)) {
+  for (const row of sections.items) {
     const item = JSON.parse(row);
     byEntry.get(String(item.entryId))?.push(item);
   }
-  const clarifications = await dbQuery(`SELECT JSON_OBJECT('entryId',i.registro_comida_id,'content',i.contenido) FROM registros_comida_interacciones i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.fecha_consumo=${textSql(date)} AND e.estado='completado' AND i.role='user' AND i.id>(SELECT MIN(firstTurn.id) FROM registros_comida_interacciones firstTurn WHERE firstTurn.registro_comida_id=i.registro_comida_id AND firstTurn.role='user') ORDER BY i.registro_comida_id,i.id;`);
   const byClarificationEntry = new Map(records.map((record) => [String(record.id), record.clarifications]));
-  if (clarifications) for (const row of clarifications.split(/\r?\n/)) {
+  for (const row of sections.clarifications) {
     const clarification = JSON.parse(row);
     byClarificationEntry.get(String(clarification.entryId))?.push(clarification.content);
   }

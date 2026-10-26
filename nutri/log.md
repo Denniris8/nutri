@@ -564,3 +564,6 @@
 - 2026-10-26 — Preparación del commit solicitado: VERSION incrementada de 0.1.23 a 0.1.24; el dashboard sigue leyendo la versión desde ese archivo. No se ejecutaron pruebas.
 - 2026-10-26 — Sesiones OpenCode: retirada la limpieza automática periódica por inactividad; se conserva la limpieza tras confirmar la salida o completar el flujo. Actualizada la documentación y el cache-busting. No se ejecutaron pruebas.
 - 2026-10-26 — Preparación del commit solicitado: VERSION incrementada de 0.1.24 a 0.1.25; el dashboard sigue leyendo la versión desde ese archivo. No se ejecutaron pruebas.
+- 2026-10-26 — Planes de entrenamiento: la consulta del plan previo ahora corre en paralelo con el resto del contexto de generación; al activar un plan, la lista y los entrenamientos se recargan en paralelo. No se ejecutaron pruebas.
+- 2026-10-26 — Optimización de lecturas: alimentos del día comparten una invocación MySQL manteniendo el orden de cada conjunto; progreso evita peticiones duplicadas y reutiliza datos 30 s, invalidándolos tras escrituras API exitosas; el contexto de plan se consulta en una sola invocación MySQL usando las consultas fuente de perfil y preferencias. No se ejecutaron pruebas.
+- 2026-10-26 — Preparación del commit solicitado: VERSION incrementada de 0.1.25 a 0.1.26; el dashboard sigue leyendo la versión desde ese archivo. No se ejecutaron pruebas.
