@@ -558,3 +558,5 @@
 - 2026-10-25 00:25 CST — Preparación del commit solicitado: VERSION incrementada de 0.1.18 a 0.1.19; el dashboard sigue leyendo la versión desde ese archivo. La prueba focalizada del flujo de plan pasó (1/1).
 - 2026-10-26 — Screen Wake Lock: se vuelve a solicitar al iniciar el análisis de alimentos, entrenamiento o generación de plan, además de mantener la protección existente del dashboard visible. No se ejecutaron pruebas.
 - 2026-10-26 — Preparación del commit solicitado: VERSION incrementada de 0.1.21 a 0.1.22; el dashboard sigue leyendo la versión desde ese archivo. No se ejecutaron pruebas.
+- 2026-10-26 — Screen Wake Lock: limitado a los modales de registrar comidas, registrar entrenamiento y crear plan; se libera al cerrar los tres y se renueva al volver a la pestaña si alguno sigue abierto. No se ejecutaron pruebas.
+- 2026-10-26 — Preparación del commit solicitado: VERSION incrementada de 0.1.22 a 0.1.23; el dashboard sigue leyendo la versión desde ese archivo. No se ejecutaron pruebas.

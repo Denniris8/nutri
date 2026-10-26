@@ -40,19 +40,28 @@ window.fetch = async (...args) => {
 
 let screenWakeLock = null;
 let screenWakeLockRequest = null;
+const analysisDialogs = ['#registerFoodDialog', '#trainingModal', '#trainingPlanDialog'];
+function hasAnalysisDialogOpen() { return analysisDialogs.some((selector) => document.querySelector(selector)?.open); }
 async function requestScreenWakeLock() {
-  if (!document.querySelector('#todayView') || !navigator.wakeLock || document.visibilityState !== 'visible' || screenWakeLock || screenWakeLockRequest) return;
+  if (!hasAnalysisDialogOpen() || !navigator.wakeLock || document.visibilityState !== 'visible' || screenWakeLock || screenWakeLockRequest) return;
   screenWakeLockRequest = navigator.wakeLock.request('screen').then((sentinel) => {
     screenWakeLock = sentinel;
     sentinel.addEventListener('release', () => { if (screenWakeLock === sentinel) screenWakeLock = null; }, { once: true });
-    if (document.visibilityState !== 'visible') void sentinel.release();
+    if (document.visibilityState !== 'visible' || !hasAnalysisDialogOpen()) void sentinel.release();
   }).catch(() => {}).finally(() => { screenWakeLockRequest = null; });
   await screenWakeLockRequest;
 }
 if (document.querySelector('#todayView')) {
-  void requestScreenWakeLock();
+  const wakeLockObserver = new MutationObserver(() => {
+    if (hasAnalysisDialogOpen()) void requestScreenWakeLock();
+    else if (screenWakeLock) { void screenWakeLock.release(); screenWakeLock = null; }
+  });
+  for (const selector of analysisDialogs) {
+    const dialog = document.querySelector(selector);
+    if (dialog) wakeLockObserver.observe(dialog, { attributes: true, attributeFilter: ['open'] });
+  }
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') void requestScreenWakeLock();
+    if (document.visibilityState === 'visible' && hasAnalysisDialogOpen()) void requestScreenWakeLock();
   });
 }
 
