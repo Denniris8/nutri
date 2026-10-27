@@ -16,27 +16,34 @@ LOG=/tmp/cloudflared.log
 notify() {
   url="$1"
   if [ -n "$TOKEN" ]; then
-    curl -s -X POST "https://api.telegram.org/bot${TOKEN}/setChatMenuButton" \
+    curl -fsS --connect-timeout 10 --max-time 30 -X POST "https://api.telegram.org/bot${TOKEN}/setChatMenuButton" \
       -H "Content-Type: application/json" \
-      -d "{\"menu_button\":{\"type\":\"web_app\",\"text\":\"Dashboard\",\"web_app\":{\"url\":\"${url}/dashboard_nutricional.html\"}}}" >/dev/null
+      -d "{\"menu_button\":{\"type\":\"web_app\",\"text\":\"Dashboard\",\"web_app\":{\"url\":\"${url}/dashboard_nutricional.html\"}}}" >/dev/null || \
+      echo "[tunnel] Error actualizando el botón global de Telegram."
   fi
   if [ -z "$TOKEN" ] || [ -z "$IDS" ]; then
     echo "[tunnel] Aviso: falta BOT_TOKEN o NOTIFY_CHAT_IDS; no notifico por Telegram."
     return 0
   fi
   for id in $(echo "$IDS" | tr ',' ' '); do
-    menu_result=$(curl -sS -X POST "https://api.telegram.org/bot${TOKEN}/setChatMenuButton" \
+    numeric_id=${id#-}
+    case "$numeric_id" in
+      ''|*[!0-9]*) echo "[tunnel] ID de chat inválido; se omite."; continue ;;
+    esac
+    menu_result=$(curl -fsS --connect-timeout 10 --max-time 30 -X POST "https://api.telegram.org/bot${TOKEN}/setChatMenuButton" \
       -H "Content-Type: application/json" \
       -d "{\"chat_id\":${id},\"menu_button\":{\"type\":\"web_app\",\"text\":\"Dashboard\",\"web_app\":{\"url\":\"${url}/dashboard_nutricional.html\"}}}")
     case "$menu_result" in
       *'"ok":true'*) echo "[tunnel] Botón Dashboard actualizado para $id" ;;
       *) echo "[tunnel] Error actualizando botón para $id: $menu_result" ;;
     esac
-    curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
+    send_result=$(curl -fsS --connect-timeout 10 --max-time 30 -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
       -d chat_id="$id" \
-       --data-urlencode "text=${url}" >/dev/null && \
-      echo "[tunnel] URL enviada por Telegram a $id" || \
-      echo "[tunnel] Fallo enviando mensaje a $id"
+       --data-urlencode "text=${url}")
+    case "$send_result" in
+      *'"ok":true'*) echo "[tunnel] URL enviada por Telegram a $id" ;;
+      *) echo "[tunnel] Fallo enviando mensaje a $id." ;;
+    esac
   done
 }
 
@@ -70,7 +77,7 @@ monitor_tunnel() {
   while kill -0 "$CF_PID" 2>/dev/null; do
     sleep 900
     kill -0 "$CF_PID" 2>/dev/null || return
-    status=$(curl -sS --connect-timeout 10 --max-time 30 -o /dev/null -w '%{http_code}' "$URL/" 2>/dev/null)
+    status=$(curl -sS --connect-timeout 10 --max-time 30 -o /dev/null -w '%{http_code}' "$URL/login.html" 2>/dev/null)
     curl_status=$?
     [ "$curl_status" -eq 0 ] || status=000
     if [ "$status" != 200 ]; then
