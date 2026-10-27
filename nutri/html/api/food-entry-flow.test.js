@@ -256,7 +256,7 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
         : `${packaged} es una etiqueta ficticia de prueba, no una marca real; ${generic} es generico y esta cocido.`;
       return milkWheyCase
         ? 'Confirmo únicamente 250 ml de leche Alpura Pro y 31 g de proteína Optimum Nutrition Gold Standard 100% Whey (ON). No tengo variante, sabor ni etiqueta; consulta una fuente coincidente o marca los valores típicos como estimados.'
-        : overnightCase ? `Confirmo 100 g de arroz blanco cocido en casa y 50 g de huevo cocido en casa, ambos genéricos sin marca ni envase. ${previousDayCase ? 'Confirmo el día nutricional anterior.' : 'Elijo el día nutricional actual.'} Si no hay fuente compatible, usa macros típicos marcados como estimados.`
+        : overnightCase ? `Confirmo 100 g de arroz blanco cocido en casa y 50 g de huevo cocido en casa, ambos genéricos sin marca ni envase. ${previousDayCase ? 'Confirmo el día anterior.' : 'Elijo hoy.'} Si no hay fuente compatible, usa macros típicos marcados como estimados.`
         : `Es ${meal}: 100 g de ${packaged} con la etiqueta sintetica indicada y 100 g de ${generic} cocido${index === 5 ? ' y 50 g de huevo cocido' : ''}. No tengo otros datos; estima solo lo que sea razonable y marca la estimacion.`;
     };
     const interactions = [], modelContexts = [];
@@ -329,9 +329,9 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
           userId, dbQuery, textSql, json: (_response, status, body) => { result = { status, ...body }; }, requestOpenCode });
         assert.equal(result.status, 200, `${meal}: servidor rechaza la hora temprana`);
         assert.equal(result.state, 'requiere_aclaracion', `${meal}: debió pedir la elección del día`);
-        assert.match(result.question, /¿Esta comida pertenece al día nutricional seleccionado/);
+        assert.match(result.question, /¿A qué día nutricional asigno esta comida/);
         assert.equal(realMessageCalls, callsBeforeDayChoice, `${meal}: no debe consultar OpenCode antes de elegir el día`);
-        await saveFoodEntry({ response: {}, data: { fecha: '2026-10-22', descripcion: previousDayCase ? 'anterior' : 'actual', requestId, timezone: 'UTC' },
+        await saveFoodEntry({ response: {}, data: { fecha: '2026-10-22', descripcion: previousDayCase ? 'día anterior' : 'hoy', requestId, timezone: 'UTC' },
           userId, dbQuery, textSql, json: (_response, status, body) => { result = { status, ...body }; }, requestOpenCode });
         assert.equal(result.state, 'requiere_aclaracion', `${meal}: la elección del día debe conservar el borrador`);
         assert.equal(realMessageCalls, callsBeforeDayChoice, `${meal}: OpenCode debe esperar la confirmación de fecha`);

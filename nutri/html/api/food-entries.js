@@ -90,7 +90,7 @@ function formatFoodTime(hour, minute) {
   return `${hour % 12 || 12}:${String(minute).padStart(2, '0')} ${hour < 12 ? 'a. m.' : 'p. m.'}`;
 }
 
-function isEarlyNutritionHour(minutes) { return Number.isInteger(minutes) && minutes >= 60 && minutes < 240; }
+function isEarlyNutritionHour(minutes) { return Number.isInteger(minutes) && minutes >= 0 && minutes < 240; }
 
 function previousDate(date) {
   const value = new Date(`${date}T00:00:00Z`);
@@ -125,8 +125,12 @@ function chatFoodDate(text, timezone) {
   return unique[0] || null;
 }
 
+function isEarlyFoodDayChoiceQuestion(question) {
+  return /¿(?:Esta comida pertenece al día nutricional seleccionado(?:\s*\([^)]*\))? o al anterior(?:\s*\([^)]*\))?|A qué día nutricional asigno esta comida)\?/i.test(String(question || ''));
+}
+
 function earlyFoodDayChoice(question, answer) {
-  if (!/¿Esta comida pertenece al día nutricional seleccionado(?:\s*\([^)]*\))? o al anterior(?:\s*\([^)]*\))?\?/i.test(String(question || ''))) return null;
+  if (!isEarlyFoodDayChoiceQuestion(question)) return null;
   const text = String(answer).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   if (/\b(anterior|dia anterior|ayer)\b/.test(text)) return 'anterior';
   if (/\b(actual|seleccionado|este dia|hoy)\b/.test(text)) return 'actual';
@@ -267,7 +271,7 @@ async function foodDayChoiceAnswered({ entryId, dbQuery }) {
   const rows = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`);
   const messages = rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [];
   return messages.some((message, index) => {
-    if (message.role !== 'assistant' || !/¿Esta comida pertenece al día nutricional seleccionado/i.test(message.content)) return false;
+    if (message.role !== 'assistant' || !isEarlyFoodDayChoiceQuestion(message.content)) return false;
     const answer = messages.slice(index + 1).find((next) => next.role === 'user');
     return Boolean(answer && earlyFoodDayChoice(message.content, answer.content));
   });
@@ -582,7 +586,7 @@ SELECT LAST_INSERT_ID();`);
     await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'user', content: entry.descripcion });
     const genericEstimateApproved = hasGenericEstimateApproval(await readFoodConversationMessages({ entryId, dbQuery }), saved.question, entry.descripcion);
     const asksTimeChoice = /Hay varias comidas a esa hora|¿Te refieres a las .*a\. m\. o p\. m\./i.test(saved.question || '');
-    const asksDayChoice = /¿Esta comida pertenece al día nutricional seleccionado(?:\s*\([^)]*\))? o al anterior(?:\s*\([^)]*\))?\?/i.test(saved.question || '');
+    const asksDayChoice = isEarlyFoodDayChoiceQuestion(saved.question);
     const asksPreviousDayConfirmation = /¿La guardo en el día nutricional anterior .*11:59:59 p\. m\./i.test(saved.question || '');
     const priorUserText = asksTimeChoice || asksDayChoice || asksPreviousDayConfirmation ? await readFoodUserText({ entryId, dbQuery }) : '';
     const parsedFoodReference = parseFoodReferenceTime(entry.descripcion) || parseFoodReferenceTime(saved.description);
@@ -660,7 +664,7 @@ SELECT LAST_INSERT_ID();`);
       return;
     }
     if (needsNutritionDayChoice && !asksDayChoice && !asksPreviousDayConfirmation) {
-      const question = `¿Esta comida pertenece al día nutricional seleccionado (${entry.fecha}) o al anterior (${previousDate(entry.fecha)})? La hora local actual o la hora de consumo indicada está entre la 1:00 y antes de las 4:00 a. m.; los macros se sumarán al día nutricional que elijas. Responde “actual” o “anterior”.`;
+      const question = `¿A qué día nutricional asigno esta comida?\n• Hoy: ${entry.fecha}\n• Día anterior: ${previousDate(entry.fecha)}\n\nElige “hoy” o “día anterior”. Los macros se sumarán a la fecha que selecciones.`;
       await returnDayClarification(question);
       return;
     }

@@ -27,6 +27,9 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-27 09:32 CST — Versión PATCH incrementada a 0.1.36 antes del commit; dashboard sincronizado desde `VERSION`.
+- 2026-10-27 09:15 CST — Comidas de madrugada: la aclaración ahora muestra claramente las fechas “Hoy” y “Día anterior” y acepta “hoy”/“día anterior”; se conserva compatibilidad con borradores que usen la pregunta anterior. No se ejecutaron pruebas.
+- 2026-10-27 09:15 CST — Comidas de madrugada: ventana de confirmación ampliada de 01:00–03:59 a 00:00–03:59; actualizado el mensaje de aclaración. No se ejecutaron pruebas.
 - 2026-10-26 23:50 CST — Versión PATCH incrementada a 0.1.35 antes del commit; dashboard sincronizado desde `VERSION`.
 - 2026-10-26 21:34 CST — Registro de comidas: si la conexión falla tras enviar, conserva el mensaje visible y permite reintentarlo con el mismo `requestId` y contenido; no vuelve a copiarlo al campo. No se ejecutaron pruebas.
 - 2026-10-26 21:34 CST — Versión PATCH incrementada a 0.1.34 antes del commit; dashboard sincronizado desde `VERSION`.
