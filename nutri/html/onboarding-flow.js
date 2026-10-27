@@ -1817,8 +1817,12 @@ window.addEventListener('popstate', () => {
   else if (trainingPlanDialog.open) void cancelTrainingPlan();
 });
 foodDialog?.addEventListener('close', () => foodTrigger?.focus());
-foodForm?.addEventListener('submit', async (event) => {
+foodForm?.addEventListener('submit', (event) => {
   event.preventDefault();
+  void submitFoodMessage();
+});
+
+async function submitFoodMessage(retry = null) {
   if (foodPending || !foodSessionReady) return;
   await calendarDayReady;
   const feedback = document.querySelector('#foodEntryFeedback');
@@ -1826,16 +1830,17 @@ foodForm?.addEventListener('submit', async (event) => {
   const foodLoading = document.querySelector('#foodLoading');
   const registerFoodButton = document.querySelector('#registerFoodButton');
   const description = document.querySelector('#foodDescription');
-  const text = description.value.trim();
+  retry?.button.remove();
+  const text = retry?.text || description.value.trim();
   if (!text) return;
   const audioReady = unlockFoodAudio();
-  const body = { requestId: foodRequestId, fecha: foodDate(), descripcion: text, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, targetEntryId: foodTargetEntryId, suppressNotification: true };
+  const body = retry?.body || { requestId: foodRequestId, fecha: foodDate(), descripcion: text, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, targetEntryId: foodTargetEntryId, suppressNotification: true };
   let draftRestored = false;
   let resultNotificationHandled = false;
   foodPending = true;
   description.value = '';
   description.disabled = true;
-  const pendingMessage = appendFoodChatMessage('user', text);
+  const pendingMessage = retry?.pendingMessage || appendFoodChatMessage('user', text);
   feedback.textContent = 'Enviando la descripción…';
   foodLoading.hidden = false;
   void requestScreenWakeLock();
@@ -1904,7 +1909,12 @@ foodForm?.addEventListener('submit', async (event) => {
     }
   } catch (error) {
     if (pendingMessage.isConnected) {
-      pendingMessage.remove();
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'button-muted food-chat-retry';
+      button.textContent = 'Reintentar envío';
+      button.addEventListener('click', () => void submitFoodMessage({ body, text, pendingMessage, button }));
+      pendingMessage.append(button);
     }
     feedback.textContent = error.message || 'No se pudo guardar la comida.';
     if (!draftRestored) appendFoodChatMessage('error', feedback.textContent);
@@ -1919,7 +1929,7 @@ foodForm?.addEventListener('submit', async (event) => {
     description.disabled = false;
     saveButton.disabled = false;
   }
-});
+}
 
 async function decideTerms(decision) {
   const message = document.querySelector('#termsError');

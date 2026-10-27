@@ -27,6 +27,8 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-26 23:50 CST — Versión PATCH incrementada a 0.1.35 antes del commit; dashboard sincronizado desde `VERSION`.
+- 2026-10-26 21:34 CST — Registro de comidas: si la conexión falla tras enviar, conserva el mensaje visible y permite reintentarlo con el mismo `requestId` y contenido; no vuelve a copiarlo al campo. No se ejecutaron pruebas.
 - 2026-10-26 21:34 CST — Versión PATCH incrementada a 0.1.34 antes del commit; dashboard sincronizado desde `VERSION`.
 - 2026-10-26 21:33 CST — `AGENTS.md`: retirado el comportamiento de limpieza del input de las reglas; ese comportamiento pertenece a la implementación JavaScript. `./pull` no pudo iniciar Nutri porque el puerto 8080 está ocupado. No se ejecutaron pruebas.
 - 2026-10-26 21:12 CST — `AGENTS.md`: precisadas las reglas de sincronización, autorización, pruebas, trazabilidad, mensajes enviados y commit; retiradas las instrucciones específicas de Telegram. No se ejecutaron pruebas.
