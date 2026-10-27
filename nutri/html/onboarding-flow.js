@@ -1556,7 +1556,6 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     if (analysis.saveTimeStatus === 'ambiguous') {
       appendTrainingMessage('assistant', 'Indica la hora con a. m./p. m. o en formato de 24 horas para guardarla correctamente.');
       trainingFeedback.textContent = 'Aclara la hora de guardado; todavía no se guardó el entrenamiento.';
-      trainingInput.value = description;
       await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'requiere_respuesta', 'Entrenamiento: falta la hora', 'Indica la hora para guardar la sesión.', null);
       return;
     }
@@ -1604,7 +1603,6 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'guardado', 'Entrenamiento guardado', trainingFeedback.textContent);
   } catch (error) {
     if (generation !== trainingOpenGeneration) return;
-    trainingInput.value = description;
     appendTrainingMessage('error', error.message || 'No se pudo analizar el entrenamiento.');
     trainingFeedback.textContent = error.message || 'No se pudo analizar el entrenamiento.';
     notifyApp(trainingFeedback.textContent, 'error');
@@ -1864,7 +1862,6 @@ foodForm?.addEventListener('submit', async (event) => {
         draftRestored = Boolean(draft?.messages?.some((message) => message.role === 'assistant' && message.content.startsWith('[ERROR_REGISTRO] ')));
       } else {
         pendingMessage.remove();
-        description.value = text;
       }
       throw new Error(result.error || result.message || 'No se pudo guardar la comida.');
     }
@@ -1908,7 +1905,6 @@ foodForm?.addEventListener('submit', async (event) => {
   } catch (error) {
     if (pendingMessage.isConnected) {
       pendingMessage.remove();
-      description.value = text;
     }
     feedback.textContent = error.message || 'No se pudo guardar la comida.';
     if (!draftRestored) appendFoodChatMessage('error', feedback.textContent);

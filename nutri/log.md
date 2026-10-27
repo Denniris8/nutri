@@ -27,6 +27,8 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-26 21:12 CST — Registro de comida y entrenamiento: el mensaje enviado permanece fuera del campo de texto aunque requiera aclaración o falle el análisis; continúa visible en el chat para conservar el contexto. Versión PATCH incrementada a 0.1.33 para el commit. No se ejecutaron pruebas.
+
 - 2026-10-26 15:16 CST — Versión PATCH incrementada a 0.1.32 antes del commit; el dashboard sincroniza la versión desde `VERSION`.
 - 2026-10-26 15:15 CST — Progreso nutricional: las consultas de nutrición, biometría, actividad y plicómetro se agrupan en una invocación MySQL, conservando el JSON; CSS/JS con `v` reciben caché inmutable y HTML/assets sin versión siguen en `no-store`. Actualizadas las pruebas, no ejecutadas.
 - 2026-10-26 — Servidor Nutri: restaurado `127.0.0.1` como HOST predeterminado a petición del usuario; el Compose mantiene `HOST=0.0.0.0` explícito. No se ejecutaron pruebas ni se recreó el contenedor.
