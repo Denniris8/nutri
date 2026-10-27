@@ -2,6 +2,7 @@ services:
   mysql:
     image: mysql:8.4
     restart: unless-stopped
+    networks: [database]
     environment:
       MYSQL_DATABASE: ${DB_NAME:?Define DB_NAME en .env}
       MYSQL_USER: ${DB_USER:?Define DB_USER en .env}
@@ -34,6 +35,7 @@ services:
       DB_PORT: 3306
       PORT: 8080
       HOST: 0.0.0.0
+      NODE_ENV: production
       OPENCODE_BASE_URL: http://opencode:4096
       OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?Define OPENCODE_SERVER_PASSWORD en .env}
       OPENCODE_AUTO_START: "false"
@@ -41,7 +43,8 @@ services:
       - .:/app:ro
       - ../garmin-connect-mcp:/app/garmin-connect-mcp:ro
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
+    networks: [default, database]
     depends_on:
       mysql:
         condition: service_healthy
@@ -80,4 +83,6 @@ volumes:
   opencode_state:
 
 networks:
+  database:
+    internal: true
   opencode_egress:

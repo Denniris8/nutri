@@ -1,6 +1,6 @@
-const cacheName = 'nutri-app-shell-v1';
+const cacheName = 'nutri-app-shell-v2';
 const appShell = new Set([
-  '/', '/login.html', '/dashboard_nutricional.html', '/preferencias.html', '/terminos.html',
+  '/login.html',
   '/dashboard_nutricional.css', '/notifications.css', '/help-popups.css', '/onboarding-flow.js',
   '/manifest.webmanifest', '/pwa-icon.svg', '/pwa-icon-192.png', '/pwa-icon-512.png',
 ]);
