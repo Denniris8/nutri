@@ -27,6 +27,8 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-27 10:18 CST — Versión PATCH incrementada a 0.1.38 antes del commit; el dashboard obtiene la versión desde `VERSION`.
+- 2026-10-27 10:17 CST — La sección “Planes creados” inicia colapsada; conserva su apertura al navegar a los planes guardados después de crear uno.
 - 2026-10-27 10:09 CST — Versión PATCH incrementada a 0.1.37 antes del commit; el dashboard obtiene la versión desde `VERSION`.
 - 2026-10-27 10:05 CST — Seguridad: el service worker deja de cachear vistas autenticadas y renueva su caché para purgar las copias anteriores; MySQL queda aislado en una red interna compartida solo con Nutri; el puerto 8080 se limita a loopback y Nutri activa modo producción para cookies Secure y HSTS.
 - 2026-10-27 09:32 CST — Versión PATCH incrementada a 0.1.36 antes del commit; dashboard sincronizado desde `VERSION`.
