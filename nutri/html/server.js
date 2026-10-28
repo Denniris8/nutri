@@ -14,7 +14,9 @@ const { readPlicometrics, savePlicometric } = require('./api/plicometrics.js');
 const { clearFoodChatHistory, deleteFoodEntry, getFoodEntryProgress, readFoodEntries, readPendingFoodDraft, saveFoodEntry } = require('./api/food-entries.js');
 const { calendarDayRange, readCalendarTimezone } = require('./api/calendar-day.js');
 const { deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError } = require('./api/opencode-food.js');
-const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, readTrainingPlanPrompt } = require('./api/training-analysis.js');
+const { buildChefNutritionContext, deleteChefSession, sendChefMessage } = require('./api/chef-chat.js');
+const { recordApplicationError } = require('./api/application-errors.js');
+const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, getTrainingProgress, readTrainingPlanPrompt, reportTrainingProgress } = require('./api/training-analysis.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
 const { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
 const { addNotification, markNotificationRead, notificationInsertSql, readNotifications, resolveNotificationsSql } = require('./api/notifications.js');
@@ -257,9 +259,9 @@ SELECT attempts,GREATEST(1,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(3),DATE_ADD(window
   function allowAttempt(request, response, type) {
     const key = `${type}:${request.socket.remoteAddress || 'unknown'}`;
     const time = Date.now();
-    const maxAttempts = loginLimit;
-    const messageType = ['food-entry', 'training-analysis', 'training-plan'].includes(type);
-    const windowMs = messageType ? foodEntryWindow : limitWindow;
+    const maxAttempts = type === 'chef-chat' ? 20 : loginLimit;
+    const messageType = ['food-entry', 'training-analysis', 'training-plan', 'chef-chat'].includes(type);
+    const windowMs = type === 'chef-chat' ? 2 * 60 * 1000 : messageType ? foodEntryWindow : limitWindow;
     for (const [entry, state] of attempts) if (state.until <= time) attempts.delete(entry);
     const state = attempts.get(key) || { count: 0, until: time + windowMs };
     if (state.count >= maxAttempts) {
@@ -267,7 +269,7 @@ SELECT attempts,GREATEST(1,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(3),DATE_ADD(window
       response.setHeader('Retry-After', retryAfter);
       const retryMinutes = Math.max(1, Math.ceil(retryAfter / 60));
       const message = messageType
-        ? `Límite de 10 mensajes alcanzado. Podrás enviar más en ${retryMinutes} minuto${retryMinutes === 1 ? '' : 's'}.`
+        ? `Límite de ${maxAttempts} mensajes alcanzado. Podrás enviar más en ${retryMinutes} minuto${retryMinutes === 1 ? '' : 's'}.`
         : 'Demasiados intentos. Intenta más tarde.';
       authError(response, 429, message);
       return false;
@@ -784,6 +786,87 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
       return;
     }
 
+    if (pathname === '/api/chef-chat') {
+      if (request.method !== 'POST') { response.writeHead(405, { Allow: 'POST' }).end(); return; }
+      if (!sameOrigin(request)) { authError(response, 403, 'Solicitud no permitida.'); return; }
+      if (!allowAttempt(request, response, 'chef-chat')) return;
+      let claims;
+      try { claims = await authenticated(request); }
+      catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
+      if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
+      let data;
+      try { data = await bodyJson(request); }
+      catch (error) { authError(response, error.status || 400, 'Mensaje no válido.'); return; }
+      if (typeof data.message !== 'string' || !data.message.trim() || data.message.length > 2000) {
+        authError(response, 400, 'Escribe un mensaje de hasta 2000 caracteres.'); return;
+      }
+      const timezone = request.headers['x-client-timezone'] || 'UTC';
+      let date = data.date;
+      if (!date) {
+        try { date = localCalendarDate(timezone); }
+        catch { authError(response, 400, 'No se pudo determinar la fecha local.'); return; }
+      }
+      if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)
+        || Number.isNaN(Date.parse(`${date}T00:00:00Z`)) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) {
+        authError(response, 400, 'La fecha seleccionada no es válida.'); return;
+      }
+      let stage = 'nutrition_context';
+      try {
+        const [foodRecords, allTrainingRecords, preferences, activePlan] = await Promise.all([
+          readFoodEntries({ userId: claims.sub, fecha: date, dbQuery, textSql }),
+          readTrainingEntries({ userId: claims.sub, dbQuery, date, timezone }),
+          readPreferences({ userId: claims.sub, dbQuery }),
+          readTrainingPlanForDate({ userId: claims.sub, date, dbQuery, textSql }),
+        ]);
+        const trainingRecords = visibleTrainingEntries(allTrainingRecords, preferences);
+        const nutritionContext = buildChefNutritionContext({ date, foodRecords, trainingRecords, exercise: calculateTrainingEnergy(trainingRecords), activePlan });
+        stage = 'open_code_response';
+        const answer = await sendChefMessage({ userId: claims.sub, message: data.message, nutritionContext, requestOpenCode: openCodeRequest });
+        json(response, 200, { answer });
+      } catch (error) {
+        const traceId = randomUUID();
+        const status = error.status || 502;
+        if (status >= 500) {
+          try { await recordApplicationError({ dbQuery, textSql, userId: claims.sub, traceId, area: 'chef-opencode', event: 'chef_reply_failed', stage, action: 'POST /api/chef-chat', method: 'POST', route: '/api/chef-chat', httpStatus: status, error, description: 'No se pudo generar una respuesta de Chef.' }); }
+          catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
+          json(response, status, { error: 'No se pudo generar una respuesta de Chef.', traceId });
+        } else authError(response, status, error.message || 'Mensaje no válido.');
+      }
+      return;
+    }
+
+    if (pathname === '/api/chef-chat/session') {
+      if (request.method !== 'DELETE') { response.writeHead(405, { Allow: 'DELETE' }).end(); return; }
+      if (!sameOrigin(request)) { authError(response, 403, 'Solicitud no permitida.'); return; }
+      if (!allowAttempt(request, response, 'chef-chat-session')) return;
+      let claims;
+      try { claims = await authenticated(request); }
+      catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
+      if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
+      try { json(response, 200, { ok: true, deleted: await deleteChefSession({ userId: claims.sub, requestOpenCode: openCodeRequest }) }); }
+      catch (error) {
+        const traceId = randomUUID();
+        try { await recordApplicationError({ dbQuery, textSql, userId: claims.sub, traceId, area: 'chef-opencode', event: 'chef_session_cleanup_failed', stage: 'cleanup', action: 'DELETE /api/chef-chat/session', method: 'DELETE', route: '/api/chef-chat/session', httpStatus: 503, error, description: 'No se pudo cerrar la sesión temporal de Chef.' }); }
+        catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
+        json(response, 503, { error: 'No se pudo cerrar la sesión de Chef.', traceId });
+      }
+      return;
+    }
+
+    if (pathname === '/api/training-progress') {
+      if (request.method !== 'GET') { response.writeHead(405, { Allow: 'GET' }).end(); return; }
+      let claims;
+      try { claims = await authenticated(request); }
+      catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
+      if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
+      const progressId = new URL(request.url, 'http://localhost').searchParams.get('progressId') || '';
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(progressId)) {
+        authError(response, 400, 'Solicitud de progreso no válida.'); return;
+      }
+      json(response, 200, { progress: getTrainingProgress(claims.sub, progressId) });
+      return;
+    }
+
     if (pathname === '/api/training-analysis') {
       if (request.method !== 'POST') { response.writeHead(405, { Allow: 'POST' }).end(); return; }
       if (!sameOrigin(request)) { authError(response, 403, 'Solicitud no permitida.'); return; }
@@ -795,16 +878,21 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
       let data;
       try { data = await bodyJson(request); }
       catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
+      if (data.progressId != null && (typeof data.progressId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(data.progressId))) {
+        authError(response, 400, 'Solicitud de progreso no válida.'); return;
+      }
       if (data.userMessages != null && (!Array.isArray(data.userMessages) || data.userMessages.length > 20 || data.userMessages.some((message) => typeof message !== 'string' || message.length > 1200))) {
         authError(response, 400, 'El historial del entrenamiento no es válido.'); return;
       }
       const traceId = randomUUID();
       let stage = 'analysis';
       try {
+        reportTrainingProgress(claims.sub, data.progressId, 'analysis_context_started');
         const timezone = request.headers['x-client-timezone'] || 'UTC';
         const localDate = localCalendarDate(timezone);
         const biometricData = JSON.parse(await dbQuery(`SELECT JSON_OBJECT('latestBiometric',(SELECT JSON_OBJECT('weightKg',peso_kg,'measuredAt',DATE_FORMAT(medido_en,'%Y-%m-%d %H:%i:%s'),'source',fuente) FROM registros_biometricos WHERE usuario_id=${claims.sub} ORDER BY medido_en DESC,id DESC LIMIT 1),'registeredHeightCm',(SELECT estatura_cm FROM usuarios WHERE id=${claims.sub} LIMIT 1));`));
         const latest = biometricData.latestBiometric;
+        reportTrainingProgress(claims.sub, data.progressId, 'analysis_context_ready');
         const measuredDate = typeof latest?.measuredAt === 'string' ? latest.measuredAt.slice(0, 10) : '';
         const ageDays = (Date.parse(`${localDate}T00:00:00Z`) - Date.parse(`${measuredDate}T00:00:00Z`)) / 86400000;
         const latestWeightStale = latest?.weightKg != null && (!Number.isFinite(ageDays) || ageDays < 0 || ageDays > 60);
@@ -814,18 +902,20 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
           weightMeasuredAt: latest?.measuredAt,
           weightSource: latest?.source,
           registeredHeightCm: biometricData.registeredHeightCm,
-        }, requestOpenCode: openCodeRequest });
+        }, progressId: data.progressId, requestOpenCode: openCodeRequest });
         if (analysis.stepsCount !== null) {
           stage = 'steps';
           analysis.stepsSaved = await saveDailySteps({
             userId: claims.sub, date: analysis.stepsDate || localDate, localDate,
             stepsCount: analysis.stepsCount, source: 'manual', dbQuery, textSql,
           });
+          reportTrainingProgress(claims.sub, data.progressId, 'analysis_steps_saved');
         }
         if (analysis.trainingSession && analysis.caloriesKcal == null && analysis.question) {
           await dbQuery(`${resolveNotificationsSql({ userId: claims.sub, category: 'entrenamiento', textSql })};`);
           if (data.suppressNotification !== true) await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'requiere_respuesta', title: 'Entrenamiento: falta una aclaración', message: analysis.question, dbQuery, textSql });
         }
+        reportTrainingProgress(claims.sub, data.progressId, 'analysis_complete');
         json(response, 200, { analysis });
       }
       catch (error) {
@@ -848,8 +938,12 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
       let data;
       try { data = await bodyJson(request); }
       catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
+      if (data.progressId != null && (typeof data.progressId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(data.progressId))) {
+        authError(response, 400, 'Solicitud de progreso no válida.'); return;
+      }
       const traceId = randomUUID();
       try {
+        reportTrainingProgress(claims.sub, data.progressId, 'plan_context_started');
         const labels = new Set(['profile', 'preferences', 'biometrics', 'plicometrics', 'age', 'previousPlan']);
         const contextRows = await dbQuery(`SELECT 'profile'; ${accountProfileSql(claims.sub)}
 SELECT 'preferences'; ${preferencesSql(claims.sub)}
@@ -885,7 +979,9 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
           plicometricRecords: plicometrics,
           previousTrainingPlanSummary: summarizeTrainingPlan(previousPlanRow ? JSON.parse(previousPlanRow) : null),
         };
-        const generated = await generateTrainingPlan({ userId: claims.sub, goals: data && typeof data === 'object' ? data.goals : undefined, context, requestOpenCode: openCodeRequest });
+        reportTrainingProgress(claims.sub, data.progressId, 'plan_context_ready');
+        const generated = await generateTrainingPlan({ userId: claims.sub, goals: data && typeof data === 'object' ? data.goals : undefined, context, progressId: data.progressId, requestOpenCode: openCodeRequest });
+        reportTrainingProgress(claims.sub, data.progressId, 'plan_complete');
         if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'generado', title: 'Plan generado, aún sin guardar', message: 'Tu plan está listo para revisar y guardar.', dbQuery, textSql }); } catch {}
         json(response, 200, generated);
       } catch (error) {

@@ -200,6 +200,49 @@ function appendTrainingPlanMessage(role, content) {
   bubble.append(speaker, text);
   planChatMessages.append(bubble);
   planChatMessages.parentElement.scrollTop = planChatMessages.parentElement.scrollHeight;
+  return bubble;
+}
+
+function startTrainingProgress(progressId, appendMessage) {
+  const bubble = appendMessage('assistant', 'Conectando con el análisis…');
+  const text = bubble.querySelector('.food-chat-text');
+  let currentLabel = 'Conectando con el análisis…';
+  let currentAt = Date.now();
+  const completed = [];
+  let active = true;
+  let finalized = false;
+  const finish = (resultLabel) => {
+    if (finalized) return;
+    completed.push(`✓ ${currentLabel} (${((Date.now() - currentAt) / 1000).toFixed(1)} s)`);
+    if (resultLabel) completed.push(`✓ ${resultLabel}`);
+    text.textContent = completed.join('\n');
+    finalized = true;
+  };
+  const polling = (async () => {
+    while (active) {
+      try {
+        const response = await fetch(`/api/training-progress?progressId=${encodeURIComponent(progressId)}`, { credentials: 'same-origin' });
+        const { progress } = response.ok ? await response.json() : {};
+        if (progress?.label && progress.label !== currentLabel && text.isConnected) {
+          const now = Date.now();
+          completed.push(`✓ ${currentLabel} (${((now - currentAt) / 1000).toFixed(1)} s)`);
+          currentLabel = progress.label;
+          currentAt = now;
+          text.textContent = [...completed, `• ${currentLabel}`].join('\n');
+          bubble.parentElement.scrollTop = bubble.parentElement.scrollHeight;
+        }
+      } catch {}
+      if (active) await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+  })();
+  return {
+    finish,
+    async stop(resultLabel) {
+      active = false;
+      await polling;
+      finish(resultLabel);
+    },
+  };
 }
 
 function renderSavedTrainingPlans() {
@@ -383,11 +426,13 @@ trainingPlanSendButton?.addEventListener('click', async () => {
   trainingPlanTrigger.setAttribute('aria-busy', 'true');
   trainingPlanTriggerLoading.hidden = false;
   appendTrainingPlanMessage('user', goals);
+  const progressId = createFoodRequestId();
+  const progress = startTrainingProgress(progressId, appendTrainingPlanMessage);
   notifyApp('Generando tu plan de entrenamiento.', 'info');
   try {
     const response = await fetch('/api/training-plan', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goals, suppressNotification: true }),
+      body: JSON.stringify({ goals, progressId, suppressNotification: true }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo generar el plan.');
@@ -418,6 +463,7 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     notifyApp(error.message || 'No se pudo generar el plan.', 'error');
     await notifyResultIfHidden(trainingPlanDialog, 'plan', 'error', 'No se pudo generar el plan', 'Revisa el modal de plan e inténtalo de nuevo.');
   } finally {
+    await progress.stop(generatedTrainingPlan ? 'Plan generado; listo para revisar y guardar.' : 'Generación finalizada.');
     planLoading.hidden = true;
     trainingPlanTrigger.setAttribute('aria-busy', 'false');
     trainingPlanTriggerLoading.hidden = true;
@@ -1519,12 +1565,14 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
   trainingInput.disabled = true;
   trainingAnalyzeButton.disabled = true;
   appendTrainingMessage('user', description);
+  const progressId = createFoodRequestId();
+  const progress = startTrainingProgress(progressId, appendTrainingMessage);
   trainingInput.value = '';
   notifyApp('Analizando el entrenamiento.', 'info');
   try {
     const response = await fetch('/api/training-analysis', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone },
-      body: JSON.stringify({ description, userMessages: [...trainingChatMessages.querySelectorAll('.food-chat-message[data-role="user"] .food-chat-text')].map((node) => node.textContent.trim()).slice(-20), suppressNotification: true }),
+      body: JSON.stringify({ description, progressId, userMessages: [...trainingChatMessages.querySelectorAll('.food-chat-message[data-role="user"] .food-chat-text')].map((node) => node.textContent.trim()).slice(-20), suppressNotification: true }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo analizar el entrenamiento.');
@@ -1608,6 +1656,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     notifyApp(trainingFeedback.textContent, 'error');
     await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'error', 'No se pudo completar el entrenamiento', trainingFeedback.textContent);
   } finally {
+    await progress.stop(trainingOpenCodeSessionActive ? 'Análisis terminado.' : 'Análisis finalizado.');
     trainingSaving = false;
     trainingPending = false;
     trainingTrigger.setAttribute('aria-busy', 'false');
@@ -1623,8 +1672,90 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
 
 const foodDialog = document.querySelector('#registerFoodDialog');
 const chefDialog = document.querySelector('#chefDialog');
-document.querySelector('#chefButton')?.addEventListener('click', () => chefDialog?.showModal());
-document.querySelector('#closeChefDialog')?.addEventListener('click', () => chefDialog?.close());
+const chefForm = document.querySelector('#chefForm');
+const chefMessages = document.querySelector('#chefChatMessages');
+const chefMessage = document.querySelector('#chefMessage');
+const chefSendButton = document.querySelector('#chefSendButton');
+const chefLoading = document.querySelector('#chefLoading');
+const chefFeedback = document.querySelector('#chefFeedback');
+let chefPending = false;
+let chefSessionActive = false;
+
+document.querySelector('#chefButton')?.addEventListener('click', () => {
+  chefDialog?.showModal();
+});
+
+function appendChefMessage(role, content) {
+  const bubble = document.createElement('div');
+  bubble.className = 'food-chat-message';
+  bubble.dataset.role = role;
+  const speaker = document.createElement('span');
+  speaker.className = 'food-chat-speaker';
+  speaker.textContent = role === 'user' ? 'Tú' : role === 'error' ? 'Error' : 'Chef';
+  const text = document.createElement('p');
+  text.className = 'food-chat-text';
+  text.textContent = content;
+  bubble.append(speaker, text);
+  chefMessages.append(bubble);
+  chefMessages.parentElement.scrollTop = chefMessages.parentElement.scrollHeight;
+}
+
+async function closeChefChat() {
+  if (chefPending) { notifyApp('Espera a que Chef termine de responder antes de salir.', 'info'); return; }
+  const hasConversation = chefSessionActive || Boolean(chefMessages.querySelector('[data-role="user"]'));
+  if (hasConversation && !await confirmFlowExit('La conversación temporal de Chef se eliminará. ¿Quieres salir?')) return;
+  try {
+    if (hasConversation) {
+      const response = await fetch('/api/chef-chat/session', { method: 'DELETE', credentials: 'same-origin' });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || 'No se pudo cerrar el chat Chef.');
+    }
+    chefSessionActive = false;
+    chefFeedback.textContent = '';
+    chefMessages.replaceChildren();
+    appendChefMessage('assistant', 'Para ayudarte con las calorías y macros que te quedan, dime qué ingredientes tienes y cuántas comidas quieres preparar para el resto del día.');
+    chefDialog.close();
+    if (hasConversation) notifyApp('Sesión temporal de Chef eliminada.', 'success');
+  } catch (error) { notifyApp(error.message || 'No se pudo cerrar el chat Chef.', 'error'); }
+}
+
+document.querySelector('#closeChefDialog')?.addEventListener('click', closeChefChat);
+chefDialog?.addEventListener('cancel', (event) => { event.preventDefault(); void closeChefChat(); });
+chefDialog?.addEventListener('click', (event) => { if (event.target === chefDialog) void closeChefChat(); });
+chefDialog?.addEventListener('close', () => document.querySelector('#chefButton')?.focus());
+chefForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const message = chefMessage.value.trim();
+  if (!message || chefPending) return;
+  appendChefMessage('user', message);
+  chefMessage.value = '';
+  chefPending = chefSessionActive = true;
+  chefMessage.disabled = chefSendButton.disabled = true;
+  chefLoading.hidden = false;
+  chefFeedback.textContent = 'Enviando mensaje a Chef…';
+  chefDialog.setAttribute('aria-busy', 'true');
+  notifyApp('Consultando a Chef.', 'info');
+  try {
+    const response = await fetch('/api/chef-chat', {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone },
+      body: JSON.stringify({ message, date: dayInput?.value || localDate() }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'No se pudo generar una respuesta de Chef.');
+    appendChefMessage('assistant', result.answer);
+    chefFeedback.textContent = '';
+  } catch (error) {
+    appendChefMessage('error', error.message || 'No se pudo generar una respuesta de Chef.');
+    chefFeedback.textContent = error.message || 'No se pudo generar una respuesta de Chef.';
+    notifyApp(chefFeedback.textContent, 'error');
+  } finally {
+    chefPending = false;
+    chefMessage.disabled = chefSendButton.disabled = false;
+    chefLoading.hidden = true;
+    chefDialog.removeAttribute('aria-busy');
+    if (chefDialog.open) chefMessage.focus();
+  }
+});
 const foodForm = document.querySelector('#registerFoodForm');
 let foodTrigger;
 let foodEntryDate = '';

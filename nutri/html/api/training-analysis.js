@@ -10,8 +10,42 @@ const permissions = [{ permission: '*', pattern: '*', action: 'deny' }];
 const sessions = new Map();
 const pendingPlanSessions = new Map();
 const locks = new Map();
+const progress = new Map();
 const trainingPromptPath = path.resolve(__dirname, '../../comportamiento-sesion-entrenamientos.md');
 const trainingPlanPromptPath = path.resolve(__dirname, '../../comportamiento-sesion-plan.md');
+
+function reportTrainingProgress(userId, progressId, event) {
+  if (!progressId) return;
+  const labels = {
+    analysis_context_started: 'Consultando peso y estatura registrados…',
+    analysis_context_ready: 'Datos biométricos listos; preparando el análisis…',
+    analysis_config: 'Leyendo las reglas de análisis…',
+    analysis_session: 'Abriendo o reutilizando sesión de OpenCode…',
+    analysis_sent: 'Enviando entrenamiento para análisis…',
+    analysis_received: 'Respuesta recibida; validando actividad e intensidad…',
+    analysis_steps_saved: 'Pasos diarios guardados por separado.',
+    analysis_complete: 'Análisis completo; calculando el guardado…',
+    plan_context_started: 'Consultando perfil, preferencias y mediciones…',
+    plan_context_ready: 'Contexto reunido; preparando la generación del plan…',
+    plan_config: 'Leyendo las reglas del plan…',
+    plan_session: 'Preparando sesión de OpenCode…',
+    plan_sent: 'Enviando objetivos y contexto para generar el plan…',
+    plan_received: 'Plan recibido; validando contenido y metas…',
+    plan_complete: 'Plan generado; listo para revisar y guardar.',
+  };
+  const label = labels[event];
+  if (!label) return;
+  const key = `${userId}:${progressId}`;
+  progress.set(key, { label, updatedAt: Date.now() });
+  if (progress.size > 500) progress.delete(progress.keys().next().value);
+}
+
+function getTrainingProgress(userId, progressId) {
+  const key = `${userId}:${progressId}`;
+  const current = progress.get(key);
+  if (current && Date.now() - current.updatedAt > 15 * 60 * 1000) progress.delete(key);
+  return progress.get(key) || null;
+}
 
 async function readTrainingPrompt() {
   let document;
@@ -152,7 +186,7 @@ function parseReply(parts, biometricContext, explicitWeightKg, description = '',
   };
 }
 
-async function analyzeTraining({ userId, description, userWeightContext = description, biometricData, stepContext, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
+async function analyzeTraining({ userId, description, userWeightContext = description, biometricData, stepContext, progressId, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
   const id = String(userId);
   const text = typeof description === 'string' ? description.trim() : '';
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta autenticada no válida.'), { status: 400 });
@@ -170,10 +204,13 @@ async function analyzeTraining({ userId, description, userWeightContext = descri
   };
   const savedTime = parseTrainingSavedTime(text);
   return withUserLock(id, async () => {
+    reportTrainingProgress(id, progressId, 'analysis_config');
     const config = await readConfig();
     const systemPrompt = await readTrainingPrompt();
+    reportTrainingProgress(id, progressId, 'analysis_session');
     const sessionId = await openTrainingSession(id, config, requestOpenCode);
     const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
+    reportTrainingProgress(id, progressId, 'analysis_sent');
     const result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
       system: systemPrompt,
       tools: {},
@@ -183,6 +220,7 @@ async function analyzeTraining({ userId, description, userWeightContext = descri
       parts: [{ type: 'text', text: JSON.stringify({ description: text, biometricContext, stepContext }) }],
     }, config.requestTimeoutMs);
     if (result.status < 200 || result.status >= 300) throw new Error('OpenCode no pudo analizar el entrenamiento.');
+    reportTrainingProgress(id, progressId, 'analysis_received');
     const weightMatches = [...String(userWeightContext || text).matchAll(/(?:peso(?:\s+actual|\s+corporal)?\s*(?:es|de|:|=)?\s*)(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\b|^\s*(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\s*$/gim)];
     const weightMatch = weightMatches.at(-1);
     const explicitWeightKg = weightMatch ? numeric(Number((weightMatch[1] || weightMatch[2]).replace(',', '.')), 20, 400) : null;
@@ -219,13 +257,14 @@ async function deleteTrainingPlanSession({ userId, runId, requestOpenCode = open
   return withUserLock(id, () => closePendingPlanSession(id, requestOpenCode, runId));
 }
 
-async function generateTrainingPlan({ userId, goals, context, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
+async function generateTrainingPlan({ userId, goals, context, progressId, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
   const id = String(userId);
   const text = typeof goals === 'string' ? goals.trim() : '';
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta autenticada no válida.'), { status: 400 });
   if (!text || text.length > 2000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(text)) {
     throw Object.assign(new Error('Describe tus objetivos (máximo 2000 caracteres).'), { status: 400 });
   }
+  reportTrainingProgress(id, progressId, 'plan_config');
   const config = await readConfig();
   const systemPrompt = await readTrainingPlanPrompt();
   const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
@@ -233,6 +272,7 @@ async function generateTrainingPlan({ userId, goals, context, requestOpenCode = 
   return withUserLock(id, async () => {
     await closePendingPlanSession(id, requestOpenCode);
     let created;
+    reportTrainingProgress(id, progressId, 'plan_session');
     try {
       created = await requestOpenCode('POST', '/session', {
         title: 'Plan de entrenamiento',
@@ -250,6 +290,7 @@ async function generateTrainingPlan({ userId, goals, context, requestOpenCode = 
     }
     let retained = false;
     try {
+      reportTrainingProgress(id, progressId, 'plan_sent');
       const result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
         system: systemPrompt,
         tools: {},
@@ -259,6 +300,7 @@ async function generateTrainingPlan({ userId, goals, context, requestOpenCode = 
         parts: [{ type: 'text', text: JSON.stringify({ goals: text, context }) }],
       }, config.requestTimeoutMs);
       if (result.status < 200 || result.status >= 300) throw new Error('OpenCode no pudo generar el plan.');
+      reportTrainingProgress(id, progressId, 'plan_received');
       const plan = parseTrainingPlanReply(result.data?.parts || [], systemPrompt, context);
       const runId = randomUUID();
       pendingPlanSessions.set(id, { sessionId, runId });
@@ -275,4 +317,4 @@ async function generateTrainingPlan({ userId, goals, context, requestOpenCode = 
   });
 }
 
-module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, extractExplicitSteps, generateTrainingPlan, parseReply, parseTrainingPlanReply, readTrainingPlanPrompt };
+module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, extractExplicitSteps, generateTrainingPlan, getTrainingProgress, parseReply, parseTrainingPlanReply, readTrainingPlanPrompt, reportTrainingProgress };

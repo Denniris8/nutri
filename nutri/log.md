@@ -620,3 +620,15 @@
 - 2026-10-28 14:13 CST — Progreso del chat de comidas: conserva las etapas completadas y muestra duración observada de cada una para localizar esperas; documentado en el flujo canónico.
 - 2026-10-28 14:17 CST — Chat de comidas: la lista de etapas y sus tiempos permanece tras respuesta, aclaración o error; añade un estado final y no se persiste en el historial de conversación.
 - 2026-10-28 14:46 CST — Preparación del commit solicitado mediante `git`: VERSION incrementada de 0.1.39 a 0.1.40; el dashboard lee la versión desde ese archivo. No se ejecutaron pruebas.
+- 2026-10-28 14:53 CST — Entrenamiento y plan: el chat muestra las etapas reales del backend y tiempos observados durante la consulta biométrica, el contexto, OpenCode y validación; progreso efímero autenticado. Prueba añadida, no ejecutada.
+- 2026-10-28 14:54 CST — Chat de entrenamiento y planes: coloca la lista de etapas inmediatamente detrás de la respuesta del asistente y la conserva al finalizar.
+- 2026-10-28 14:55 CST — Orden del chat: progreso de entrenamiento/plan permanece antes del resultado; la respuesta final del asistente queda como último mensaje.
+- 2026-10-28 15:02 CST — Orden del chat de entrenamiento/plan: renovado el cache-busting de `onboarding-flow.js` para que el navegador cargue la versión donde el resultado final queda después de las etapas.
+- 2026-10-28 15:08 CST — Chef habilitado como chat autenticado con prompt canónico leído en cada mensaje, sesión OpenCode temporal por usuario sin herramientas y limpieza al salir; respuesta textual segura. Pruebas añadidas, no ejecutadas.
+- 2026-10-28 15:13 CST — Chef: consulta para cada turno el saldo real del día seleccionado (plan vigente, comidas completadas y ejercicio aplicable); pide ingredientes y número de comidas, propone recetas con macros estimados y advierte posibles excedentes. Sin consumo registrado o con macros incompletos no inventa saldo. Pruebas añadidas, no ejecutadas.
+- 2026-10-28 15:14 CST — Modal Chef: añadido texto breve sobre su función, el día nutricional seleccionado y el carácter estimado de las macros de recetas.
+- 2026-10-28 15:15 CST — Chef: al abrir el chat pide ingredientes disponibles y número de comidas para el resto del día; sincronizado el mensaje al reiniciar y renovada la caché del script.
+- 2026-10-28 15:18 CST — Chef: limpia el campo de entrada al enviar el mensaje, antes de esperar la respuesta; renovada la caché del script.
+- 2026-10-28 15:25 CST — Chef: límite de 20 mensajes del usuario por sesión aplicado en servidor; estado sincronizado al abrir el modal, restantes visibles y envío bloqueado al agotarse. Cerrar la sesión reinicia el conteo; añadidas pruebas, no ejecutadas.
+- 2026-10-28 15:27 CST — Corrección del límite de Chef: eliminado el tope de 20 mensajes por sesión; el limitador de frecuencia ahora permite 20 solicitudes cada 2 minutos por IP. La entrada de 15:25 queda reemplazada por esta configuración.
+- 2026-10-28 15:28 CST — Versión incrementada de 0.1.40 a 0.1.41 para preparar el commit solicitado. Límite de Chef: 20 solicitudes cada 2 minutos por IP. No se ejecutaron pruebas.

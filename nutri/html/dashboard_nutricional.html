@@ -442,19 +442,21 @@
       <div><h2 id="chefDialogTitle">Chef</h2></div>
       <button id="closeChefDialog" class="icon-close" type="button" aria-label="Cerrar chat Chef">×</button>
     </header>
-    <div class="more-form-body">
-      <div class="form-hints"><p class="hint">El comportamiento del chat se definirá después.</p></div>
-      <div class="food-chat-thread" aria-label="Conversación con Chef">
-        <div class="food-chat-messages" aria-live="polite">
-          <div class="food-chat-message" data-role="assistant"><span class="food-chat-speaker">Chef</span><p class="food-chat-text">El chat estará disponible próximamente.</p></div>
+    <form id="chefForm" class="more-form-body">
+      <div class="form-hints"><p class="hint">Chef te ayuda a planear recetas con los ingredientes que tienes y las calorías y macros que te quedan en el día seleccionado. Las macros de las recetas son estimaciones.</p></div>
+      <div id="chefChatThread" class="food-chat-thread" aria-label="Conversación con Chef">
+        <div id="chefChatMessages" class="food-chat-messages" aria-live="polite">
+          <div class="food-chat-message" data-role="assistant"><span class="food-chat-speaker">Chef</span><p class="food-chat-text">Para ayudarte con las calorías y macros que te quedan, dime qué ingredientes tienes y cuántas comidas quieres preparar para el resto del día.</p></div>
         </div>
+        <p id="chefLoading" class="food-loading" role="status" aria-live="polite" hidden><span class="assistant-thinking" aria-hidden="true"></span>Chef está preparando una respuesta…</p>
       </div>
       <label for="chefMessage">Mensaje</label>
-      <textarea id="chefMessage" class="food-chat-input" rows="4" autocomplete="off" placeholder="Escribe tu mensaje…" disabled></textarea>
+      <textarea id="chefMessage" name="message" class="food-chat-input" rows="4" autocomplete="off" maxlength="2000" placeholder="Escribe tu mensaje…" required></textarea>
+      <p id="chefFeedback" role="status" aria-live="polite"></p>
       <div class="action-plan-dialog-actions">
-        <button type="button" disabled>Enviar</button>
+        <button id="chefSendButton" type="submit">Enviar</button>
       </div>
-    </div>
+    </form>
   </dialog>
 
   <dialog id="trainingPlanDialog" class="more-form-dialog" aria-labelledby="trainingPlanDialogTitle">
@@ -589,6 +591,6 @@
   </dialog>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
   <script src="/pwa-register.js" defer></script>
-  <script src="/onboarding-flow.js?v=food-progress" defer></script>
+  <script src="/onboarding-flow.js?v=chef-rate-limit" defer></script>
 </body>
 </html>

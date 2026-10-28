@@ -1,11 +1,17 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { extractExplicitSteps, parseReply } = require('./training-analysis.js');
+const { extractExplicitSteps, getTrainingProgress, parseReply, reportTrainingProgress } = require('./training-analysis.js');
 
 const context = { latestWeightKg: 70, latestWeightStale: false };
 const reply = (overrides = {}) => [{ type: 'text', text: JSON.stringify({
   trainingSession: true, question: null, activity: 'Correr', durationMinutes: 30, met: 7, ...overrides,
 }) }];
+
+test('training progress is scoped to the authenticated user and progress id', () => {
+  reportTrainingProgress('27', 'training-progress-test', 'analysis_sent');
+  assert.equal(getTrainingProgress('27', 'training-progress-test').label, 'Enviando entrenamiento para análisis…');
+  assert.equal(getTrainingProgress('28', 'training-progress-test'), null);
+});
 
 test('calories are calculated from MET, duration and server-selected weight', () => {
   const result = parseReply(reply(), context, null, 'Corrí 30 minutos', { localDate: '2026-10-26', timezone: 'UTC' });
