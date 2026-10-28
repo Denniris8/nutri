@@ -1,5 +1,5 @@
 # AGENTS
-0 - Antes de editar archivos, ejecuta `./pull` desde la raíz `proyecto nutri`. Si falla la actualización o el arranque requerido, detente y comunica el error; no edites hasta recibir instrucciones. `./pull` puede reconstruir o recrear servicios.
+0 - Antes de editar archivos, ejecuta `git pull` desde la raíz `proyecto nutri`. Si falla la actualización o el arranque requerido, detente y comunica el error; no edites hasta recibir instrucciones. `./pull` puede reconstruir o recrear servicios.
 1 - Para crear funciones o componentes, usa Ponytail en modo ultra: primero busca una solución existente; implementa lo mínimo necesario, aplica YAGNI y evita dependencias nuevas salvo que sean necesarias.
 2 - Al refactorizar o limpiar, usa Ponytail Review y entrega la versión directa que conserve el comportamiento existente.
 3 - Este archivo es la fuente canónica de comportamiento del agente para `nutri_app`.
@@ -43,7 +43,7 @@
 ### 2.2 Reglas duras de datos y ejecución
 
 - Toda operación en BD debe hacerse solo con `mysql`.
-- Todo cambio persistente de esquema o datos debe prepararse primero como una migración SQL nueva, numerada e inmutable en `mysql/migrations/`. Antes de aplicarla, contrasta esquema y datos con `mysql`, evalúa compatibilidad de despliegue y documenta recuperación segura; no asumas que DDL es transaccional ni edites migraciones ya aplicadas. Al iniciar, `mysql/migrate.sh` aplica pendientes y registra su checksum en `schema_migrations`. Nunca conviertas cambios manuales de MySQL en migraciones automáticamente: revísalos y crea una migración explícita. Para sincronizar el proyecto usa `../pull` desde `nutri/` (o `./pull` desde la raíz `proyecto nutri`); el script actualiza el repositorio y puede reconstruir/recrear `nutri`, que aplica migraciones al arrancar sin recrear MySQL. Si el pull modifica `tunnel/`, reconstruye y recrea solo ese servicio. `git pull` por sí solo no ejecuta código ni migraciones.
+- Todo cambio persistente de esquema o datos debe prepararse primero como una migración SQL nueva, numerada e inmutable en `mysql/migrations/`. Antes de aplicarla, contrasta esquema y datos con `mysql`, evalúa compatibilidad de despliegue y documenta recuperación segura; no asumas que DDL es transaccional ni edites migraciones ya aplicadas. Al iniciar, `mysql/migrate.sh` aplica pendientes y registra su checksum en `schema_migrations`. Nunca conviertas cambios manuales de MySQL en migraciones automáticamente: revísalos y crea una migración explícita. Para sincronizar el proyecto usa `../pull` desde `nutri/` (o `./pull` desde la raíz `proyecto nutri`); el script actualiza el repositorio y puede reconstruir/recrear `nutri`, que aplica migraciones al arrancar sin recrear MySQL. `git pull` por sí solo no ejecuta código ni migraciones.
 - No usar subagentes salvo autorización explícita del usuario o regla obligatoria.
 - Puedes añadir o actualizar pruebas como parte del cambio solicitado, pero no las ejecutes —ni ejecutes builds, linters o verificaciones manuales— sin autorización explícita del usuario para esa tarea.
 - No saltar trazabilidad de fuentes ni validaciones de consistencia.

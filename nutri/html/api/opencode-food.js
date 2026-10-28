@@ -8,6 +8,7 @@ const { readFile } = require('node:fs/promises');
 
 let localServer;
 let localServerStart;
+const maxFoodResponseWaitMs = 10 * 60 * 1000;
 const sessionLocks = new Map();
 const verifiedFoodSessions = new Map();
 const openFoodFactsCache = new Map();
@@ -121,6 +122,40 @@ async function findOpenFoodFactsProduct(name, options) {
   try { return await lookup; }
   finally { if (openFoodFactsInflight.get(key) === lookup) openFoodFactsInflight.delete(key); }
 }
+
+async function findUsdaFood(name, { apiKey = process.env.USDA, timeoutMs = 10000, fetchImpl = fetch } = {}) {
+  if (typeof name !== 'string' || !name.trim() || !apiKey) return null;
+  const url = new URL('https://api.nal.usda.gov/fdc/v1/foods/search');
+  url.searchParams.set('api_key', apiKey);
+  url.searchParams.set('query', name.trim());
+  url.searchParams.set('dataType', 'Foundation,SR Legacy');
+  url.searchParams.set('pageSize', '10');
+  try {
+    const response = await fetchImpl(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) });
+    if (!response.ok) return null;
+    const data = await response.json();
+    const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    const matches = (Array.isArray(data.foods) ? data.foods : []).filter((food) => normalize(food.description) === normalize(name));
+    const macrosFor = (food) => {
+      const nutrients = new Map((food.foodNutrients || []).map((nutrient) => [Number(nutrient.nutrientId), Number(nutrient.value)]));
+      const result = { energyKcal: nutrients.get(1008), proteinG: nutrients.get(1003), carbohydrateG: nutrients.get(1005), fatG: nutrients.get(1004), fiberG: nutrients.get(1079) ?? null };
+      return [result, [1008, 1003, 1005, 1004].every((id) => Number.isFinite(nutrients.get(id)))];
+    };
+    const valid = matches.map((food) => ({ food, ...macrosFor(food) })).filter((entry) => entry[1]);
+    if (!valid.length) return null;
+    const signature = (entry) => JSON.stringify(entry[0]);
+    if (valid.some((entry) => signature(entry) !== signature(valid[0]))) return null;
+    const { food } = valid[0];
+    const macros = valid[0][0];
+    return {
+      name: name.trim(), sourceName: 'USDA FoodData Central',
+      sourceUrl: `https://fdc.nal.usda.gov/food/${encodeURIComponent(food.fdcId)}`,
+      sourceQuote: `Valores por 100 g: ${macros.energyKcal} kcal, proteína ${macros.proteinG} g, carbohidratos ${macros.carbohydrateG} g, grasa ${macros.fatG} g${macros.fiberG == null ? '' : `, fibra ${macros.fiberG} g`}.`,
+      macroBasis: 'per_100g', macroStatus: 'declarado', macroSource: 'webfetch', macros,
+    };
+  } catch { return null; }
+}
+
 const foodSessionPermissions = [
   { permission: '*', pattern: '*', action: 'deny' },
   { permission: 'webfetch', pattern: '*', action: 'allow' },
@@ -151,18 +186,24 @@ function openCodeHttpError(status, operation, message) {
 }
 
 async function requestOpenCodePrompt(service, sessionId, body, timeoutMs) {
+  const deadline = Date.now() + Math.min(timeoutMs, maxFoodResponseWaitMs);
+  const requestBeforeDeadline = (method, endpoint, payload) => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) throw Object.assign(new Error('OpenCode no respondió dentro del tiempo límite.'), { code: 'TIMEOUT' });
+    return request(service, method, endpoint, payload, remaining);
+  };
   const messagePath = `/api/session/${sessionId}/message`;
   const promptPath = `/api/session/${sessionId}/prompt`;
   const waitPath = `/api/experimental/session/${encodeURIComponent(sessionId)}/wait`;
   const text = [body.system, ...(body.parts || []).filter((part) => part.type === 'text').map((part) => part.text)]
     .filter(Boolean).join('\n\n');
-  const submitted = await request(service, 'POST', promptPath, { text }, timeoutMs);
+  const submitted = await requestBeforeDeadline('POST', promptPath, { text });
   if (submitted.status < 200 || submitted.status >= 300) throw openCodeHttpError(submitted.status, `POST ${promptPath}`, 'OpenCode no pudo aceptar el mensaje.');
   const userMessageId = submitted.data?.id;
   if (typeof userMessageId !== 'string') throw new Error('OpenCode no devolvió el identificador del mensaje.');
-  const waited = await request(service, 'POST', waitPath, undefined, timeoutMs);
+  const waited = await requestBeforeDeadline('POST', waitPath);
   if (waited.status < 200 || waited.status >= 300) throw openCodeHttpError(waited.status, `POST ${waitPath}`, 'OpenCode no terminó el mensaje.');
-  const history = await request(service, 'GET', `${messagePath}?order=desc&limit=20`, undefined, timeoutMs);
+  const history = await requestBeforeDeadline('GET', `${messagePath}?order=desc&limit=20`);
   if (history.status < 200 || history.status >= 300) throw openCodeHttpError(history.status, `GET ${messagePath}`, 'OpenCode no devolvió el historial del mensaje.');
   const messages = Array.isArray(history.data?.data) ? history.data.data : Array.isArray(history.data) ? history.data : [];
   const userIndex = messages.findIndex((message) => message.id === userMessageId);
@@ -185,6 +226,7 @@ async function recordFoodError({ dbQuery, textSql, userId, trace, stage, error, 
   const description = {
     session_resolution_failed: 'No se pudo resolver o crear la sesión OpenCode de comidas.',
     session_open_failed: 'No se pudo abrir la sesión OpenCode de comidas.',
+    session_recovery_failed: 'No se pudo recuperar la sesión OpenCode de comidas.',
     message_failed: 'OpenCode no completó el análisis del registro de comida.',
     reply_parse_failed: 'La respuesta del análisis no pudo convertirse en datos válidos.',
     reply_validation_failed: 'La respuesta del análisis no pasó la validación de alimentos.',
@@ -288,10 +330,15 @@ async function ensureService(service) {
 
 async function openCodeRequest(method, endpoint, body, timeoutMs = 120000) {
   try {
+    const messagePath = method === 'POST' && endpoint.match(/^\/session\/([^/]+)\/message$/);
+    const deadline = messagePath ? Date.now() + Math.min(timeoutMs, maxFoodResponseWaitMs) : null;
     const service = await loadService();
     await ensureService(service);
-    const messagePath = method === 'POST' && endpoint.match(/^\/session\/([^/]+)\/message$/);
-    if (messagePath) return await requestOpenCodePrompt(service, messagePath[1], body || {}, timeoutMs);
+    if (messagePath) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw Object.assign(new Error('OpenCode no respondió dentro del tiempo límite.'), { code: 'TIMEOUT' });
+      return await requestOpenCodePrompt(service, messagePath[1], body || {}, remaining);
+    }
     if (body && typeof body === 'object' && body.permission) {
       const { permission, ...rest } = body;
       body = {
@@ -402,13 +449,15 @@ async function deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode = op
   });
 }
 
-async function requestFoodDescription({ sessionId, description, initialDescription, conversation, comidasDisponibles = [], comidasReferencia = [], referenciaComidaSolicitada = false, openFoodFactsFirstPass = false, alimentosPendientes = [], continuacionRegistro = false, diaNutricional, genericEstimateApproved = false, retryFeedback, allowWebSearch = true, openFoodFactsCandidates = [], config, trace, requestOpenCode = openCodeRequest }) {
+async function requestFoodDescription({ sessionId, description, initialDescription, conversation, comidasDisponibles = [], comidasReferencia = [], referenciaComidaSolicitada = false, openFoodFactsFirstPass = false, alimentosPendientes = [], continuacionRegistro = false, diaNutricional, genericEstimateApproved = false, retryFeedback, allowWebSearch = true, openFoodFactsCandidates = [], config, deadline, trace, requestOpenCode = openCodeRequest }) {
   config ||= await readFoodSessionConfig();
   const system = await readFoodSystemPrompt(config.maxFoodItems);
   const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
   const startedAt = Date.now();
   const requestContext = { description, ...(initialDescription ? { initialDescription } : {}), ...(conversation ? { conversation } : {}), ...(diaNutricional ? { diaNutricional } : {}), ...(genericEstimateApproved ? { genericEstimateApproved: true } : {}), ...(referenciaComidaSolicitada ? { referenciaComidaSolicitada: true } : {}), ...(openFoodFactsFirstPass ? { openFoodFactsFirstPass: true } : {}), ...(retryFeedback ? { correccionFormato: retryFeedback } : {}), ...(comidasDisponibles.length ? { comidasDisponibles } : {}), ...(comidasReferencia.length ? { comidasReferencia } : {}), ...(openFoodFactsCandidates.length ? { candidatosOpenFoodFacts: openFoodFactsCandidates } : {}), ...(alimentosPendientes.length ? { alimentosPendientes } : {}), ...(continuacionRegistro ? { continuacionRegistro: true } : {}) };
   const tools = genericEstimateApproved || referenciaComidaSolicitada || !allowWebSearch ? {} : { websearch: true, webfetch: true };
+  const remaining = deadline == null ? config.requestTimeoutMs : Math.min(config.requestTimeoutMs, deadline - Date.now());
+  if (remaining <= 0) throw Object.assign(new Error('OpenCode no respondió dentro del tiempo límite.'), { code: 'TIMEOUT' });
   traceFoodSession(trace, 'message_sent', { stage: 'separar_alimentos', session: shortSessionId(sessionId), enabledTools: Object.keys(tools) });
   let result;
   try {
@@ -419,7 +468,7 @@ async function requestFoodDescription({ sessionId, description, initialDescripti
       ...(config.agent ? { agent: config.agent } : {}),
       ...(config.variant ? { variant: config.variant } : {}),
       parts: [{ type: 'text', text: JSON.stringify(requestContext) }],
-    }, config.requestTimeoutMs);
+    }, remaining);
   } catch (error) {
     traceFoodSession(trace, 'message_failed', {
       stage: 'separar_alimentos', session: shortSessionId(sessionId), durationMs: Date.now() - startedAt,
@@ -445,6 +494,6 @@ async function requestFoodDescription({ sessionId, description, initialDescripti
 }
 
 module.exports = {
-  deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, openCodeRequest, recordFoodError, requestFoodDescription,
-  getFoodSessionDefaults, readFoodSessionConfig, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock,
+  deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, openCodeRequest, recordFoodError, requestFoodDescription,
+  getFoodSessionDefaults, maxFoodResponseWaitMs, readFoodSessionConfig, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock,
 };

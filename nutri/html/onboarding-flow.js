@@ -1622,6 +1622,9 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
 });
 
 const foodDialog = document.querySelector('#registerFoodDialog');
+const chefDialog = document.querySelector('#chefDialog');
+document.querySelector('#chefButton')?.addEventListener('click', () => chefDialog?.showModal());
+document.querySelector('#closeChefDialog')?.addEventListener('click', () => chefDialog?.close());
 const foodForm = document.querySelector('#registerFoodForm');
 let foodTrigger;
 let foodEntryDate = '';

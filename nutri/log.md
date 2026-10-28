@@ -27,6 +27,17 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-28 13:00 CST — Preparación del commit solicitado mediante `git`: VERSION incrementada de 0.1.38 a 0.1.39; el dashboard lee la versión desde ese archivo. No se ejecutaron pruebas.
+- 2026-10-28 12:41 CST — OpenCode de comidas: el análisis, incluidos reintentos de formato, tiene un límite total de 10 minutos; envío, espera y lectura comparten ese presupuesto. Ante sesión expirada (404), se renueva una vez y se reenvía con el historial del borrador, con trazas de recuperación y aviso específico. Prueba añadida.
+- 2026-10-28 12:46 CST — Ejecutada la prueba del presupuesto total de respuesta OpenCode: 1 aprobada.
+- 2026-10-27 12:04 CST — Renovada la URL versionada del CSS del dashboard para que el navegador aplique el input cuadrado de Chef.
+- 2026-10-27 11:49 CST — El cuadro de texto de Chef ahora tiene esquinas rectas.
+- 2026-10-27 11:58 CST — Renovado el parámetro inmutable del script del dashboard para que el navegador descargue el manejador del chat Chef.
+- 2026-10-27 11:50 CST — Ajustada la vista de Chef para reutilizar la composición visual del chat de registro de comida; el envío sigue desactivado hasta definir el comportamiento.
+- 2026-10-27 11:49 CST — Chef usa el estilo principal de los botones de acciones rápidas.
+- 2026-10-27 11:49 CST — Reubicado el botón Chef inmediatamente después de “Crear plan”.
+- 2026-10-27 11:45 CST — Añadida la vista inicial de Chef con botón para abrir/cerrar y una interfaz de chat reutilizando estilos existentes; envío y comportamiento quedan pendientes de definición.
+- 2026-10-27 11:45 CST — Retirados los módulos auxiliares de mensajería externa y publicación; el script de sincronización queda limitado a Nutri. No se encontraron contenedores asociados; no se ejecutaron pruebas.
 - 2026-10-27 10:18 CST — Versión PATCH incrementada a 0.1.38 antes del commit; el dashboard obtiene la versión desde `VERSION`.
 - 2026-10-27 10:17 CST — La sección “Planes creados” inicia colapsada; conserva su apertura al navegar a los planes guardados después de crear uno.
 - 2026-10-27 10:09 CST — Versión PATCH incrementada a 0.1.37 antes del commit; el dashboard obtiene la versión desde `VERSION`.
@@ -38,7 +49,6 @@
 - 2026-10-26 21:34 CST — Registro de comidas: si la conexión falla tras enviar, conserva el mensaje visible y permite reintentarlo con el mismo `requestId` y contenido; no vuelve a copiarlo al campo. No se ejecutaron pruebas.
 - 2026-10-26 21:34 CST — Versión PATCH incrementada a 0.1.34 antes del commit; dashboard sincronizado desde `VERSION`.
 - 2026-10-26 21:33 CST — `AGENTS.md`: retirado el comportamiento de limpieza del input de las reglas; ese comportamiento pertenece a la implementación JavaScript. `./pull` no pudo iniciar Nutri porque el puerto 8080 está ocupado. No se ejecutaron pruebas.
-- 2026-10-26 21:12 CST — `AGENTS.md`: precisadas las reglas de sincronización, autorización, pruebas, trazabilidad, mensajes enviados y commit; retiradas las instrucciones específicas de Telegram. No se ejecutaron pruebas.
 
 - 2026-10-26 21:12 CST — Registro de comida y entrenamiento: el mensaje enviado permanece fuera del campo de texto aunque requiera aclaración o falle el análisis; continúa visible en el chat para conservar el contexto. Versión PATCH incrementada a 0.1.33 para el commit. No se ejecutaron pruebas.
 
@@ -453,15 +463,8 @@
 - 2026-10-19 15:42 CST — Dashboard: la lista de planes creados ahora usa el desplegable nativo y comienza abierta para mantenerlos visibles.
 - 2026-10-19 15:43 CST — Dashboard: el botón para eliminar un plan quedó fuera del desplegable del contenido; ahora puede usarse con el plan colapsado y mantiene un área táctil de 44×44.
 - 2026-10-19 15:45 CST — Dashboard: el botón para eliminar se integró dentro del borde de cada tarjeta de plan, visible con el contenido colapsado y sin activar el desplegable.
-- 2026-10-19 21:59 CST — Telegram: cola protegida con allowlist estricta y vacía ya no abre el bot al público; los reintentos automáticos se limitan a GET para no duplicar operaciones, las consultas de permisos/formularios se paralelizan y los temporizadores de espera se limpian al resolver. Se restauró el flujo documentado de texto libre y respuestas a formularios.
 - 2026-10-20 11:17 CST — `./pull` ahora recrea solo el servicio `nutri`; el runner aplica ahí las migraciones pendientes y MySQL permanece activo con su volumen intacto.
-- 2026-10-20 11:17 CST — `./pull` ahora compara los commits antes/después del pull y solo reconstruye/recrea `tunnel` o `grammy` si hubo cambios en sus carpetas; Nutri sigue recreándose para ejecutar el migrador y MySQL se conserva.
 - 2026-10-20 11:26 CST — Documentado en `pull` que las migraciones se aplican al arrancar Nutri y MySQL no se recrea.
-- 2026-10-20 11:28 CST — Añadido `tunnel/AGENTS.md` con el comportamiento actual verificado, manejo de configuración sensible, reinicios, timer externo y actualización mediante `./pull`.
-- 2026-10-20 11:30 CST — Túnel: añadido chequeo HTTP cada 15 minutos a la URL pública; conserva el enlace en HTTP 200 y termina `cloudflared` ante fallo para que Docker regenere y notifique otro. Si no obtiene URL al arrancar, también fuerza el reinicio.
-- 2026-10-20 11:30 CST — Telegram del túnel: actualizado el aviso para explicar el chequeo cada 15 minutos y el envío de un enlace nuevo si no responde HTTP 200; eliminado el texto obsoleto de renovación diaria a las 06:00.
-- 2026-10-20 11:30 CST — Túnel: fijado el destino predeterminado a `http://127.0.0.1:8080`, coherente con `network_mode: host` y el dashboard.
-- 2026-10-20 11:30 CST — Revisadas las instrucciones de `tunnel`: quitadas descripciones de renovación diaria como comportamiento normal y documentado que un timer externo que fuerce reinicios contradice la conservación del enlace sano.
 
 - 2026-10-20 13:17 CST — Nutri/OpenCode: montado en solo lectura el registro del servicio del host; el contenedor conecta por el proxy de la puerta de enlace Docker 172.21.0.1:49375 y no intenta iniciar OpenCode localmente.
 
@@ -496,7 +499,7 @@
 - 2026-10-22 11:05 CST — Reparadas las fallas de pruebas detectadas en comidas, OpenCode y el flujo de interfaz; ajustadas expectativas y harness al comportamiento actual, y añadido timeout HTTP efectivo durante la espera de respuesta. Suite completa: 74 aprobadas, 0 fallidas y 10 omitidas (flujos retirados).
 - 2026-10-22 11:07 CST — Añadidas pruebas unitarias para registrar entrenamientos manuales: persistencia y verificación, rechazo de métricas incompletas, conflicto de `requestId` y error de persistencia sin filtrar detalles. `node --test html/api/training-entries.test.js`: 11 aprobadas, 0 fallidas.
 - 2026-10-22 11:16 CST — Añadida prueba de integración para el flujo autenticado de creación de plan: contexto de cuenta, generación temporal en OpenCode, persistencia bajo el usuario autenticado y eliminación de la sesión temporal. `node --test html/server.test.js`: 28 aprobadas, 0 fallidas y 10 omitidas (flujos retirados).
-- 2026-10-22 11:20 CST — Ampliada la cobertura de `grammy` para parsear la lista permitida y autorizar chats por ID entero exacto; la suite live de Garmin ahora se omite cuando faltan credenciales, evitando fallar por configuración ausente o contactar la API. Resultados: Nutri 79 aprobadas/0 fallidas/10 omitidas; Garmin 2 aprobadas/93 omitidas (requieren credenciales/API live); Telegram 2 aprobadas. `node --check bot.js` correcto.
+- 2026-10-22 11:20 CST — Ampliada la cobertura de Garmin; la suite live se omite cuando faltan credenciales, evitando fallar por configuración ausente o contactar la API. Resultados: Nutri 79 aprobadas/0 fallidas/10 omitidas; Garmin 2 aprobadas/93 omitidas (requieren credenciales/API live).
 - 2026-10-22 11:28 CST — Añadidas pruebas aisladas para validar macros sin fibra declarada, límites de masa y energía y escalado por porción en macros por 100 g. Pruebas Node ejecutadas; Strix en análisis.
 
 - 2026-10-22 11:37 CST — Configurado STRIX_LLM=openai/gpt-6-luna en .env para análisis local con Strix.
@@ -591,13 +594,11 @@
 - 2026-10-26 — Preparación del commit solicitado: VERSION incrementada de 0.1.26 a 0.1.27; el dashboard sigue leyendo la versión desde ese archivo. No se ejecutaron pruebas.
 - 2026-10-26 — Navegación del dashboard: se corrigió el selector del estado activo para apuntar a `.shell-sidebar`, donde vive la navegación; antes estaba limitado a `.dashboard-workspace` y no persistía al seleccionar. El fondo activo coincide con hover y conserva contraste en escritorio y móvil. No se ejecutaron pruebas.
 - 2026-10-26 — Preparación del commit solicitado: VERSION incrementada de 0.1.27 a 0.1.28; el dashboard sigue leyendo la versión desde ese archivo. No se ejecutaron pruebas.
-- 2026-10-26 11:36 CST — Túnel público: cambiado el destino predeterminado del dashboard de `127.0.0.1:8080` a `127.0.0.1:80` en el script, Compose y reglas de `tunnel/`. No se ejecutaron pruebas ni se reiniciaron servicios; el servidor Nutri conserva su puerto 8080.
-- 2026-10-26 11:36 CST — Puerto del dashboard: Nutri ahora escucha y publica en el puerto 80; healthcheck y URL predeterminada de la API de grammY alineados. No se ejecutaron pruebas ni se reiniciaron servicios.
-- 2026-10-26 11:37 CST — Corrección de puerto: la app vuelve a escuchar internamente en 8080 para evitar `EACCES` al enlazar puertos privilegiados; Compose publica el puerto externo 80 como `80:8080`. El túnel y grammY acceden por el puerto 80. No se ejecutaron pruebas ni se reiniciaron servicios.
+- 2026-10-26 11:36 CST — Puerto del dashboard: Nutri ahora escucha y publica en el puerto 80. No se ejecutaron pruebas ni se reiniciaron servicios.
+- 2026-10-26 11:37 CST — Corrección de puerto: la app vuelve a escuchar internamente en 8080 para evitar `EACCES` al enlazar puertos privilegiados; Compose publica el puerto externo 80 como `80:8080`. No se ejecutaron pruebas ni se reiniciaron servicios.
 - 2026-10-26 — Preparación del commit solicitado: VERSION incrementada de 0.1.28 a 0.1.29; el dashboard lee la versión desde ese archivo. No se ejecutaron pruebas.
-- 2026-10-26 12:30 CST — Reconciliación de `tunnel/notify-tunnel.sh`: retirados los marcadores de conflicto y conservada la implementación local de notificación y botón Dashboard; destino predeterminado alineado al puerto 80. No se ejecutaron pruebas.
 - 2026-10-26 12:56 CST — Puerto del dashboard: servidor Nutri, healthcheck y Compose alineados para escuchar/publicar exclusivamente en el puerto 80. El proceso local Node sin privilegios puede requerir permiso para enlazar este puerto; el contenedor usa el usuario predeterminado de la imagen. No se ejecutaron pruebas ni se reinició el servicio.
-- 2026-10-26 — Puerto del dashboard: restablecido el puerto 8080 en servidor, Compose, healthcheck, túnel y cliente grammY; se evita enlazar al puerto privilegiado 80 en desarrollo local.
+- 2026-10-26 — Puerto del dashboard: restablecido el puerto 8080 en servidor y Compose; se evita enlazar al puerto privilegiado 80 en desarrollo local.
 - 2026-10-26 12:57 CST — Preparación del commit solicitado: VERSION incrementada de 0.1.29 a 0.1.30; el dashboard lee la versión desde ese archivo. No se ejecutaron pruebas.
 - 2026-10-26 14:19 CST — Registro de comidas más ágil: el formulario restaura borradores y queda listo sin crear/preparar una sesión OpenCode; esta se crea al enviar el primer mensaje. Se mantiene la optimización del guardado que renderiza `records` de la respuesta y evita un GET adicional. Cache-busting actualizado. No se ejecutaron pruebas.
 - 2026-10-26 14:27 CST — Prompt de comidas reorganizado: separado el contrato por autoridad, destino, cantidades/aclaraciones, fuentes y salida; compactadas reglas repetidas; añadido límite explícito sin omisiones silenciosas y contrato de primer pase distinto del final. El atajo local quedó documentado fuera del bloque enviado a OpenCode. El parser conserva `pendiente` solo como sentinel intermedio y la validación final lo rechaza. No se ejecutaron pruebas; no hubo cambios de esquema.
@@ -613,3 +614,5 @@
 - 2026-10-26 15:02 CST — Tras guardar el plan, se desactiva “Enviar mensaje”; al abrir de nuevo el modal, el manejador de apertura lo reactiva. No se ejecutaron pruebas.
 - 2026-10-26 15:05 CST — Títulos de comidas, entrenamientos y planes guardados ahora usan el color de acento del tema para distinguirse; actualizado el cache-busting de la hoja de estilos. No se ejecutaron pruebas.
 - 2026-10-26 15:08 CST — Preparación del commit solicitado mediante `git`: VERSION incrementada de 0.1.30 a 0.1.31; el dashboard obtiene su versión desde ese archivo. No se ejecutaron pruebas.
+- 2026-10-28 12:54 CST — Resolución de macros: distinguir `websearch` de `webfetch`; si solo se descubrió una fuente y faltan macros, se permite un intento adicional para abrir/verificarla. Añadida prueba unitaria; no ejecutada.
+- 2026-10-28 12:57 CST — Registro de comidas: añadida consulta directa a USDA FoodData Central para alimentos sin coincidencia exacta en Open Food Facts; solo acepta descripciones exactas con macros completos y resultados no ambiguos. Ambas fuentes consultan por alimento con concurrencia máxima de tres; añadida prueba unitaria, no ejecutada. Prompt de comidas actualizado.

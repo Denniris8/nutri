@@ -551,6 +551,38 @@ test('OpenCode HTTP waits for delayed headers without Undici headers timeout', a
   }
 });
 
+test('OpenCode message submission, wait, and history share one timeout budget', async (t) => {
+  let waitRequests = 0;
+  let historyRequests = 0;
+  const server = http.createServer((request, response) => {
+    if (request.url === '/global/health') { response.writeHead(200).end('{"healthy":true}'); return; }
+    if (request.url.endsWith('/prompt')) { setTimeout(() => response.writeHead(200).end('{"id":"user-message"}'), 50); return; }
+    if (request.url.endsWith('/wait')) { waitRequests += 1; setTimeout(() => response.writeHead(200).end('{"ok":true}'), 600); return; }
+    if (request.url.includes('/message?')) { historyRequests += 1; response.writeHead(200).end('{"data":[]}'); return; }
+    response.writeHead(404).end();
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const envKeys = ['OPENCODE_SERVICE_FILE', 'OPENCODE_SERVICE_PROXY_URL', 'OPENCODE_BASE_URL', 'OPENCODE_PORT', 'OPENCODE_PASSWORD', 'OPENCODE_SERVER_PASSWORD', 'OPENCODE_AUTO_START'];
+  const originalEnv = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
+  delete process.env.OPENCODE_SERVICE_FILE;
+  process.env.OPENCODE_BASE_URL = `http://127.0.0.1:${server.address().port}`;
+  process.env.OPENCODE_SERVICE_PROXY_URL = process.env.OPENCODE_BASE_URL;
+  process.env.OPENCODE_AUTO_START = 'false';
+  delete process.env.OPENCODE_PASSWORD;
+  delete process.env.OPENCODE_SERVER_PASSWORD;
+  try {
+    await assert.rejects(openCodeRequest('POST', '/session/ses_deadline/message', { parts: [] }, 500));
+    assert.equal(waitRequests, 1);
+    assert.equal(historyRequests, 0);
+  } finally {
+    for (const key of envKeys) {
+      if (originalEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = originalEnv[key];
+    }
+  }
+});
+
 test.skip('retired macro-resolution flow: ambiguous USDA candidates go directly to webfetch without another selection turn', async () => {
   let usdaCalls = 0;
   let webCalls = 0;

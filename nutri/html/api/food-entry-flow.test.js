@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { applyExplicitQuantities, applyFoodMacroReferences, normalizeFoodReply, parseFoodReferenceTime, parseFoodReply, saveFoodEntry } = require('./food-entries.js');
-const { deleteFoodOpenCodeSession, findOpenFoodFactsProduct, openCodeRequest } = require('./opencode-food.js');
+const { deleteFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, openCodeRequest } = require('./opencode-food.js');
 
 test('registra leche y whey con cantidades del mensaje tras respuesta inválida inicial', async () => {
   const description = '250 ml de leche Alpura Pro baja en grasa deslactosada y 31 g de proteína Gold Standard Whey chocolate el 2026-10-22';
@@ -165,6 +165,28 @@ test('comparte una consulta Open Food Facts concurrente para el mismo alimento',
   ]);
   assert.deepEqual(results, [null, null]);
   assert.equal(calls, 1);
+});
+
+test('usa USDA para una coincidencia genérica exacta y rechaza variantes ambiguas', async () => {
+  const food = { fdcId: 123, description: 'Cooked rice', foodNutrients: [
+    { nutrientId: 1008, value: 130 }, { nutrientId: 1003, value: 2.7 },
+    { nutrientId: 1005, value: 28 }, { nutrientId: 1004, value: 0.3 }, { nutrientId: 1079, value: 0.4 },
+  ] };
+  let requestedUrl;
+  const found = await findUsdaFood('Cooked rice', {
+    apiKey: 'test-only', fetchImpl: async (url) => {
+      requestedUrl = new URL(url);
+      return { ok: true, json: async () => ({ foods: [food] }) };
+    },
+  });
+  assert.equal(requestedUrl.hostname, 'api.nal.usda.gov');
+  assert.equal(requestedUrl.searchParams.get('api_key'), 'test-only');
+  assert.equal(found.sourceName, 'USDA FoodData Central');
+  assert.equal(found.macroBasis, 'per_100g');
+  assert.deepEqual(found.macros, { energyKcal: 130, proteinG: 2.7, carbohydrateG: 28, fatG: 0.3, fiberG: 0.4 });
+  assert.equal(await findUsdaFood('Cooked rice', {
+    apiKey: 'test-only', fetchImpl: async () => ({ ok: true, json: async () => ({ foods: [food, { ...food, fdcId: 456, foodNutrients: food.foodNutrients.map((nutrient) => nutrient.nutrientId === 1008 ? { ...nutrient, value: 140 } : nutrient) }] }) }),
+  }), null);
 });
 
 test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { skip: process.env.NUTRI_TEST_OPENCODE_LIVE !== '1' }, async () => {

@@ -1,5 +1,5 @@
 const { randomUUID } = require('node:crypto');
-const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, recordFoodError, requestFoodDescription, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock } = require('./opencode-food.js');
+const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, maxFoodResponseWaitMs, recordFoodError, requestFoodDescription, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock } = require('./opencode-food.js');
 const { notificationInsertSql, resolveNotificationsSql } = require('./notifications.js');
 
 function validateFoodEntry(data) {
@@ -442,6 +442,11 @@ function usedFoodWebTools(parts) {
     && /web[\s_-]?(?:search|fetch)|search the web|fetch webpage/i.test(`${part.tool || ''} ${part.state?.title || ''}`));
 }
 
+function usedFoodWebFetch(parts) {
+  return Array.isArray(parts) && parts.some((part) => part?.type === 'tool'
+    && /web[\s_-]?fetch|fetch webpage/i.test(`${part.tool || ''} ${part.state?.title || ''}`));
+}
+
 function explicitFoodMasses(description) {
   return [...new Set([...String(description).matchAll(/(?:^|[^\d])(\d+(?:[.,]\d+)?)\s*(kg|kilogramos?|gr|g|gramos?)\b/gi)]
     .map((match) => Number(match[1].replace(',', '.')) * (/^(?:kg|kilogramos?)$/i.test(match[2]) ? 1000 : 1))
@@ -680,8 +685,38 @@ SELECT LAST_INSERT_ID();`);
     const openFoodFactsFirstPass = !directReply && !saved.question && !genericEstimateApproved && !reuseAsNewMeal && !correctionIntent && !activeTarget;
     let requestArgs;
     let sessionId;
+    let analysisDeadline;
     let result = directReply;
     let webSearchUsed = false;
+    let webFetchUsed = false;
+    const requestFoodWithSessionRecovery = async (args) => {
+      const send = (options = {}) => withFoodSessionLock(userId, () => requestFoodDescription({
+        ...args, ...options, sessionId, deadline: analysisDeadline, trace, requestOpenCode,
+      }));
+      try { return await send(); }
+      catch (error) {
+        if (error.status !== 404) throw error;
+        const previousStage = stage;
+        stage = 'session_recovery';
+        traceFoodSession(trace, 'session_recovery_started', { stage, errorCode: safeOpenCodeErrorCode(error), upstreamHttpStatus: error.status });
+        try {
+          await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode, forgetOnError: true });
+          const renewed = await ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode, trace, returnMetadata: true });
+          sessionId = renewed.sessionId;
+          const conversation = await readFoodConversationText({ entryId, dbQuery, fallback: '', excludeLatestUser: true });
+          const parts = await send({ conversation: conversation || args.conversation || undefined });
+          stage = previousStage;
+          traceFoodSession(trace, 'session_recovery_succeeded', { stage: previousStage });
+          return parts;
+        } catch (recoveryError) {
+          traceFoodSession(trace, 'session_recovery_failed', {
+            stage, errorCode: safeOpenCodeErrorCode(recoveryError),
+            ...(Number.isInteger(recoveryError.status) ? { upstreamHttpStatus: recoveryError.status } : {}),
+          });
+          throw recoveryError;
+        }
+      }
+    };
     if (directReply) {
       traceFoodSession(trace, 'declared_food_fast_path', { itemCount: 1 });
     } else {
@@ -689,12 +724,15 @@ SELECT LAST_INSERT_ID();`);
         await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode, forgetOnError: true });
         traceFoodSession(trace, 'identity_refusal_session_reset');
       }
+      stage = 'session_resolution';
       const session = await ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode, trace, returnMetadata: true });
       sessionId = session.sessionId;
       stage = 'analysis';
+      analysisDeadline = Date.now() + maxFoodResponseWaitMs;
       requestArgs = { sessionId, description: modelDescription, initialDescription: saved.description, genericEstimateApproved, allowWebSearch: Boolean(saved.question || correctionIntent || activeTarget), openFoodFactsFirstPass, ...(reuseAsNewMeal ? { referenciaComidaSolicitada: true } : {}), ...(!session.reused && conversation ? { conversation } : {}), comidasDisponibles: mealsForModel, ...(reuseAsNewMeal && referenceMeals.length ? { comidasReferencia: referenceMeals } : {}), alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
-      let parts = await withFoodSessionLock(userId, () => requestFoodDescription(requestArgs));
+      let parts = await requestFoodWithSessionRecovery(requestArgs);
       webSearchUsed = usedFoodWebTools(parts);
+      webFetchUsed = usedFoodWebFetch(parts);
       stage = 'parse';
       try { result = parseReply(parts); }
       catch (error) {
@@ -706,8 +744,9 @@ SELECT LAST_INSERT_ID();`);
         const renewed = await ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode, trace, returnMetadata: true });
         sessionId = renewed.sessionId;
         if (conversation) requestArgs.conversation = conversation;
-        parts = await withFoodSessionLock(userId, () => requestFoodDescription({ ...requestArgs, sessionId, description: modelDescription }));
+        parts = await requestFoodWithSessionRecovery({ ...requestArgs, description: modelDescription });
         webSearchUsed ||= usedFoodWebTools(parts);
+        webFetchUsed ||= usedFoodWebFetch(parts);
         result = parseReply(parts);
       }
     }
@@ -718,16 +757,26 @@ SELECT LAST_INSERT_ID();`);
         const products = await Promise.all(names.slice(index, index + 3).map((name) => findOpenFoodFactsProduct(name)));
         openFoodFactsProducts.push(...products.filter(Boolean));
       }
-      traceFoodSession(trace, 'openfoodfacts_lookup', { queried: names.length, matched: openFoodFactsProducts.length });
+      const unresolvedNames = names.filter((name) => !openFoodFactsProducts.some((product) => product.name === name));
+      const usdaProducts = [];
+      for (let index = 0; index < unresolvedNames.length; index += 3) {
+        usdaProducts.push(...(await Promise.all(unresolvedNames.slice(index, index + 3).map((name) => findUsdaFood(name)))).filter(Boolean));
+      }
+      openFoodFactsProducts.push(...usdaProducts);
+      traceFoodSession(trace, 'food_sources_lookup', {
+        queried: names.length, openFoodFactsMatched: openFoodFactsProducts.length - usdaProducts.length,
+        usdaQueried: unresolvedNames.length, usdaMatched: usdaProducts.length,
+      });
       const unresolved = result.items.some((item) => item.targetItemId == null && item.macroSource !== 'declarado_usuario' && !openFoodFactsProducts.some((product) => product.name === item.name));
       if (unresolved) {
         requestArgs.allowWebSearch = true;
         requestArgs.openFoodFactsFirstPass = false;
         requestArgs.openFoodFactsCandidates = openFoodFactsProducts;
-        parts = await withFoodSessionLock(userId, () => requestFoodDescription({
+        parts = await requestFoodWithSessionRecovery({
           ...requestArgs, retryFeedback: 'Primero se consultó Open Food Facts. Usa sus candidatos solo si el producto coincide exactamente; conserva esos macros y su procedencia sin sustituirlos. Usa websearch/webfetch únicamente para los alimentos que no tengan candidato coincidente. No inventes ni cambies productos.',
-        }));
+        });
         webSearchUsed ||= usedFoodWebTools(parts);
+        webFetchUsed ||= usedFoodWebFetch(parts);
         stage = 'parse';
         result = parseReply(parts);
       }
@@ -750,12 +799,13 @@ SELECT LAST_INSERT_ID();`);
     const retryLimit = macroIssues() ? 3 : 1;
     for (let attempt = 1; attempt <= retryLimit && (replyIssues.length || (!items.length && !result?.clarificationQuestion)); attempt++) {
       traceFoodSession(trace, 'reply_validation_retry', { issueCount: replyIssues.length || 1, attempt });
-      const retryAllowsWebSearch = Boolean(requestArgs.allowWebSearch && !webSearchUsed);
-      parts = await withFoodSessionLock(userId, () => requestFoodDescription({
-        ...requestArgs, sessionId, description: modelDescription, allowWebSearch: retryAllowsWebSearch,
+      const retryAllowsWebSearch = Boolean(requestArgs.allowWebSearch && !webFetchUsed && (!webSearchUsed || attempt === 1));
+      parts = await requestFoodWithSessionRecovery({
+        ...requestArgs, description: modelDescription, allowWebSearch: retryAllowsWebSearch,
         retryFeedback: `CORRECCIÓN ${attempt}/${retryLimit}: corrige la respuesta completa en JSON. Problemas: ${replyIssues.length ? replyIssues.join(', ') : 'JSON ausente o ilegible'}. Conserva alimentos, cantidades y aclaraciones confirmados en la sesión y el contexto; no repitas preguntas contestadas. Devuelve todos los campos requeridos. ${macroIssues() ? 'Debes resolver los macros obligatorios de todos los alimentos solicitados: si no hay fuente exacta utilizable, usa valores típicos razonables y marca macroSource:"opencode_estimado" y macroStatus:"estimado"; no dejes macros obligatorios nulos.' : 'No inventes información y pregunta solo si falta un dato necesario.'} Nunca inventes cantidades. Para masa usa quantityGrams; para volumen conserva quantityText y quantityGrams:null, sin convertir volumen a masa por suposición.`,
-      }));
+      });
       if (retryAllowsWebSearch) webSearchUsed ||= usedFoodWebTools(parts);
+      if (retryAllowsWebSearch) webFetchUsed ||= usedFoodWebFetch(parts);
       stage = 'parse';
       result = parseReply(parts);
       if (reuseAsNewMeal && result) { result.action = 'new'; result.targetEntryId = null; }
@@ -1001,8 +1051,9 @@ SELECT LAST_INSERT_ID();`);
     if (entryId && /^\d+$/.test(entryId)) {
       const message = error.code === 'FOOD_IDENTITY_REFUSAL' ? 'Se renovó la sesión para continuar el análisis sin pedir tu identidad; vuelve a enviar el alimento.'
         : stage === 'persistence' ? 'El análisis terminó, pero no se pudieron guardar sus alimentos y macros.'
-        : ['parse', 'validation'].includes(stage) ? 'No pude validar la respuesta después de varios intentos. Tu borrador y el contexto del chat se conservaron; pulsa «Enviar mensaje» para reintentarlo.'
-          : 'El borrador quedó guardado, pero el asistente no completó el análisis. Puedes intentarlo de nuevo.';
+          : stage === 'session_recovery' || stage === 'session_resolution' ? 'No se pudo recuperar la sesión del asistente. Tu borrador y el contexto del chat se conservaron; vuelve a intentarlo.'
+            : ['parse', 'validation'].includes(stage) ? 'No pude validar la respuesta después de varios intentos. Tu borrador y el contexto del chat se conservaron; pulsa «Enviar mensaje» para reintentarlo.'
+              : 'El borrador quedó guardado, pero el asistente no completó el análisis. Puedes intentarlo de nuevo.';
       try { await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'assistant', content: `[ERROR_REGISTRO] ${message}` }); } catch {}
       if (!suppressNotification) try { await dbQuery(`${notificationInsertSql({ userId, category: 'comida', state: 'error', title: 'No se pudo completar el registro de comida', message, referenceId: entryId, textSql })};`); } catch {}
       json(response, 502, { entryId, requestId: entry.requestId, message });
@@ -1012,4 +1063,4 @@ SELECT LAST_INSERT_ID();`);
   }
 }
 
-module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, localDateTimeToUtc, normalizeFoodReply, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, readFoodEntries, readPendingFoodDraft, saveFoodEntry, usedFoodWebTools, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, localDateTimeToUtc, normalizeFoodReply, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, readFoodEntries, readPendingFoodDraft, saveFoodEntry, usedFoodWebFetch, usedFoodWebTools, validateFoodEntry, validFoodItem };

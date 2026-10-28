@@ -21,11 +21,3 @@ if ! git -C "$root" diff --quiet "$before" "$after" -- nutri/ garmin-connect-mcp
 else
   compose_nutri up -d --build nutri
 fi
-
-if ! git -C "$root" diff --quiet "$before" "$after" -- tunnel/; then
-  docker compose --project-directory "$root/tunnel" -f "$root/tunnel/docker-compose.yml" up -d --build --force-recreate
-fi
-
-if ! git -C "$root" diff --quiet "$before" "$after" -- grammy/; then
-  docker compose --project-directory "$root/grammy" -f "$root/grammy/docker-compose.yml" up -d --build --force-recreate
-fi

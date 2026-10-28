@@ -8,7 +8,7 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/pwa-icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/pwa-icon-192.png">
-  <link rel="stylesheet" href="/dashboard_nutricional.css?v=68">
+  <link rel="stylesheet" href="/dashboard_nutricional.css?v=69">
   <link rel="stylesheet" href="/notifications.css">
 </head>
 <body>
@@ -62,6 +62,7 @@
           <button id="registerFoodButton" type="button" aria-busy="false">Registrar comida <span id="foodButtonLoading" class="assistant-thinking" aria-hidden="true" hidden></span></button>
           <button id="addTrainingButton" class="button-training" type="button" aria-label="Guardar sesión de entrenamiento" title="Guardar sesión de entrenamiento" aria-busy="false">Registrar entrenamiento <span id="trainingButtonLoading" class="assistant-thinking" aria-hidden="true" hidden></span></button>
           <button id="createTrainingPlanButton" class="button-plan" type="button" aria-busy="false">Crear plan <span id="trainingPlanButtonLoading" class="assistant-thinking" aria-hidden="true" hidden></span></button>
+          <button id="chefButton" type="button">Chef</button>
         </div>
       </header>
 
@@ -436,6 +437,26 @@
     </form>
   </dialog>
 
+  <dialog id="chefDialog" class="more-form-dialog" aria-labelledby="chefDialogTitle">
+    <header class="more-form-header">
+      <div><h2 id="chefDialogTitle">Chef</h2></div>
+      <button id="closeChefDialog" class="icon-close" type="button" aria-label="Cerrar chat Chef">×</button>
+    </header>
+    <div class="more-form-body">
+      <div class="form-hints"><p class="hint">El comportamiento del chat se definirá después.</p></div>
+      <div class="food-chat-thread" aria-label="Conversación con Chef">
+        <div class="food-chat-messages" aria-live="polite">
+          <div class="food-chat-message" data-role="assistant"><span class="food-chat-speaker">Chef</span><p class="food-chat-text">El chat estará disponible próximamente.</p></div>
+        </div>
+      </div>
+      <label for="chefMessage">Mensaje</label>
+      <textarea id="chefMessage" class="food-chat-input" rows="4" autocomplete="off" placeholder="Escribe tu mensaje…" disabled></textarea>
+      <div class="action-plan-dialog-actions">
+        <button type="button" disabled>Enviar</button>
+      </div>
+    </div>
+  </dialog>
+
   <dialog id="trainingPlanDialog" class="more-form-dialog" aria-labelledby="trainingPlanDialogTitle">
     <header class="more-form-header">
       <div><h2 id="trainingPlanDialogTitle">Crear plan de entrenamiento</h2><p id="planSummaryText"></p></div>
@@ -568,6 +589,6 @@
   </dialog>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
   <script src="/pwa-register.js" defer></script>
-  <script src="/onboarding-flow.js?v=deferred-food-session" defer></script>
+  <script src="/onboarding-flow.js?v=chef-chat" defer></script>
 </body>
 </html>
