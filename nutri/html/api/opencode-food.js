@@ -178,6 +178,7 @@ function traceFoodSession(trace, event, details = {}) {
   if (!trace) return;
   const entry = { at: new Date().toISOString(), event, ...details };
   trace.events.push(entry);
+  trace.onEvent?.(event, details);
   console.info(JSON.stringify({ area: 'food-opencode', trace_id: trace.id, ...entry }));
 }
 

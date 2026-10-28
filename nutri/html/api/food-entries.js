@@ -1,6 +1,32 @@
 const { randomUUID } = require('node:crypto');
 const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, maxFoodResponseWaitMs, recordFoodError, requestFoodDescription, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock } = require('./opencode-food.js');
 const { notificationInsertSql, resolveNotificationsSql } = require('./notifications.js');
+const foodProgress = new Map();
+
+function getFoodEntryProgress(userId, requestId) {
+  const key = `${userId}:${requestId}`;
+  const progress = foodProgress.get(key);
+  if (progress && Date.now() - progress.updatedAt > 15 * 60 * 1000) foodProgress.delete(key);
+  return foodProgress.get(key) || null;
+}
+
+function reportFoodProgress(userId, requestId, event, details = {}) {
+  const labels = {
+    save_received: 'Validando solicitud…', entry_saved: 'Borrador guardado; preparando análisis…',
+    session_resolution_started: 'Preparando sesión de análisis…', session_ready: 'Separando alimentos y cantidades…',
+    message_sent: 'Analizando los alimentos…', message_received: 'Respuesta recibida; revisando alimentos…',
+    openfoodfacts_lookup_started: 'Consultando Open Food Facts…', usda_lookup_started: 'Consultando USDA…',
+    web_resolution_started: 'Buscando y verificando una fuente…', reply_validation_retry: 'Validando macros; reintentando análisis…',
+    reply_validated: 'Macros validados; guardando comida…', items_saved: 'Alimentos guardados; verificando registro…',
+    persistence_verified: 'Registro verificado.', save_failed: 'El análisis se detuvo; se conserva el borrador.',
+  };
+  let label = labels[event];
+  if (event === 'food_sources_lookup') label = `Consultas terminadas: Open Food Facts ${details.openFoodFactsMatched}/${details.queried}; USDA ${details.usdaMatched}/${details.usdaQueried}.`;
+  if (!label) return;
+  const key = `${userId}:${requestId}`;
+  foodProgress.set(key, { label, updatedAt: Date.now() });
+  if (foodProgress.size > 500) foodProgress.delete(foodProgress.keys().next().value);
+}
 
 function validateFoodEntry(data) {
   const fecha = typeof data?.fecha === 'string' ? data.fecha : '';
@@ -536,6 +562,7 @@ async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, r
   catch (error) { json(response, error.status || 400, { error: error.message }); return; }
 
   const trace = { id: randomUUID(), events: [] };
+  trace.onEvent = (event, details) => reportFoodProgress(userId, entry.requestId, event, details);
   traceFoodSession(trace, 'save_received');
   let entryId;
   let committed = false;
@@ -753,12 +780,14 @@ SELECT LAST_INSERT_ID();`);
     if (result?.items?.length) result.items = applyExplicitQuantities(result.items, quantityContext, answeredPendingQuantity);
     if (result?.items?.length && openFoodFactsFirstPass) {
       const names = [...new Set(result.items.filter((item) => item.targetItemId == null && item.macroSource !== 'declarado_usuario').map((item) => item.name).filter(Boolean))];
+      traceFoodSession(trace, 'openfoodfacts_lookup_started', { itemCount: names.length });
       for (let index = 0; index < names.length; index += 3) {
         const products = await Promise.all(names.slice(index, index + 3).map((name) => findOpenFoodFactsProduct(name)));
         openFoodFactsProducts.push(...products.filter(Boolean));
       }
       const unresolvedNames = names.filter((name) => !openFoodFactsProducts.some((product) => product.name === name));
       const usdaProducts = [];
+      if (unresolvedNames.length) traceFoodSession(trace, 'usda_lookup_started', { itemCount: unresolvedNames.length });
       for (let index = 0; index < unresolvedNames.length; index += 3) {
         usdaProducts.push(...(await Promise.all(unresolvedNames.slice(index, index + 3).map((name) => findUsdaFood(name)))).filter(Boolean));
       }
@@ -772,6 +801,7 @@ SELECT LAST_INSERT_ID();`);
         requestArgs.allowWebSearch = true;
         requestArgs.openFoodFactsFirstPass = false;
         requestArgs.openFoodFactsCandidates = openFoodFactsProducts;
+        traceFoodSession(trace, 'web_resolution_started', { unresolvedCount: result.items.filter((item) => item.targetItemId == null && item.macroSource !== 'declarado_usuario' && !openFoodFactsProducts.some((product) => product.name === item.name)).length });
         parts = await requestFoodWithSessionRecovery({
           ...requestArgs, retryFeedback: 'Primero se consultó Open Food Facts. Usa sus candidatos solo si el producto coincide exactamente; conserva esos macros y su procedencia sin sustituirlos. Usa websearch/webfetch únicamente para los alimentos que no tengan candidato coincidente. No inventes ni cambies productos.',
         });
@@ -1063,4 +1093,4 @@ SELECT LAST_INSERT_ID();`);
   }
 }
 
-module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, localDateTimeToUtc, normalizeFoodReply, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, readFoodEntries, readPendingFoodDraft, saveFoodEntry, usedFoodWebFetch, usedFoodWebTools, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, localDateTimeToUtc, normalizeFoodReply, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, readFoodEntries, readPendingFoodDraft, reportFoodProgress, saveFoodEntry, usedFoodWebFetch, usedFoodWebTools, validateFoodEntry, validFoodItem };

@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitGrams, foodItemIssues, parseDeclaredFoodShortcut, usedFoodWebFetch, usedFoodWebTools } = require('./food-entries.js');
+const { applyExplicitGrams, foodItemIssues, getFoodEntryProgress, parseDeclaredFoodShortcut, reportFoodProgress, usedFoodWebFetch, usedFoodWebTools } = require('./food-entries.js');
 
 test('parses only a complete, validated user-declared single-food shortcut', () => {
   const reply = parseDeclaredFoodShortcut('Yogur natural | cantidad consumida: 150 g | 135 kcal; 15 g proteína; 9 g carbohidratos; 4 g grasa; 0 g fibra');
@@ -21,6 +21,12 @@ test('detects actual web tool calls rather than merely enabled tools', () => {
 test('distinguishes web search from opening a source', () => {
   assert.equal(usedFoodWebFetch([{ type: 'tool', tool: 'websearch' }]), false);
   assert.equal(usedFoodWebFetch([{ type: 'tool', state: { title: 'Web Fetch' } }]), true);
+});
+
+test('reports safe food-analysis progress scoped to the authenticated user and request', () => {
+  reportFoodProgress('27', 'req-progress-test', 'usda_lookup_started', { description: 'private food text' });
+  assert.equal(getFoodEntryProgress('27', 'req-progress-test').label, 'Consultando USDA…');
+  assert.equal(getFoodEntryProgress('28', 'req-progress-test'), null);
 });
 
 test('uses compact explicit gram amounts to resolve a single missing food quantity', () => {

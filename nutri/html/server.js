@@ -11,7 +11,7 @@ const { verifyGarminAccount } = require('./api/garmin-verification.js');
 const { syncGarminTraining } = require('./api/garmin-training-sync.js');
 const { readBiometrics, saveBiometric } = require('./api/biometrics.js');
 const { readPlicometrics, savePlicometric } = require('./api/plicometrics.js');
-const { clearFoodChatHistory, deleteFoodEntry, readFoodEntries, readPendingFoodDraft, saveFoodEntry } = require('./api/food-entries.js');
+const { clearFoodChatHistory, deleteFoodEntry, getFoodEntryProgress, readFoodEntries, readPendingFoodDraft, saveFoodEntry } = require('./api/food-entries.js');
 const { calendarDayRange, readCalendarTimezone } = require('./api/calendar-day.js');
 const { deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError } = require('./api/opencode-food.js');
 const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, readTrainingPlanPrompt } = require('./api/training-analysis.js');
@@ -636,6 +636,20 @@ COMMIT;`);
       if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
       try { json(response, 200, { draft: await readPendingFoodDraft({ userId: claims.sub, dbQuery }) }); }
       catch { authError(response, 503, 'No se pudo recuperar el borrador de comida.'); }
+      return;
+    }
+
+    if (pathname === '/api/food-entries/progress') {
+      if (request.method !== 'GET') { response.writeHead(405, { Allow: 'GET' }).end(); return; }
+      let claims;
+      try { claims = await authenticated(request); }
+      catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
+      if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
+      const requestId = new URL(request.url, 'http://localhost').searchParams.get('requestId') || '';
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)) {
+        authError(response, 400, 'Solicitud de progreso no válida.'); return;
+      }
+      json(response, 200, { progress: getFoodEntryProgress(claims.sub, requestId) });
       return;
     }
 

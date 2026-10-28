@@ -1844,6 +1844,40 @@ async function submitFoodMessage(retry = null) {
   description.value = '';
   description.disabled = true;
   const pendingMessage = retry?.pendingMessage || appendFoodChatMessage('user', text);
+  const progressMessage = appendFoodChatMessage('assistant', 'Conectando con el análisis…');
+  const progressText = progressMessage.querySelector('.food-chat-text');
+  let currentProgressLabel = 'Conectando con el análisis…';
+  let currentProgressAt = Date.now();
+  const completedProgress = [];
+  let progressFinalized = false;
+  const finishFoodProgress = (label) => {
+    if (progressFinalized) return;
+    const now = Date.now();
+    completedProgress.push(`✓ ${currentProgressLabel} (${((now - currentProgressAt) / 1000).toFixed(1)} s)`);
+    if (label) completedProgress.push(`✓ ${label}`);
+    progressText.textContent = completedProgress.join('\n');
+    progressFinalized = true;
+  };
+  let pollingProgress = true;
+  const progressPoll = (async () => {
+    while (pollingProgress) {
+      try {
+        const response = await fetch(`/api/food-entries/progress?requestId=${encodeURIComponent(body.requestId)}`, { credentials: 'same-origin' });
+        const { progress } = response.ok ? await response.json() : {};
+        if (progress?.label && progressText.isConnected && progress.label !== currentProgressLabel) {
+          const now = Date.now();
+          completedProgress.push(`✓ ${currentProgressLabel} (${((now - currentProgressAt) / 1000).toFixed(1)} s)`);
+          currentProgressLabel = progress.label;
+          currentProgressAt = now;
+          progressText.textContent = [...completedProgress, `• ${currentProgressLabel}`].join('\n');
+          progressMessage.dataset.progressStage = currentProgressLabel;
+          const thread = document.querySelector('#foodChatThread');
+          thread.scrollTop = thread.scrollHeight;
+        }
+      } catch {}
+      if (pollingProgress) await new Promise((resolve) => setTimeout(resolve, 1500));
+    }
+  })();
   feedback.textContent = 'Enviando la descripción…';
   foodLoading.hidden = false;
   void requestScreenWakeLock();
@@ -1867,6 +1901,7 @@ async function submitFoodMessage(retry = null) {
         foodRequestId = result.requestId;
         foodTargetEntryId = result.targetEntryId || foodTargetEntryId;
         const draft = await restoreFoodDraft(feedback);
+        document.querySelector('#foodChatMessages').append(progressMessage);
         draftRestored = Boolean(draft?.messages?.some((message) => message.role === 'assistant' && message.content.startsWith('[ERROR_REGISTRO] ')));
       } else {
         pendingMessage.remove();
@@ -1875,6 +1910,8 @@ async function submitFoodMessage(retry = null) {
     }
     pendingMessage.remove();
     renderFoodChat(result.messages || []);
+    finishFoodProgress(result.state === 'requiere_aclaracion' ? 'Esperando aclaración.' : 'Registro completado.');
+    document.querySelector('#foodChatMessages').append(progressMessage);
     if (result.state === 'requiere_aclaracion') {
       foodOpenCodeSessionActive = true;
       foodRequestId = result.requestId;
@@ -1911,6 +1948,8 @@ async function submitFoodMessage(retry = null) {
       await notifyResultIfHidden(foodDialog, 'comida', 'guardado', 'Comida guardada', result.message || 'El registro de comida quedó guardado.', result.entryId);
     }
   } catch (error) {
+    finishFoodProgress('Análisis detenido; se conserva el borrador si llegó a guardarse.');
+    if (!progressMessage.isConnected) document.querySelector('#foodChatMessages').append(progressMessage);
     if (pendingMessage.isConnected) {
       const button = document.createElement('button');
       button.type = 'button';
@@ -1924,6 +1963,10 @@ async function submitFoodMessage(retry = null) {
     notifyApp(feedback.textContent, 'error');
     if (!draftRestored && !resultNotificationHandled) await notifyResultIfHidden(foodDialog, 'comida', 'error', 'No se pudo completar el registro de comida', feedback.textContent, foodTargetEntryId);
   } finally {
+    pollingProgress = false;
+    await progressPoll;
+    if (!progressFinalized) finishFoodProgress('Solicitud finalizada.');
+    if (!progressMessage.isConnected) document.querySelector('#foodChatMessages').append(progressMessage);
     foodPending = false;
     foodLoading.hidden = true;
     document.querySelector('#foodChatThread').hidden = !document.querySelector('#foodChatMessages').children.length;
