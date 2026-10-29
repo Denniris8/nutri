@@ -69,7 +69,23 @@
       <label for="loginPassword">Contraseña</label>
       <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
       <button type="submit">Entrar</button>
-      <button id="resendVerificationButton" type="button" class="button-cancel">Reenviar verificación de correo</button>
+      <button id="forgotPasswordButton" type="button" class="button-cancel">Recuperar contraseña</button>
+    </form>
+    <form id="recoveryRequestForm" hidden>
+      <p>Te enviaremos un enlace si existe una cuenta con ese correo.</p>
+      <label for="recoveryEmail">Correo electrónico</label>
+      <input id="recoveryEmail" name="email" type="email" autocomplete="email" maxlength="254" required>
+      <button type="submit">Enviar enlace de recuperación</button>
+      <button id="cancelRecoveryRequest" type="button" class="button-cancel">Volver al acceso</button>
+    </form>
+    <form id="resetPasswordForm" hidden>
+      <p>Elige una contraseña nueva de al menos 12 caracteres.</p>
+      <label for="newPassword">Nueva contraseña</label>
+      <input id="newPassword" name="password" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+      <label for="confirmNewPassword">Confirmar contraseña</label>
+      <input id="confirmNewPassword" name="confirmPassword" type="password" autocomplete="new-password" minlength="12" maxlength="128" required>
+      <button type="submit">Guardar contraseña nueva</button>
+      <button id="cancelPasswordReset" type="button" class="button-cancel">Volver al acceso</button>
     </form>
     <form id="registerForm" hidden>
       <label for="registerName">Nombre</label>
@@ -138,6 +154,6 @@
   </main>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
   <script src="/pwa-register.js" defer></script>
-  <script src="/onboarding-flow.js?v=login-email-verify-v4" defer></script>
+  <script src="/onboarding-flow.js?v=password-recovery-v1" defer></script>
 </body>
 </html>

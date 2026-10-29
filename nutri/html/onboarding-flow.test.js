@@ -43,7 +43,8 @@ const settle = async () => { for (let turn = 0; turn < 10; turn += 1) await new 
 
 function loadFlow(search = '', fetchOverride) {
   const ids = [
-    'loginForm', 'loginEmail', 'loginPassword', 'resendVerificationButton', 'registerForm', 'errorMessage', 'cancelRegister',
+    'loginForm', 'loginEmail', 'loginPassword', 'forgotPasswordButton', 'registerForm', 'errorMessage', 'cancelRegister',
+    'recoveryRequestForm', 'recoveryEmail', 'cancelRecoveryRequest', 'resetPasswordForm', 'newPassword', 'confirmNewPassword', 'cancelPasswordReset',
     'registerName', 'registerCountryCode', 'registerEmail', 'registerCelular', 'registerPassword', 'registerHeight',
     'confirmPassword', 'registerAge', 'registerSex', 'preferencesForm', 'dietPattern', 'formError',
     'cancelPreferences',
@@ -62,6 +63,7 @@ function loadFlow(search = '', fetchOverride) {
     'appNoticeDialog', 'appNoticeText', 'foodButtonLoading', 'editUnitSystem',
   ];
   const elements = Object.fromEntries(ids.map((id) => [`#${id}`, new Element()]));
+  elements['.mode-buttons'] = new Element();
   elements['#testDataNotice'].hidden = true;
   const modeButtons = ['login', 'register'].map((mode) => {
     const button = new Element();
@@ -129,14 +131,6 @@ test('registration rejects mismatched passwords', () => {
   assert.equal(elements['#confirmPassword'].reportedValidity, true);
 });
 
-test('resending verification requires an email and displays a notice before sending', async () => {
-  const { elements, requests } = loadFlow();
-  await elements['#resendVerificationButton'].dispatch('click');
-  assert.equal(requests.some(([url]) => url === '/api/auth/resend-verification'), false);
-  assert.equal(elements['#loginEmail'].focused, true);
-  assert.match(elements['#errorMessage'].textContent, /Escribe el correo electrónico/);
-});
-
 test('email verification returns to login with the verified email filled in', async () => {
   const { elements } = loadFlow('?verify=valid-token', async () => ({
     ok: true,
@@ -144,6 +138,35 @@ test('email verification returns to login with the verified email filled in', as
   }));
   await settle();
   assert.equal(elements['#loginEmail'].value, 'user@example.com');
+});
+
+test('password recovery request uses the entered email and shows a generic confirmation', async () => {
+  const { elements, requests } = loadFlow();
+  elements['#loginEmail'].value = 'user@example.com';
+  await elements['#forgotPasswordButton'].dispatch('click');
+  const html = readFileSync(require.resolve('./login.html'), 'utf8');
+  assert.match(html, /id="forgotPasswordButton"[^>]*>Recuperar contraseña<\/button>/);
+  assert.doesNotMatch(html, /resendVerificationButton|Reenviar verificación de correo/);
+  assert.equal(elements['#recoveryEmail'].value, 'user@example.com');
+  await elements['#recoveryRequestForm'].dispatch('submit');
+  assert.equal(requests.at(-1)[0], '/api/auth/request-password-reset');
+  assert.equal(JSON.parse(requests.at(-1)[1].body).email, 'user@example.com');
+  assert.equal(elements['#loginForm'].hidden, false);
+});
+
+test('password reset link shows the new-password form and submits its token', async () => {
+  let submitted;
+  const { elements } = loadFlow('?reset=valid-token', async (...args) => {
+    submitted = args;
+    return { ok: true, json: async () => ({ ok: true, message: 'Contraseña actualizada.' }) };
+  });
+  assert.equal(elements['#resetPasswordForm'].hidden, false);
+  elements['#newPassword'].value = 'new-safe-password-123';
+  elements['#confirmNewPassword'].value = 'new-safe-password-123';
+  await elements['#resetPasswordForm'].dispatch('submit');
+  assert.equal(submitted[0], '/api/auth/reset-password');
+  assert.deepEqual(JSON.parse(submitted[1].body), { token: 'valid-token', password: 'new-safe-password-123' });
+  assert.equal(elements['#loginForm'].hidden, false);
 });
 
 test('registration requires identity fields and keeps country code separate from phone', () => {

@@ -16,7 +16,7 @@ const { calendarDayRange, readCalendarTimezone } = require('./api/calendar-day.j
 const { deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError } = require('./api/opencode-food.js');
 const { buildChefNutritionContext, deleteChefSession, sendChefMessage } = require('./api/chef-chat.js');
 const { recordApplicationError } = require('./api/application-errors.js');
-const { sendVerificationEmail: defaultSendVerificationEmail } = require('./api/email.js');
+const { sendPasswordRecoveryEmail: defaultSendPasswordRecoveryEmail, sendVerificationEmail: defaultSendVerificationEmail } = require('./api/email.js');
 const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, getTrainingProgress, readTrainingPlanPrompt, reportTrainingProgress } = require('./api/training-analysis.js');
 const { createAnalysisProgressRecorder } = require('./api/analysis-progress.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
@@ -209,7 +209,7 @@ function authError(response, status, message) {
   json(response, status, { error: message });
 }
 
-function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_SECRET, now = () => Math.floor(Date.now() / 1000), openCodeRequest = defaultOpenCodeRequest, sendVerificationEmail = defaultSendVerificationEmail, testAccountPhone = process.env.DASHBOARD_TEST_ACCOUNT_PHONE || '+520000000000', allowTestAccountSeeding = process.env.ALLOW_TEST_ACCOUNT_SEEDING === 'true' && process.env.NODE_ENV !== 'production' } = {}) {
+function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_SECRET, now = () => Math.floor(Date.now() / 1000), openCodeRequest = defaultOpenCodeRequest, sendVerificationEmail = defaultSendVerificationEmail, sendPasswordRecoveryEmail = defaultSendPasswordRecoveryEmail, testAccountPhone = process.env.DASHBOARD_TEST_ACCOUNT_PHONE || '+520000000000', allowTestAccountSeeding = process.env.ALLOW_TEST_ACCOUNT_SEEDING === 'true' && process.env.NODE_ENV !== 'production' } = {}) {
   const attempts = new Map();
 
   async function authenticated(request) {
@@ -472,6 +472,69 @@ COMMIT;`);
           }
           genericResponse();
         } catch { authError(response, 503, 'No se pudo completar la solicitud.'); }
+        return;
+      }
+      if (route === 'request-password-reset') {
+        if (!allowAttempt(request, response, route)) return;
+        let data;
+        try { data = await bodyJson(request); }
+        catch (error) { authError(response, error.status || 400, 'Solicitud no válida.'); return; }
+        const email = typeof data.email === 'string' ? data.email.trim().toLowerCase() : '';
+        const genericResponse = () => json(response, 202, { ok: true, message: 'Si existe una cuenta con ese correo, enviaremos instrucciones para restablecer la contraseña.' });
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || Buffer.byteLength(email, 'utf8') > 254 || /[^\x00-\x7f]/.test(email)) { genericResponse(); return; }
+        try {
+          const userId = (await dbQuery(`SELECT id FROM usuarios WHERE correo_electronico=${textSql(email)} AND activo=1 LIMIT 1;`)).trim();
+          if (!/^\d+$/.test(userId)) { genericResponse(); return; }
+          const token = randomBytes(32).toString('base64url');
+          const tokenHash = createHash('sha256').update(token).digest('hex');
+          await dbQuery(`START TRANSACTION;
+UPDATE tokens_cuenta_email SET consumido_en=UTC_TIMESTAMP(3) WHERE usuario_id=${userId} AND proposito='recuperacion' AND consumido_en IS NULL;
+INSERT INTO tokens_cuenta_email(usuario_id,proposito,token_hash,vence_en) VALUES (${userId},'recuperacion',UNHEX('${tokenHash}'),UTC_TIMESTAMP(3)+INTERVAL 1 HOUR);
+COMMIT;`);
+          try { await sendPasswordRecoveryEmail(email, token); }
+          catch (error) {
+            const traceId = randomUUID();
+            try { await recordApplicationError({ dbQuery, textSql, traceId, area: 'auth', event: 'password_recovery_email_failed', stage: 'send', action: 'POST /api/auth/request-password-reset', method: 'POST', route: '/api/auth/request-password-reset', httpStatus: 503, upstreamHttpStatus: error.upstreamHttpStatus, error, description: 'No se pudo enviar el correo de recuperación.' }); }
+            catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
+          }
+          genericResponse();
+        } catch (error) {
+          const traceId = randomUUID();
+          try { await recordApplicationError({ dbQuery, textSql, traceId, area: 'auth', event: 'password_recovery_request_failed', stage: 'database', action: 'POST /api/auth/request-password-reset', method: 'POST', route: '/api/auth/request-password-reset', httpStatus: 503, error, description: 'No se pudo preparar la recuperación de contraseña.' }); }
+          catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
+          authError(response, 503, 'No se pudo completar la solicitud.');
+        }
+        return;
+      }
+      if (route === 'reset-password') {
+        if (!allowAttempt(request, response, route)) return;
+        let data;
+        try { data = await bodyJson(request); }
+        catch (error) { authError(response, error.status || 400, 'Solicitud no válida.'); return; }
+        const token = typeof data.token === 'string' ? data.token : '';
+        const password = typeof data.password === 'string' ? data.password : '';
+        if (!/^[A-Za-z0-9_-]{43}$/.test(token) || Buffer.byteLength(password, 'utf8') < 12 || Buffer.byteLength(password, 'utf8') > 128) {
+          authError(response, 400, 'El enlace no es válido o venció, o la contraseña no cumple los requisitos.');
+          return;
+        }
+        const tokenHash = createHash('sha256').update(token).digest('hex');
+        try {
+          const salt = randomBytes(16);
+          const passwordHash = await derivePassword(password, salt);
+          const result = await dbQuery(`START TRANSACTION;
+UPDATE tokens_cuenta_email t JOIN usuarios u ON u.id=t.usuario_id SET t.consumido_en=UTC_TIMESTAMP(3),u.password_salt=UNHEX('${salt.toString('hex')}'),u.password_hash=UNHEX('${passwordHash.toString('hex')}'),u.correo_verificado_en=COALESCE(u.correo_verificado_en,UTC_TIMESTAMP(3)) WHERE t.proposito='recuperacion' AND t.token_hash=UNHEX('${tokenHash}') AND t.consumido_en IS NULL AND t.vence_en>UTC_TIMESTAMP(3) AND u.activo=1 AND u.correo_electronico IS NOT NULL;
+SET @password_reset_changed=ROW_COUNT();
+UPDATE dashboard_sessions s JOIN tokens_cuenta_email t ON t.usuario_id=s.usuario_id SET s.revoked_at=UTC_TIMESTAMP() WHERE @password_reset_changed=1 AND t.proposito='recuperacion' AND t.token_hash=UNHEX('${tokenHash}') AND t.consumido_en IS NOT NULL AND s.revoked_at IS NULL;
+SELECT @password_reset_changed;
+COMMIT;`);
+          if (Number(result.trim().split(/\s+/).at(-1)) !== 1) { authError(response, 400, 'El enlace no es válido o venció. Solicita uno nuevo.'); return; }
+          json(response, 200, { ok: true, message: 'Contraseña actualizada. Ya puedes iniciar sesión.' });
+        } catch (error) {
+          const traceId = randomUUID();
+          try { await recordApplicationError({ dbQuery, textSql, traceId, area: 'auth', event: 'password_reset_failed', stage: 'update', action: 'POST /api/auth/reset-password', method: 'POST', route: '/api/auth/reset-password', httpStatus: 503, error, description: 'No se pudo actualizar la contraseña.' }); }
+          catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
+          authError(response, 503, 'No se pudo actualizar la contraseña.');
+        }
         return;
       }
       if (route === 'delete') {

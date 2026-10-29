@@ -1,10 +1,10 @@
-function verificationUrl(token, env = process.env) {
+function accountActionUrl(token, action, env = process.env) {
   let base;
   try { base = new URL(env.APP_BASE_URL); } catch { throw Object.assign(new Error('email_url_not_configured'), { code: 'EMAIL_NOT_CONFIGURED' }); }
   if (base.username || base.password || (base.protocol !== 'https:' && !['localhost', '127.0.0.1'].includes(base.hostname))) {
     throw Object.assign(new Error('email_url_invalid'), { code: 'EMAIL_NOT_CONFIGURED' });
   }
-  return new URL(`/login.html?verify=${encodeURIComponent(token)}`, base).href;
+  return new URL(`/login.html?${action}=${encodeURIComponent(token)}`, base).href;
 }
 
 function emailJsErrorCode(status, message) {
@@ -16,11 +16,12 @@ function emailJsErrorCode(status, message) {
   return Number.isInteger(status) ? `EMAILJS_HTTP_${status}` : 'EMAILJS_REJECTED';
 }
 
-async function sendVerificationEmail(email, token, env = process.env, fetchImpl = fetch) {
+async function sendAccountEmail(email, token, purpose, env = process.env, fetchImpl = fetch) {
   if (![env.EMAILJS_SERVICE_ID, env.EMAILJS_TEMPLATE_ID, env.EMAILJS_PUBLIC_KEY, env.EMAILJS_PRIVATE_KEY].every(Boolean)) {
     throw Object.assign(new Error('email_not_configured'), { code: 'EMAIL_NOT_CONFIGURED' });
   }
-  const url = verificationUrl(token, env);
+  const isRecovery = purpose === 'recuperacion';
+  const url = accountActionUrl(token, isRecovery ? 'reset' : 'verify', env);
   const response = await fetchImpl('https://api.emailjs.com/api/v1.0/email/send', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -30,7 +31,12 @@ async function sendVerificationEmail(email, token, env = process.env, fetchImpl 
       template_id: env.EMAILJS_TEMPLATE_ID,
       user_id: env.EMAILJS_PUBLIC_KEY,
       accessToken: env.EMAILJS_PRIVATE_KEY,
-      template_params: { to_email: email, verification_url: url },
+      template_params: {
+        to_email: email,
+        verification_url: url,
+        action_label: isRecovery ? 'Restablecer contraseña' : 'Verificar correo',
+        action_message: isRecovery ? 'Usa este enlace para elegir una nueva contraseña. Vence en una hora.' : 'Verifica tu correo para activar tu cuenta.',
+      },
     }),
   });
   if (!response.ok) {
@@ -42,4 +48,7 @@ async function sendVerificationEmail(email, token, env = process.env, fetchImpl 
   }
 }
 
-module.exports = { sendVerificationEmail };
+const sendVerificationEmail = (email, token, env, fetchImpl) => sendAccountEmail(email, token, 'verificacion', env, fetchImpl);
+const sendPasswordRecoveryEmail = (email, token, env, fetchImpl) => sendAccountEmail(email, token, 'recuperacion', env, fetchImpl);
+
+module.exports = { sendPasswordRecoveryEmail, sendVerificationEmail };

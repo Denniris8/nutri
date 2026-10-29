@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { sendVerificationEmail } = require('./email.js');
+const { sendPasswordRecoveryEmail, sendVerificationEmail } = require('./email.js');
 
 const env = {
   EMAILJS_SERVICE_ID: 'service_test',
@@ -25,6 +25,21 @@ test('verification email is sent through EmailJS with recipient and link templat
   assert.deepEqual(payload.template_params, {
     to_email: 'person@example.test',
     verification_url: 'https://nutri.example.test/login.html?verify=token_123',
+    action_label: 'Verificar correo',
+    action_message: 'Verifica tu correo para activar tu cuenta.',
+  });
+});
+
+test('password recovery email reuses the configured template with recovery copy and reset link', async () => {
+  let request;
+  await sendPasswordRecoveryEmail('person@example.test', 'token_123', env, async (...args) => { request = args; return { ok: true }; });
+  const payload = JSON.parse(request[1].body);
+  assert.equal(payload.template_id, env.EMAILJS_TEMPLATE_ID);
+  assert.deepEqual(payload.template_params, {
+    to_email: 'person@example.test',
+    verification_url: 'https://nutri.example.test/login.html?reset=token_123',
+    action_label: 'Restablecer contraseña',
+    action_message: 'Usa este enlace para elegir una nueva contraseña. Vence en una hora.',
   });
 });
 

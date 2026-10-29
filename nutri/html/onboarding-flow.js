@@ -715,6 +715,9 @@ function setMode(mode) {
   const registering = mode === 'register';
   loginForm.hidden = registering;
   registerForm.hidden = !registering;
+  document.querySelector('#recoveryRequestForm').hidden = true;
+  document.querySelector('#resetPasswordForm').hidden = true;
+  document.querySelector('.mode-buttons').hidden = false;
   if (registering && registerForm.dataset.demoPrefilled !== 'true') {
     document.querySelector('#registerName').value = 'Usuario de prueba';
     document.querySelector('#registerCountryCode').value = 'MX';
@@ -737,6 +740,80 @@ modeButtons.forEach((button) => {
 
 document.querySelector('#cancelRegister')?.addEventListener('click', () => setMode('login'));
 
+const recoveryRequestForm = document.querySelector('#recoveryRequestForm');
+const resetPasswordForm = document.querySelector('#resetPasswordForm');
+const modeControls = document.querySelector('.mode-buttons');
+
+function showLoginAfterRecovery() {
+  setMode('login');
+  document.querySelector('#newPassword').value = '';
+  document.querySelector('#confirmNewPassword').value = '';
+  window.history?.replaceState({}, '', '/login.html');
+}
+
+document.querySelector('#forgotPasswordButton')?.addEventListener('click', () => {
+  document.querySelector('#recoveryEmail').value = document.querySelector('#loginEmail').value.trim().toLowerCase();
+  loginForm.hidden = true;
+  registerForm.hidden = true;
+  modeControls.hidden = true;
+  recoveryRequestForm.hidden = false;
+  document.querySelector('#recoveryEmail').focus();
+});
+
+document.querySelector('#cancelRecoveryRequest')?.addEventListener('click', () => setMode('login'));
+document.querySelector('#cancelPasswordReset')?.addEventListener('click', showLoginAfterRecovery);
+
+recoveryRequestForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  try {
+    const response = await fetch('/api/auth/request-password-reset', {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: document.querySelector('#recoveryEmail').value.trim().toLowerCase() }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'No se pudo solicitar el enlace.');
+    showLoginAfterRecovery();
+    notifyApp(result.message || 'Si existe una cuenta con ese correo, enviaremos instrucciones para restablecer la contraseña.');
+  } catch (error) {
+    notifyApp(error.message || 'No se pudo solicitar el enlace.', 'error');
+  }
+});
+
+const resetToken = new URLSearchParams(window.location.search || '').get('reset');
+if (resetToken) {
+  window.history?.replaceState({}, '', '/login.html');
+  loginForm.hidden = true;
+  registerForm.hidden = true;
+  recoveryRequestForm.hidden = true;
+  modeControls.hidden = true;
+  resetPasswordForm.hidden = false;
+}
+
+resetPasswordForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const password = document.querySelector('#newPassword').value;
+  const confirmation = document.querySelector('#confirmNewPassword');
+  if (password !== confirmation.value) {
+    confirmation.setCustomValidity('Las contraseñas no coinciden.');
+    confirmation.reportValidity();
+    return;
+  }
+  try {
+    const response = await fetch('/api/auth/reset-password', {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: resetToken, password }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'No se pudo actualizar la contraseña.');
+    showLoginAfterRecovery();
+    notifyApp(result.message || 'Contraseña actualizada. Ya puedes iniciar sesión.');
+  } catch (error) {
+    notifyApp(error.message || 'No se pudo actualizar la contraseña.', 'error');
+  }
+});
+
+document.querySelector('#confirmNewPassword')?.addEventListener('input', (event) => event.currentTarget.setCustomValidity(''));
+
 loginForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   errorMessage.textContent = '';
@@ -756,29 +833,6 @@ loginForm?.addEventListener('submit', async (event) => {
   } catch (error) {
     errorMessage.textContent = error.message || 'No se pudo iniciar sesión. Intenta de nuevo.';
     notifyApp(errorMessage.textContent, 'error');
-  }
-});
-
-document.querySelector('#resendVerificationButton')?.addEventListener('click', async () => {
-  const emailInput = document.querySelector('#loginEmail');
-  const email = emailInput.value.trim().toLowerCase();
-  if (!email) {
-    errorMessage.textContent = 'Escribe el correo electrónico de la cuenta para reenviar la verificación.';
-    emailInput.focus();
-    notifyApp(errorMessage.textContent, 'warning');
-    return;
-  }
-  errorMessage.textContent = '';
-  try {
-    const response = await fetch('/api/auth/resend-verification', {
-      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email }),
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'No se pudo solicitar el correo.');
-    notifyApp(result.message || 'Si la cuenta necesita verificación, enviaremos un enlace al correo registrado.');
-  } catch (error) {
-    notifyApp(error.message || 'No se pudo solicitar el correo.', 'error');
   }
 });
 

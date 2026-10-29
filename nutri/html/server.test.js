@@ -866,6 +866,38 @@ test('resending verification uses a fresh token and does not reveal whether an a
   assert.match(sent?.[1] || '', /^[A-Za-z0-9_-]{43}$/);
 });
 
+test('password recovery sends a one-hour token for active accounts and hides account existence', async () => {
+  let recoverySql = '';
+  let sent;
+  await withServer(async (sql) => { recoverySql += sql; return sql.includes('SELECT id FROM usuarios WHERE correo_electronico') ? '27' : ''; }, async (base) => {
+    const response = await post(base + '/api/auth/request-password-reset', { email: 'USER@EXAMPLE.COM' });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { ok: true, message: 'Si existe una cuenta con ese correo, enviaremos instrucciones para restablecer la contraseña.' });
+  }, { sendPasswordRecoveryEmail: async (...args) => { sent = args; } });
+  assert.match(recoverySql, /WHERE correo_electronico=.* AND activo=1/);
+  assert.match(recoverySql, /proposito='recuperacion'/);
+  assert.match(recoverySql, /INTERVAL 1 HOUR/);
+  assert.equal(sent?.[0], 'user@example.com');
+  assert.match(sent?.[1] || '', /^[A-Za-z0-9_-]{43}$/);
+});
+
+test('password reset consumes its token, updates the password hash, and revokes active sessions', async () => {
+  let resetSql = '';
+  await withServer(async (sql) => { resetSql += sql; return '1'; }, async (base) => {
+    const response = await post(base + '/api/auth/reset-password', { token: 'A'.repeat(43), password: 'new-safe-password-123' });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, message: 'Contraseña actualizada. Ya puedes iniciar sesión.' });
+  });
+  assert.match(resetSql, /proposito='recuperacion'/);
+  assert.match(resetSql, /t\.consumido_en IS NULL/);
+  assert.match(resetSql, /t\.vence_en>UTC_TIMESTAMP\(3\)/);
+  assert.match(resetSql, /password_salt=UNHEX/);
+  assert.match(resetSql, /password_hash=UNHEX/);
+  assert.match(resetSql, /correo_verificado_en=COALESCE/);
+  assert.match(resetSql, /UPDATE dashboard_sessions/);
+  assert.doesNotMatch(resetSql, /new-safe-password-123/);
+});
+
 test('biometric validation requires weight and keeps optional BIA fields source-bound', () => {
   const manual = validateBiometric({ source: 'manual', weightKg: '70.5' });
   assert.equal(manual.weight, '70.5');
