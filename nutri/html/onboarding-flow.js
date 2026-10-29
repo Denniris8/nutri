@@ -187,10 +187,16 @@ function setTrainingPlanTargets(macros) {
   renderMacroCards(currentFoodEntries);
 }
 
+function scrollChatToLatest(messages) {
+  const thread = messages?.parentElement;
+  if (thread) thread.scrollTop = thread.scrollHeight;
+}
+
 function placeProgressAfterLatestUserMessage(container, bubble) {
   const latestUserMessage = [...container.querySelectorAll('.food-chat-message[data-role="user"]')].at(-1);
   if (latestUserMessage) latestUserMessage.after(bubble);
   else container.append(bubble);
+  scrollChatToLatest(container);
 }
 
 function appendTrainingPlanMessage(role, content) {
@@ -205,7 +211,7 @@ function appendTrainingPlanMessage(role, content) {
   appendTextWithTermHelp(text, content);
   bubble.append(speaker, text);
   planChatMessages.append(bubble);
-  planChatMessages.parentElement.scrollTop = planChatMessages.parentElement.scrollHeight;
+  scrollChatToLatest(planChatMessages);
   return bubble;
 }
 
@@ -222,6 +228,7 @@ function startTrainingProgress(progressId, appendMessage) {
     completed.push(`✓ ${currentLabel} (${((Date.now() - currentAt) / 1000).toFixed(1)} s)`);
     if (resultLabel) completed.push(`✓ ${resultLabel}`);
     text.textContent = completed.join('\n');
+    scrollChatToLatest(bubble.parentElement);
     finalized = true;
   };
   const polling = (async () => {
@@ -235,7 +242,7 @@ function startTrainingProgress(progressId, appendMessage) {
           currentLabel = progress.label;
           currentAt = now;
           text.textContent = [...completed, `• ${currentLabel}`].join('\n');
-          bubble.parentElement.scrollTop = bubble.parentElement.scrollHeight;
+          scrollChatToLatest(bubble.parentElement);
         }
       } catch {}
       if (active) await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -704,11 +711,6 @@ try {
   if (pendingNotice) { sessionStorage.removeItem('nutriAppNotice'); notifyApp(pendingNotice, pendingNotice === sessionExpiredMessage ? 'error' : 'success'); }
 } catch {}
 
-if (loginForm) {
-  document.querySelector('#loginCelular').value = '0000000000';
-  document.querySelector('#loginPassword').value = demoPassword;
-}
-
 function setMode(mode) {
   const registering = mode === 'register';
   loginForm.hidden = registering;
@@ -742,7 +744,7 @@ loginForm?.addEventListener('submit', async (event) => {
     const response = await fetch('/api/auth/login', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        phone: `${document.querySelector('#loginCountryCode').selectedOptions[0].dataset.dialCode}${document.querySelector('#loginCelular').value.replace(/\D/g, '')}`,
+        email: document.querySelector('#loginEmail').value.trim().toLowerCase(),
         password: document.querySelector('#loginPassword').value,
       }),
     });
@@ -754,6 +756,29 @@ loginForm?.addEventListener('submit', async (event) => {
   } catch (error) {
     errorMessage.textContent = error.message || 'No se pudo iniciar sesión. Intenta de nuevo.';
     notifyApp(errorMessage.textContent, 'error');
+  }
+});
+
+document.querySelector('#resendVerificationButton')?.addEventListener('click', async () => {
+  const emailInput = document.querySelector('#loginEmail');
+  const email = emailInput.value.trim().toLowerCase();
+  if (!email) {
+    errorMessage.textContent = 'Escribe el correo electrónico de la cuenta para reenviar la verificación.';
+    emailInput.focus();
+    notifyApp(errorMessage.textContent, 'warning');
+    return;
+  }
+  errorMessage.textContent = '';
+  try {
+    const response = await fetch('/api/auth/resend-verification', {
+      method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email }),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'No se pudo solicitar el correo.');
+    notifyApp(result.message || 'Si la cuenta necesita verificación, enviaremos un enlace al correo registrado.');
+  } catch (error) {
+    notifyApp(error.message || 'No se pudo solicitar el correo.', 'error');
   }
 });
 
@@ -773,6 +798,7 @@ registerForm?.addEventListener('submit', async (event) => {
       body: JSON.stringify({
         name: document.querySelector('#registerName').value,
         countryIso: document.querySelector('#registerCountryCode').value,
+        email: document.querySelector('#registerEmail').value.trim().toLowerCase(),
         phone: document.querySelector('#registerCelular').value,
         password: password.value,
         age: document.querySelector('#registerAge').value,
@@ -780,9 +806,13 @@ registerForm?.addEventListener('submit', async (event) => {
         sex: document.querySelector('#registerSex').value,
       }),
     });
+    const result = await response.json();
     if (!response.ok) {
-      const result = await response.json();
       throw new Error(result.error || 'No se pudo crear la cuenta.');
+    }
+    if (result.pendingVerification) {
+      navigateWithNotice(result.message || 'La cuenta quedó pendiente de verificar el correo.', '/login.html');
+      return;
     }
     navigateWithNotice('Cuenta creada.', '/');
   } catch (error) {
@@ -792,6 +822,26 @@ registerForm?.addEventListener('submit', async (event) => {
     notifyApp(errorMessage.textContent, 'error');
   }
 });
+
+const verificationToken = new URLSearchParams(window.location.search || '').get('verify');
+if (verificationToken) {
+  void (async () => {
+    try {
+      const response = await fetch('/api/auth/verify-email', {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: verificationToken }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'El enlace de verificación no es válido o ya venció.');
+      if (typeof result.email === 'string') document.querySelector('#loginEmail').value = result.email;
+      notifyApp('Correo verificado. Ya puedes iniciar sesión.');
+    } catch (error) {
+      notifyApp(error.message || 'No se pudo verificar el correo.', 'error');
+    } finally {
+      window.history?.replaceState({}, '', '/login.html');
+    }
+  })();
+}
 
 document.querySelector('#confirmPassword')?.addEventListener('input', (event) => {
   event.currentTarget.setCustomValidity('');
@@ -1560,7 +1610,7 @@ function appendTrainingMessage(role, content) {
   text.textContent = content;
   bubble.append(speaker, text);
   trainingChatMessages.append(bubble);
-  trainingChatMessages.parentElement.scrollTop = trainingChatMessages.parentElement.scrollHeight;
+  scrollChatToLatest(trainingChatMessages);
   return bubble;
 }
 trainingAnalyzeButton?.addEventListener('click', async () => {
@@ -1712,7 +1762,7 @@ function appendChefMessage(role, content) {
   text.textContent = content;
   bubble.append(speaker, text);
   chefMessages.append(bubble);
-  chefMessages.parentElement.scrollTop = chefMessages.parentElement.scrollHeight;
+  scrollChatToLatest(chefMessages);
 }
 
 async function closeChefChat() {
@@ -1828,8 +1878,7 @@ function appendFoodChatMessage(role, content) {
   text.textContent = content;
   bubble.append(speaker, text);
   chat.append(bubble);
-  const thread = document.querySelector('#foodChatThread');
-  thread.scrollTop = thread.scrollHeight;
+  scrollChatToLatest(chat);
   return bubble;
 }
 
@@ -1839,7 +1888,7 @@ function renderFoodChat(messages) {
   const thread = document.querySelector('#foodChatThread');
   thread.hidden = !messages.length && document.querySelector('#foodLoading').hidden;
   for (const message of messages) appendFoodChatMessage(message.role, message.content);
-  thread.scrollTop = thread.scrollHeight;
+  scrollChatToLatest(chat);
 }
 
 async function restoreFoodDraft(feedback) {
@@ -2002,6 +2051,7 @@ async function submitFoodMessage(retry = null) {
     completedProgress.push(`✓ ${currentProgressLabel} (${((now - currentProgressAt) / 1000).toFixed(1)} s)`);
     if (label) completedProgress.push(`✓ ${label}`);
     progressText.textContent = completedProgress.join('\n');
+    scrollChatToLatest(document.querySelector('#foodChatMessages'));
     progressFinalized = true;
   };
   let pollingProgress = true;
@@ -2017,8 +2067,7 @@ async function submitFoodMessage(retry = null) {
           currentProgressAt = now;
           progressText.textContent = [...completedProgress, `• ${currentProgressLabel}`].join('\n');
           progressMessage.dataset.progressStage = currentProgressLabel;
-          const thread = document.querySelector('#foodChatThread');
-          thread.scrollTop = thread.scrollHeight;
+          scrollChatToLatest(document.querySelector('#foodChatMessages'));
         }
       } catch {}
       if (pollingProgress) await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -2030,7 +2079,7 @@ async function submitFoodMessage(retry = null) {
   document.querySelector('#foodLoadingText').textContent = 'Analizando los alimentos…';
   const foodChatThread = document.querySelector('#foodChatThread');
   foodChatThread.hidden = false;
-  foodChatThread.scrollTop = foodChatThread.scrollHeight;
+  scrollChatToLatest(document.querySelector('#foodChatMessages'));
   registerFoodButton.setAttribute('aria-busy', 'true');
   document.querySelector('#foodButtonLoading').hidden = false;
   saveButton.disabled = true;

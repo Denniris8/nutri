@@ -4,7 +4,7 @@ const { readFileSync } = require('node:fs');
 const { readFile } = require('node:fs/promises');
 const { spawn } = require('node:child_process');
 const { promisify } = require('node:util');
-const { createHmac, randomBytes, randomUUID, scrypt: scryptCallback, timingSafeEqual } = require('node:crypto');
+const { createHash, createHmac, randomBytes, randomUUID, scrypt: scryptCallback, timingSafeEqual } = require('node:crypto');
 const { preferencesSql, readGarminEmail, readPreferences, savePreferences } = require('./api/preferences.js');
 const { accountProfileSql, readAccountProfile, saveAccountProfile } = require('./api/account-profile.js');
 const { verifyGarminAccount } = require('./api/garmin-verification.js');
@@ -16,6 +16,7 @@ const { calendarDayRange, readCalendarTimezone } = require('./api/calendar-day.j
 const { deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError } = require('./api/opencode-food.js');
 const { buildChefNutritionContext, deleteChefSession, sendChefMessage } = require('./api/chef-chat.js');
 const { recordApplicationError } = require('./api/application-errors.js');
+const { sendVerificationEmail: defaultSendVerificationEmail } = require('./api/email.js');
 const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, getTrainingProgress, readTrainingPlanPrompt, reportTrainingProgress } = require('./api/training-analysis.js');
 const { createAnalysisProgressRecorder } = require('./api/analysis-progress.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
@@ -68,7 +69,7 @@ function loadDatabaseEnvironment() {
     const match = line.match(/^\s*(?:export\s+)?([A-Z_]+)\s*=\s*(.*?)\s*$/);
     if (!match || process.env[match[1]] !== undefined) continue;
     const value = match[2].replace(/^("|')(.*)\1$/, '$2');
-    if (['DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASSWORD', 'DB_NAME', 'DASHBOARD_JWT_SECRET', 'USDA', 'OPENCODE_SERVICE_FILE', 'OPENCODE_BASE_URL', 'OPENCODE_PASSWORD', 'OPENCODE_SERVER_PASSWORD', 'OPENCODE_PORT', 'OPENCODE_AUTO_START', 'OPENCODE_PROJECT_DIR'].includes(match[1])) {
+    if (['DB_HOST', 'DB_PORT', 'DB_USER', 'DB_PASSWORD', 'DB_NAME', 'DASHBOARD_JWT_SECRET', 'USDA', 'OPENCODE_SERVICE_FILE', 'OPENCODE_BASE_URL', 'OPENCODE_PASSWORD', 'OPENCODE_SERVER_PASSWORD', 'OPENCODE_PORT', 'OPENCODE_AUTO_START', 'OPENCODE_PROJECT_DIR', 'EMAILJS_SERVICE_ID', 'EMAILJS_TEMPLATE_ID', 'EMAILJS_PUBLIC_KEY', 'EMAILJS_PRIVATE_KEY', 'APP_BASE_URL'].includes(match[1])) {
       process.env[match[1]] = value;
     }
   }
@@ -186,6 +187,7 @@ function validateRegistration(data) {
   const password = typeof data.password === 'string' ? data.password : '';
   const country = typeof data.countryIso === 'string' ? data.countryIso : '';
   const sex = typeof data.sex === 'string' ? data.sex : '';
+  const email = typeof data.email === 'string' ? data.email.trim().toLowerCase() : '';
   const heightRaw = data.heightCm;
   const heightValue = heightRaw == null || heightRaw === '' ? null
     : typeof heightRaw === 'string' && /^\d{2,3}(?:\.\d{1,2})?$/.test(heightRaw) ? Number(heightRaw) : NaN;
@@ -193,20 +195,21 @@ function validateRegistration(data) {
   const rawPhone = typeof data.phone === 'string' ? data.phone : '';
   const phone = rawPhone.replace(/[\s()-]/g, '');
   const dialCode = countryDialCodes[country];
-  const e164 = dialCode && /^\d{6,15}$/.test(phone) ? `${dialCode}${phone}` : '';
+  const e164 = phone ? dialCode && /^\d{6,15}$/.test(phone) ? `${dialCode}${phone}` : '' : null;
   if (!name || name.length > 150 || /[\u0000-\u001f]/.test(name)) throw Object.assign(new Error(), { status: 400 });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || Buffer.byteLength(email, 'utf8') > 254 || /[^\x00-\x7f]/.test(email)) throw Object.assign(new Error(), { status: 400 });
   if (!Number.isInteger(age) || age < 13 || age > 120) throw Object.assign(new Error(), { status: 400 });
   if (heightValue === null || !Number.isFinite(heightValue) || heightValue < 80 || heightValue > 250) throw Object.assign(new Error(), { status: 400 });
-  if (!['masculino', 'femenino'].includes(sex) || !dialCode || !/^\+[1-9]\d{6,14}$/.test(e164)) throw Object.assign(new Error(), { status: 400 });
+  if (!['masculino', 'femenino'].includes(sex) || !dialCode || (phone && !/^\+[1-9]\d{6,14}$/.test(e164 || ''))) throw Object.assign(new Error(), { status: 400 });
   if (Buffer.byteLength(password, 'utf8') < 12 || Buffer.byteLength(password, 'utf8') > 128) throw Object.assign(new Error(), { status: 400 });
-  return { name, age, sex, height: heightValue.toFixed(2), country, phone, e164, password };
+  return { name, age, sex, height: heightValue.toFixed(2), country, email, phone, e164, password };
 }
 
 function authError(response, status, message) {
   json(response, status, { error: message });
 }
 
-function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_SECRET, now = () => Math.floor(Date.now() / 1000), openCodeRequest = defaultOpenCodeRequest, testAccountPhone = process.env.DASHBOARD_TEST_ACCOUNT_PHONE || '+520000000000', allowTestAccountSeeding = process.env.ALLOW_TEST_ACCOUNT_SEEDING === 'true' && process.env.NODE_ENV !== 'production' } = {}) {
+function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_SECRET, now = () => Math.floor(Date.now() / 1000), openCodeRequest = defaultOpenCodeRequest, sendVerificationEmail = defaultSendVerificationEmail, testAccountPhone = process.env.DASHBOARD_TEST_ACCOUNT_PHONE || '+520000000000', allowTestAccountSeeding = process.env.ALLOW_TEST_ACCOUNT_SEEDING === 'true' && process.env.NODE_ENV !== 'production' } = {}) {
   const attempts = new Map();
 
   async function authenticated(request) {
@@ -231,11 +234,11 @@ function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_S
     return claims;
   }
 
-  async function reserveLoginAttempt(request, phone) {
+  async function reserveLoginAttempt(request, email) {
     const ip = request.socket.remoteAddress || 'unknown';
     const keys = [
       { kind: 'ip', hash: createHmac('sha256', jwtSecret).update(`login-rate:ip:${ip}`).digest('hex') },
-      ...(phone ? [{ kind: 'phone', hash: createHmac('sha256', jwtSecret).update(`login-rate:phone:${phone}`).digest('hex') }] : []),
+      ...(email ? [{ kind: 'email', hash: createHmac('sha256', jwtSecret).update(`login-rate:email:${email}`).digest('hex') }] : []),
     ];
     const values = keys.map(({ kind, hash }) => `(${textSql(kind)},UNHEX('${hash}'),UTC_TIMESTAMP(3),1)`).join(',');
     const scope = keys.map(({ kind, hash }) => `(kind=${textSql(kind)} AND key_hash=UNHEX('${hash}'))`).join(' OR ');
@@ -342,7 +345,8 @@ SELECT attempts,GREATEST(1,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(3),DATE_ADD(window
             const isTestAccount = allowTestAccountSeeding && input.e164 === testAccountPhone;
             const salt = randomBytes(16);
             const passwordHash = await derivePassword(input.password, salt);
-            const sessionId = randomUUID();
+            const verificationToken = randomBytes(32).toString('base64url');
+            const verificationHash = createHash('sha256').update(verificationToken).digest('hex');
             const testRows = isTestAccount ? `INSERT INTO registros_biometricos(usuario_id,fuente,peso_kg,notas) VALUES (@new_user_id,'manual',75,${textSql('Datos ficticios de demostración; reemplázalos por datos personales reales.')});
 INSERT INTO registros_plicometro(usuario_id,fecha,triceps_mm,biceps_mm,subescapular_mm,suprailiaco_mm,abdominal_mm,muslo_anterior_mm,pantorrilla_mm) VALUES (@new_user_id,UTC_DATE(),10,5,12,9,14,15,8);
 INSERT INTO registros_comidas(usuario_id,request_id,fecha_consumo,descripcion_original,estado,creado_en) VALUES (@new_user_id,UUID(),UTC_DATE(),${textSql('DATO SINTÉTICO DE PRUEBA: desayuno de ejemplo; alimentos y cantidades no son consumo real.')},'pendiente',UTC_TIMESTAMP(3));
@@ -350,50 +354,58 @@ INSERT INTO planes_entrenamiento(usuario_id,objetivos,contenido,creado_en) VALUE
 INSERT INTO vigencias_planes_entrenamiento(usuario_id,plan_id,fecha_inicio,creado_en) SELECT usuario_id,id,UTC_DATE(),UTC_TIMESTAMP(3) FROM planes_entrenamiento WHERE usuario_id=@new_user_id ORDER BY id DESC LIMIT 1;
 ` : '';
             const sql = `START TRANSACTION;
-INSERT INTO usuarios(nombre,edad,sexo,estatura_cm,pais_iso,celular_e164,password_salt,password_hash,es_prueba) VALUES (${textSql(input.name)},${input.age},${textSql(input.sex)},${input.height ?? 'NULL'},${textSql(input.country)},${textSql(input.e164)},UNHEX('${salt.toString('hex')}'),UNHEX('${passwordHash.toString('hex')}'),${isTestAccount ? 1 : 0});
+INSERT INTO usuarios(nombre,edad,sexo,estatura_cm,pais_iso,celular_e164,correo_electronico,password_salt,password_hash,es_prueba) VALUES (${textSql(input.name)},${input.age},${textSql(input.sex)},${input.height ?? 'NULL'},${textSql(input.country)},${input.e164 ? textSql(input.e164) : 'NULL'},${textSql(input.email)},UNHEX('${salt.toString('hex')}'),UNHEX('${passwordHash.toString('hex')}'),${isTestAccount ? 1 : 0});
 SET @new_user_id=LAST_INSERT_ID();
 ${testRows}
-INSERT INTO dashboard_sessions(session_id,usuario_id,expires_at) VALUES (${textSql(sessionId)},@new_user_id,UTC_TIMESTAMP()+INTERVAL ${sessionSeconds} SECOND);
+INSERT INTO tokens_cuenta_email(usuario_id,proposito,token_hash,vence_en) VALUES (@new_user_id,'verificacion',UNHEX('${verificationHash}'),UTC_TIMESTAMP(3)+INTERVAL 24 HOUR);
 COMMIT;
 SELECT @new_user_id;`;
             const output = await dbQuery(sql);
             const userId = output.split(/\s+/).at(-1);
             if (!/^\d+$/.test(userId || '')) throw new Error('registration_result');
-            setCookie(response, signJwt(userId, sessionId, jwtSecret, now()), sessionSeconds, request);
-            json(response, 201, { ok: true });
+            try {
+              await sendVerificationEmail(input.email, verificationToken);
+            } catch (error) {
+              const traceId = randomUUID();
+              try { await recordApplicationError({ dbQuery, textSql, traceId, area: 'auth', event: 'verification_email_failed', stage: 'send', action: 'POST /api/auth/register', method: 'POST', route: '/api/auth/register', httpStatus: 503, upstreamHttpStatus: error.upstreamHttpStatus, error, description: 'No se pudo enviar el correo de verificación.' }); }
+              catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
+              json(response, 202, { ok: true, pendingVerification: true, message: 'La cuenta quedó pendiente de verificación. No se pudo enviar el correo; contacta soporte para solicitar otro enlace.' });
+              return;
+            }
+            json(response, 202, { ok: true, pendingVerification: true, message: 'La cuenta quedó pendiente de verificación. Revisa tu correo para activar el acceso.' });
             return;
           }
 
-          const phone = typeof data.phone === 'string' ? data.phone.replace(/[\s()-]/g, '') : '';
+          const email = typeof data.email === 'string' ? data.email.trim().toLowerCase() : '';
           const password = typeof data.password === 'string' ? data.password : '';
-          const reservation = await reserveLoginAttempt(request, /^\+[1-9]\d{6,14}$/.test(phone) ? phone : null);
+          const reservation = await reserveLoginAttempt(request, /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && Buffer.byteLength(email, 'utf8') <= 254 ? email : null);
           if (!reservation.allowed) {
             await releaseLoginAttempt(reservation.keys);
             response.setHeader('Retry-After', reservation.retryAfter);
             authError(response, 429, 'Demasiados intentos. Intenta más tarde.');
             return;
           }
-          if (!/^\+[1-9]\d{6,14}$/.test(phone) || Buffer.byteLength(password) > 128 || !password) {
+          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || Buffer.byteLength(email, 'utf8') > 254 || /[^\x00-\x7f]/.test(email) || Buffer.byteLength(password) > 128 || !password) {
             await releaseLoginAttempt(reservation.keys);
             authError(response, 400, 'Datos no válidos.'); return;
           }
           let result;
           let passwordValid;
           try {
-            result = await dbQuery(`SELECT id,HEX(password_salt),HEX(password_hash),activo FROM usuarios WHERE celular_e164=${textSql(phone)} LIMIT 1;`);
+            result = await dbQuery(`SELECT id,HEX(password_salt),HEX(password_hash),activo,correo_verificado_en IS NOT NULL FROM usuarios WHERE correo_electronico=${textSql(email)} AND correo_verificado_en IS NOT NULL LIMIT 1;`);
             const [, saltHex, hashHex] = result.split('\t');
             passwordValid = await passwordMatches(password, saltHex, hashHex);
           } catch (error) {
             await releaseLoginAttempt(reservation.keys);
             throw error;
           }
-          const [id, , , active] = result.split('\t');
-          if (!id || active !== '1' || !passwordValid) {
+          const [id, , , active, emailVerified] = result.split('\t');
+          if (!id || active !== '1' || emailVerified !== '1' || !passwordValid) {
             const traceId = randomUUID();
             try {
               await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('auth')},${textSql(traceId)},${textSql('login_failed')},${textSql('credentials')},${textSql('POST /api/auth/login')},${textSql('POST')},${textSql('/api/auth/login')},${textSql('AUTH_INVALID_CREDENTIALS')},${textSql('AuthenticationError')},401,${textSql('Inicio de sesión rechazado.')});`);
             } catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
-            authError(response, 401, 'Celular o contraseña incorrectos.'); return;
+            authError(response, 401, 'Correo o contraseña incorrectos.'); return;
           }
           await releaseLoginAttempt(reservation.keys);
           await startSession(id, response, request);
@@ -413,6 +425,52 @@ SELECT @new_user_id;`;
           if (claims) await dbQuery(`UPDATE dashboard_sessions SET revoked_at=UTC_TIMESTAMP() WHERE session_id=${textSql(claims.sid)} AND revoked_at IS NULL;`);
           setCookie(response, '', 0, request);
           json(response, 200, { ok: true });
+        } catch { authError(response, 503, 'No se pudo completar la solicitud.'); }
+        return;
+      }
+      if (route === 'verify-email') {
+        if (!allowAttempt(request, response, 'verify-email')) return;
+        let data;
+        try { data = await bodyJson(request); }
+        catch (error) { authError(response, error.status || 400, 'Enlace de verificación no válido o vencido.'); return; }
+        const token = typeof data.token === 'string' ? data.token : '';
+        if (!/^[A-Za-z0-9_-]{43}$/.test(token)) { authError(response, 400, 'Enlace de verificación no válido o vencido.'); return; }
+        const tokenHash = createHash('sha256').update(token).digest('hex');
+        try {
+          const result = await dbQuery(`START TRANSACTION;
+UPDATE tokens_cuenta_email t JOIN usuarios u ON u.id=t.usuario_id SET t.consumido_en=UTC_TIMESTAMP(3),u.correo_verificado_en=UTC_TIMESTAMP(3) WHERE t.proposito='verificacion' AND t.token_hash=UNHEX('${tokenHash}') AND t.consumido_en IS NULL AND t.vence_en>UTC_TIMESTAMP(3) AND u.correo_verificado_en IS NULL;
+SELECT ROW_COUNT(),(SELECT u.correo_electronico FROM tokens_cuenta_email t JOIN usuarios u ON u.id=t.usuario_id WHERE t.proposito='verificacion' AND t.token_hash=UNHEX('${tokenHash}') AND t.consumido_en IS NOT NULL LIMIT 1);
+COMMIT;`);
+          const [updatedRows, email] = result.trim().split('\t');
+          if (Number(updatedRows) < 1 || !email) { authError(response, 400, 'Enlace de verificación no válido o vencido.'); return; }
+          json(response, 200, { ok: true, email });
+        } catch { authError(response, 503, 'No se pudo verificar el correo.'); }
+        return;
+      }
+      if (route === 'resend-verification') {
+        if (!allowAttempt(request, response, 'resend-verification')) return;
+        let data;
+        try { data = await bodyJson(request); }
+        catch (error) { authError(response, error.status || 400, 'Solicitud no válida.'); return; }
+        const email = typeof data.email === 'string' ? data.email.trim().toLowerCase() : '';
+        const genericResponse = () => json(response, 202, { ok: true, message: 'Si la cuenta necesita verificación, enviaremos un enlace al correo registrado.' });
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || Buffer.byteLength(email, 'utf8') > 254 || /[^\x00-\x7f]/.test(email)) { genericResponse(); return; }
+        try {
+          const [userId, verified] = (await dbQuery(`SELECT id,correo_verificado_en IS NOT NULL FROM usuarios WHERE correo_electronico=${textSql(email)} LIMIT 1;`)).split('\t');
+          if (!/^\d+$/.test(userId || '') || verified !== '0') { genericResponse(); return; }
+          const token = randomBytes(32).toString('base64url');
+          const tokenHash = createHash('sha256').update(token).digest('hex');
+          await dbQuery(`START TRANSACTION;
+UPDATE tokens_cuenta_email SET consumido_en=UTC_TIMESTAMP(3) WHERE usuario_id=${userId} AND proposito='verificacion' AND consumido_en IS NULL;
+INSERT INTO tokens_cuenta_email(usuario_id,proposito,token_hash,vence_en) VALUES (${userId},'verificacion',UNHEX('${tokenHash}'),UTC_TIMESTAMP(3)+INTERVAL 24 HOUR);
+COMMIT;`);
+          try { await sendVerificationEmail(email, token); }
+          catch (error) {
+            const traceId = randomUUID();
+            try { await recordApplicationError({ dbQuery, textSql, traceId, area: 'auth', event: 'verification_email_failed', stage: 'resend', action: 'POST /api/auth/resend-verification', method: 'POST', route: '/api/auth/resend-verification', httpStatus: 503, upstreamHttpStatus: error.upstreamHttpStatus, error, description: 'No se pudo reenviar el correo de verificación.' }); }
+            catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
+          }
+          genericResponse();
         } catch { authError(response, 503, 'No se pudo completar la solicitud.'); }
         return;
       }

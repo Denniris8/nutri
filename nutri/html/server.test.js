@@ -11,13 +11,13 @@ beforeEach(() => forgetFoodSessionCache());
 const { saveFoodEntry } = require('./api/food-entries.js');
 
 const demo = {
-  name: 'Usuario de prueba', countryIso: 'MX', phone: '0000000000',
+  name: 'Usuario de prueba', countryIso: 'MX', phone: '0000000000', email: 'User@Example.com',
   password: 'Demo-Prueba-2026!', age: 30, heightCm: '175', sex: 'masculino', isTestAccount: true,
 };
 
 async function withServer(dbQuery, run, options = {}) {
   const { registrationRateLimitResult = '1\t3600', ...serverOptions } = options;
-  const server = createServer({ ...serverOptions, dbQuery: (sql) => sql.includes('/* registration-rate-limit */') ? registrationRateLimitResult : dbQuery(sql), jwtSecret: 'test-jwt-secret-must-be-at-least-32-bytes' });
+  const server = createServer({ sendVerificationEmail: async () => {}, ...serverOptions, dbQuery: (sql) => sql.includes('/* registration-rate-limit */') ? registrationRateLimitResult : dbQuery(sql), jwtSecret: 'test-jwt-secret-must-be-at-least-32-bytes' });
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   try {
     await run(`http://127.0.0.1:${server.address().port}`);
@@ -74,7 +74,7 @@ test('dummy registration creates synthetic measurement rows without completing o
   let registrationSql = '';
   await withServer(async (sql) => { registrationSql = sql; return '27'; }, async (base) => {
     const response = await post(base + '/api/auth/register', demo);
-    assert.equal(response.status, 201);
+    assert.equal(response.status, 202);
   }, { testAccountPhone: '+520000000000', allowTestAccountSeeding: true });
   for (const table of ['registros_biometricos', 'registros_plicometro', 'registros_comidas', 'planes_entrenamiento', 'vigencias_planes_entrenamiento']) {
     assert.match(registrationSql, new RegExp(`INSERT INTO ${table}`));
@@ -92,7 +92,7 @@ test('client cannot mark an arbitrary registration as a test account', async () 
   let registrationSql = '';
   await withServer(async (sql) => { registrationSql = sql; return '27'; }, async (base) => {
     const response = await post(base + '/api/auth/register', { ...demo, phone: '4155550123', countryIso: 'US', isTestAccount: true });
-    assert.equal(response.status, 201);
+    assert.equal(response.status, 202);
   }, { testAccountPhone: '+520000000000', allowTestAccountSeeding: true });
   assert.doesNotMatch(registrationSql, /INSERT INTO (preferencias_usuario|perfil_salud_usuario|registros_biometricos|registros_plicometro|registros_comidas|planes_entrenamiento|vigencias_planes_entrenamiento)/);
 });
@@ -101,7 +101,7 @@ test('test account seed requires server-side authorization even for the reserved
   let registrationSql = '';
   await withServer(async (sql) => { registrationSql = sql; return '27'; }, async (base) => {
     const response = await post(base + '/api/auth/register', demo);
-    assert.equal(response.status, 201);
+    assert.equal(response.status, 202);
   }, { testAccountPhone: '+520000000000', allowTestAccountSeeding: false });
   assert.doesNotMatch(registrationSql, /INSERT INTO (registros_biometricos|registros_plicometro|registros_comidas|planes_entrenamiento|vigencias_planes_entrenamiento)/);
   assert.match(registrationSql, /,0\);/);
@@ -117,8 +117,8 @@ test('persistent registration rate limit rejects requests across server instance
   }, { registrationRateLimitResult: '6\t3600', testAccountPhone: '+520000000000', allowTestAccountSeeding: true });
 });
 
-test('duplicate registration response does not disclose whether the phone is already registered', async () => {
-  await withServer(async () => { throw new Error('Duplicate entry for celular_e164'); }, async (base) => {
+test('duplicate registration response does not disclose whether the email is already registered', async () => {
+  await withServer(async () => { throw new Error('Duplicate entry for correo_electronico'); }, async (base) => {
     const response = await post(base + '/api/auth/register', demo);
     assert.equal(response.status, 400);
     assert.deepEqual(await response.json(), { error: 'Datos no válidos.' });
@@ -821,120 +821,49 @@ test.skip('retired clarification flow: editing the same food description resolve
   assert.equal(queries.some((sql) => /UPDATE registros_comidas SET descripcion_original/.test(sql)), false);
 });
 
-test('registration creates a hashed user and grants a revocable JWT session', async () => {
-  const queries = [];
-  let preferencesSaved = false;
-  let healthSaved = false;
-  let termsAccepted = false;
-  let biometricsSaved = false;
-  await withServer(async (sql) => {
-    queries.push(sql);
-    if (sql.startsWith('START TRANSACTION')) {
-      if (sql.includes('INSERT INTO preferencias_usuario')) preferencesSaved = true;
-      if (sql.includes('INSERT INTO perfil_salud_usuario')) healthSaved = true;
-      if (sql.includes('INSERT INTO registros_biometricos')) biometricsSaved = true;
-      if (sql.includes('INSERT INTO dashboard_terms_decisions')) termsAccepted = true;
-      return '27';
-    }
-    if (sql.includes('SELECT s.usuario_id')) return '27';
-    if (sql.startsWith('SELECT EXISTS(')) return `${Number(preferencesSaved && healthSaved)}\t${Number(termsAccepted)}`;
-    if (sql.includes('FROM preferencias_usuario p JOIN perfil_salud_usuario')) return JSON.stringify({ deviceMode: 'ninguno', patronAlimentario: 'vegetariano', timezone: 'America/Mexico_City', allergiesStatus: 'sin_informacion', medicationsStatus: 'sin_informacion' });
-    if (sql.startsWith('SELECT JSON_OBJECT(')) return JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: 1600, restingMetabolismSource: 'mifflin' });
-    if (sql.startsWith('SELECT COALESCE(JSON_ARRAYAGG')) return JSON.stringify([{ measuredAt: '2026-10-13 09:00:00', source: 'bia', weightKg: 75, bodyAge: 30, bodyFatPct: 20, restingMetabolismKcal: 1600, visceralFat: 7, bmi: 24.5, musclePct: 35, notes: null }]);
-    if (sql.includes('INSERT INTO preferencias_usuario')) { preferencesSaved = true; healthSaved = true; return ''; }
-    if (sql.includes('INSERT INTO registros_biometricos')) { biometricsSaved = true; return ''; }
-    if (sql.includes('INSERT INTO dashboard_terms_decisions')) { termsAccepted = true; return ''; }
-    return sql.includes('LAST_INSERT_ID()') ? '27' : '';
-  }, async (base) => {
-    assert.equal((await fetch(base + '/', { redirect: 'manual' })).status, 302);
-    const response = await post(base + '/api/auth/register', demo);
-    assert.equal(response.status, 201);
-    const cookie = response.headers.get('set-cookie');
-    assert.match(cookie, /HttpOnly/);
-    assert.match(cookie, /SameSite=Strict/);
-    assert.doesNotMatch(queries.join('\n'), /0000000000|Demo-Prueba-2026!/);
+test('registration stores email and waits for one-time verification', async () => {
+  let registrationSql = '';
+  let sent;
+  await withServer(async (sql) => { registrationSql = sql; return '27'; }, async (base) => {
+    const response = await post(base + '/api/auth/register', { ...demo, phone: '' });
+    assert.equal(response.status, 202);
+    assert.equal((await response.json()).pendingVerification, true);
+    assert.equal(response.headers.get('set-cookie'), null);
+  }, { sendVerificationEmail: async (...args) => { sent = args; } });
+  assert.match(registrationSql, /correo_electronico/);
+  assert.ok(registrationSql.includes(Buffer.from('user@example.com').toString('hex')));
+  assert.match(registrationSql, /celular_e164,[^;]*NULL/);
+  assert.match(registrationSql, /tokens_cuenta_email/);
+  assert.doesNotMatch(registrationSql, /INSERT INTO dashboard_sessions/);
+  assert.doesNotMatch(registrationSql, /Demo-Prueba-2026!/);
+  assert.equal(sent?.[0], 'user@example.com');
+  assert.match(sent?.[1] || '', /^[A-Za-z0-9_-]{43}$/);
+});
 
-    const dashboardBeforeSetup = await fetch(base + '/dashboard_nutricional.html', { headers: { Cookie: cookie }, redirect: 'manual' });
-    assert.equal(dashboardBeforeSetup.status, 302);
-    assert.equal(dashboardBeforeSetup.headers.get('location'), '/preferencias.html');
-    const homeBeforeSetup = await fetch(base + '/', { headers: { Cookie: cookie }, redirect: 'manual' });
-    assert.equal(homeBeforeSetup.headers.get('location'), '/preferencias.html');
-    const preferencePage = await fetch(base + '/preferencias.html', { headers: { Cookie: cookie } });
-    assert.equal(preferencePage.status, 200);
-    assert.ok(queries.some((sql) => sql.includes('dashboard_sessions')));
-
-    const saved = await post(base + '/api/onboarding/preferences', {
-      deviceMode: 'ninguno', patronAlimentario: 'vegetariano',
-      preferredFoods: 'pescado', avoidedFoods: '', allergiesStatus: 'sin_informacion', allergiesDetails: '',
-      medicationsStatus: 'sin_informacion', medicationsDetails: '',
-    }, {
-      Cookie: cookie.split(';')[0], 'X-Client-Timezone': 'America/Mexico_City',
-    });
-    assert.equal(saved.status, 200);
-    const preferenceSql = queries.find((sql) => sql.includes('INSERT INTO preferencias_usuario') && sql.includes('ON DUPLICATE KEY'));
-    assert.ok(preferenceSql);
-    assert.doesNotMatch(preferenceSql, /America\/Mexico_City|vegetariano/);
-    assert.doesNotMatch(preferenceSql, /nutrition_day_(?:start|end)/);
-    assert.match(queries.find((sql) => sql.includes('INSERT INTO usuarios')) || '', /estatura_cm/);
-
-    const dashboardAfterPreferences = await fetch(base + '/dashboard_nutricional.html', { headers: { Cookie: cookie }, redirect: 'manual' });
-    assert.equal(dashboardAfterPreferences.status, 302);
-    assert.equal(dashboardAfterPreferences.headers.get('location'), '/terminos.html');
-    const homeAfterPreferences = await fetch(base + '/', { headers: { Cookie: cookie }, redirect: 'manual' });
-    assert.equal(homeAfterPreferences.headers.get('location'), '/terminos.html');
-    const dashboardBeforeTerms = await fetch(base + '/dashboard_nutricional.html', { headers: { Cookie: cookie }, redirect: 'manual' });
-    assert.equal(dashboardBeforeTerms.status, 302);
-    assert.equal(dashboardBeforeTerms.headers.get('location'), '/terminos.html');
-    const termsPage = await fetch(base + '/terminos.html', { headers: { Cookie: cookie } });
-    assert.equal(termsPage.status, 200);
-    const termsHtml = await termsPage.text();
-    assert.match(termsHtml, /id="acceptTermsButton"/);
-    assert.match(termsHtml, /id="rejectTermsButton"/);
-    assert.match(termsHtml, /id="termsContent"[\s\S]*Uso del dashboard/);
-    const acceptance = await post(base + '/api/terms/decision', { decision: 'accepted' }, { Cookie: cookie.split(';')[0] });
-    assert.equal(acceptance.status, 200);
-    assert.ok(queries.some((sql) => sql.includes('dashboard_terms_decisions')));
-    const dashboardAfterTerms = await fetch(base + '/dashboard_nutricional.html', { headers: { Cookie: cookie } });
-    assert.equal(dashboardAfterTerms.status, 200);
-    assert.match(await dashboardAfterTerms.text(), /Dashboard Nutricional/);
-    const homeAfterTerms = await fetch(base + '/', { headers: { Cookie: cookie }, redirect: 'manual' });
-    assert.equal(homeAfterTerms.headers.get('location'), '/dashboard_nutricional.html');
-    const accountProfileResponse = await fetch(base + '/api/dashboard/profile', { headers: { Cookie: cookie.split(';')[0] } });
-    assert.equal(accountProfileResponse.status, 200);
-    const { profile } = await accountProfileResponse.json();
-    assert.equal(profile.heightCm, 175);
-    assert.ok(queries.some((sql) => sql.includes('WHERE usuario_id=27')));
-    assert.equal((await fetch(base + '/preferencias.html?edit=1', { headers: { Cookie: cookie } })).status, 200);
-    const preferencesEdit = await fetch(base + '/api/onboarding/preferences', { headers: { Cookie: cookie.split(';')[0] } });
-    assert.equal(preferencesEdit.status, 200);
-    assert.equal((await preferencesEdit.json()).preferences.patronAlimentario, 'vegetariano');
-    for (const page of ['/preferencias.html', '/terminos.html', '/login.html']) {
-      const response = await fetch(base + page, { headers: { Cookie: cookie }, redirect: 'manual' });
-      assert.equal(response.status, 302, page);
-      assert.equal(response.headers.get('location'), '/dashboard_nutricional.html', page);
-    }
-
-    const biometricSave = await post(base + '/api/biometrics', {
-      source: 'bia', weightKg: '75', bodyAge: '30', bodyFatPct: '20', restingMetabolismKcal: '1600',
-      visceralFat: '7', bmi: '24.5', musclePct: '35', notes: '',
-    }, { Cookie: cookie.split(';')[0] });
-    assert.equal(biometricSave.status, 201);
-    assert.equal(biometricsSaved, true);
-    const biometrics = await fetch(base + '/api/biometrics', { headers: { Cookie: cookie.split(';')[0] } });
-    assert.equal(biometrics.status, 200);
-    assert.equal((await biometrics.json()).records[0].bodyAge, 30);
-
-    const invalidTimezone = await post(base + '/api/onboarding/preferences', {
-      deviceMode: 'ninguno', patronAlimentario: 'vegano',
-      preferredFoods: '', avoidedFoods: '', allergiesStatus: 'sin_informacion', allergiesDetails: '',
-      medicationsStatus: 'sin_informacion', medicationsDetails: '',
-    }, {
-      Cookie: cookie.split(';')[0], 'X-Client-Timezone': 'No/Such_Zone',
-    });
-    assert.equal(invalidTimezone.status, 400);
-    assert.equal(queries.filter((sql) => sql.includes('INSERT INTO preferencias_usuario')).length, 1);
-
+test('email verification consumes the one-time token and marks the account verified', async () => {
+  let verificationSql = '';
+  await withServer(async (sql) => { verificationSql = sql; return '1\tuser@example.com'; }, async (base) => {
+    const response = await post(base + '/api/auth/verify-email', { token: 'A'.repeat(43) });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { ok: true, email: 'user@example.com' });
   });
+  assert.match(verificationSql, /UPDATE tokens_cuenta_email/);
+  assert.match(verificationSql, /correo_verificado_en/);
+  assert.match(verificationSql, /consumido_en IS NULL/);
+  assert.match(verificationSql, /correo_electronico/);
+});
+
+test('resending verification uses a fresh token and does not reveal whether an account exists', async () => {
+  let resendSql = '';
+  let sent;
+  await withServer(async (sql) => { resendSql += sql; return sql.includes('SELECT id,correo_verificado_en') ? '27\t0' : ''; }, async (base) => {
+    const response = await post(base + '/api/auth/resend-verification', { email: 'user@example.com' });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), { ok: true, message: 'Si la cuenta necesita verificación, enviaremos un enlace al correo registrado.' });
+  }, { sendVerificationEmail: async (...args) => { sent = args; } });
+  assert.match(resendSql, /INSERT INTO tokens_cuenta_email/);
+  assert.equal(sent?.[0], 'user@example.com');
+  assert.match(sent?.[1] || '', /^[A-Za-z0-9_-]{43}$/);
 });
 
 test('biometric validation requires weight and keeps optional BIA fields source-bound', () => {
@@ -958,13 +887,13 @@ test('login accepts the stored password and logout revokes the session', async (
       queries.push(sql);
       if (sql.includes('INSERT INTO auth_login_rate_limits')) return '1\t900';
       if (sql.includes('UPDATE auth_login_rate_limits')) return '';
-      if (sql.includes('FROM usuarios WHERE celular_e164')) return `27\t${salt.toString('hex')}\t${hash.toString('hex')}\t1`;
+      if (sql.includes('FROM usuarios WHERE correo_electronico')) return `27\t${salt.toString('hex')}\t${hash.toString('hex')}\t1\t1`;
       if (sql.includes('SELECT s.usuario_id')) return sessionActive ? '27' : '';
       if (sql.includes('UPDATE dashboard_sessions')) sessionActive = false;
       return '';
     }, async (base) => {
       const login = await post(base + '/api/auth/login', {
-        phone: '+52 0000000000', password: demo.password,
+        email: 'USER@EXAMPLE.COM', password: demo.password,
       });
       assert.equal(login.status, 200);
       const cookie = login.headers.get('set-cookie');
@@ -997,20 +926,32 @@ test('expired JWT sessions are rejected before consulting the database', async (
   }, { now: () => 8 * 24 * 60 * 60 });
 });
 
+test('login rejects unverified email addresses without disclosing verification state', async () => {
+  const queries = [];
+  await withServer(async (sql) => { queries.push(sql); return sql.includes('INSERT INTO auth_login_rate_limits') ? '1\t900' : ''; }, async (base) => {
+    const response = await post(base + '/api/auth/login', { email: 'UNVERIFIED@example.com', password: 'wrong-password-123' });
+    assert.equal(response.status, 401);
+    assert.deepEqual(await response.json(), { error: 'Correo o contraseña incorrectos.' });
+  });
+  const lookup = queries.find((sql) => sql.includes('FROM usuarios WHERE correo_electronico')) || '';
+  assert.match(lookup, /correo_verificado_en IS NOT NULL/);
+  assert.ok(lookup.includes(Buffer.from('unverified@example.com').toString('hex')));
+});
+
 test('login persists failed credential buckets and logs no credential data', async () => {
   const queries = [];
-  const phone = '+522222222222';
+  const email = 'failed@example.com';
   await withServer(async (sql) => {
     queries.push(sql);
     if (sql.includes('INSERT INTO auth_login_rate_limits')) return '1\t900';
     if (sql.includes('SELECT id,HEX(password_salt)')) return '';
     return '';
   }, async (base) => {
-    const response = await post(base + '/api/auth/login', { phone, password: 'wrong-password-123' });
+    const response = await post(base + '/api/auth/login', { email, password: 'wrong-password-123' });
     assert.equal(response.status, 401);
     const audit = queries.find((sql) => sql.includes('INSERT INTO errores_aplicacion')) || '';
     assert.ok(audit.includes(Buffer.from('AUTH_INVALID_CREDENTIALS').toString('hex')));
-    assert.doesNotMatch(audit, /wrong-password-123|522222222222/);
+    assert.doesNotMatch(audit, /wrong-password-123|failed@example.com/);
     assert.ok(queries.some((sql) => sql.includes('auth_login_rate_limits') && sql.includes('UNHEX(')));
   });
 });
@@ -1019,10 +960,10 @@ test('login rate limiter rejects an exhausted shared IP bucket', async () => {
   let accountLookup = false;
   await withServer(async (sql) => {
     if (sql.includes('INSERT INTO auth_login_rate_limits')) return '11\t321';
-    if (sql.includes('FROM usuarios WHERE celular_e164')) accountLookup = true;
+    if (sql.includes('FROM usuarios WHERE correo_electronico')) accountLookup = true;
     return '';
   }, async (base) => {
-    const response = await post(base + '/api/auth/login', { phone: '+522222222222', password: 'wrong-password-123' });
+    const response = await post(base + '/api/auth/login', { email: 'failed@example.com', password: 'wrong-password-123' });
     assert.equal(response.status, 429);
     assert.equal(response.headers.get('retry-after'), '321');
     assert.equal(accountLookup, false);
@@ -1038,8 +979,7 @@ test('rejecting terms revokes the active session', async () => {
     if (sql.includes('UPDATE dashboard_sessions')) sessionActive = false;
     return sql.includes('LAST_INSERT_ID()') ? '27' : '';
   }, async (base) => {
-    const signup = await post(base + '/api/auth/register', demo);
-    const cookie = signup.headers.get('set-cookie').split(';')[0];
+    const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
     const response = await post(base + '/api/terms/decision', { decision: 'rejected' }, { Cookie: cookie });
     assert.equal(response.status, 200);
     assert.match(response.headers.get('set-cookie'), /Max-Age=0/);
@@ -1061,8 +1001,7 @@ test('account deletion requires the current password and sends a cascade delete'
     if (sql.includes('FROM usuarios WHERE id=27')) return `${salt.toString('hex')}\t${hash.toString('hex')}\t1`;
     return sql.includes('LAST_INSERT_ID()') ? '27' : '';
   }, async (base) => {
-    const signup = await post(base + '/api/auth/register', demo);
-    const cookie = signup.headers.get('set-cookie').split(';')[0];
+    const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
     const wrongPassword = await post(base + '/api/auth/delete', { password: 'Wrong-Password-123!' }, { Cookie: cookie });
     assert.equal(wrongPassword.status, 401);
     assert.equal(queries.some((sql) => sql.includes('DELETE FROM usuarios')), false);
@@ -1081,6 +1020,8 @@ test('registration rejects invalid origins and invalid fields before database ac
     assert.equal(wrongOrigin.status, 403);
     const invalid = await post(base + '/api/auth/register', { ...demo, age: 12 });
     assert.equal(invalid.status, 400);
+    const missingEmail = await post(base + '/api/auth/register', { ...demo, email: '' });
+    assert.equal(missingEmail.status, 400);
     const missingHeight = await post(base + '/api/auth/register', { ...demo, heightCm: '' });
     assert.equal(missingHeight.status, 400);
     const unsupportedSex = await post(base + '/api/auth/register', { ...demo, sex: 'otro' });

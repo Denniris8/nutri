@@ -43,8 +43,8 @@ const settle = async () => { for (let turn = 0; turn < 10; turn += 1) await new 
 
 function loadFlow(search = '', fetchOverride) {
   const ids = [
-    'loginForm', 'loginCountryCode', 'loginCelular', 'loginPassword', 'registerForm', 'errorMessage', 'cancelRegister',
-    'registerName', 'registerCountryCode', 'registerCelular', 'registerPassword', 'registerHeight',
+    'loginForm', 'loginEmail', 'loginPassword', 'resendVerificationButton', 'registerForm', 'errorMessage', 'cancelRegister',
+    'registerName', 'registerCountryCode', 'registerEmail', 'registerCelular', 'registerPassword', 'registerHeight',
     'confirmPassword', 'registerAge', 'registerSex', 'preferencesForm', 'dietPattern', 'formError',
     'cancelPreferences',
     'deviceModeManual', 'deviceModeGarmin', 'integrationUsername', 'integrationPassword', 'integrationCredentialsSection', 'verifyGarminButton', 'integrationCredentialsNote', 'preferredFoods', 'avoidedFoods',
@@ -62,7 +62,6 @@ function loadFlow(search = '', fetchOverride) {
     'appNoticeDialog', 'appNoticeText', 'foodButtonLoading', 'editUnitSystem',
   ];
   const elements = Object.fromEntries(ids.map((id) => [`#${id}`, new Element()]));
-  elements['#loginCountryCode'].selectedOptions = [{ dataset: { dialCode: '+52' } }];
   elements['#testDataNotice'].hidden = true;
   const modeButtons = ['login', 'register'].map((mode) => {
     const button = new Element();
@@ -73,6 +72,7 @@ function loadFlow(search = '', fetchOverride) {
   const requests = [];
   const defaultFetch = async (...request) => {
     requests.push(request);
+    if (request[0] === '/api/auth/register') return { ok: true, json: async () => ({ pendingVerification: true, message: 'Verifica tu correo.' }) };
     if (request[0].startsWith('/api/onboarding/preferences') && !request[1]?.method) return { ok: true, json: async () => ({ preferences: {
       deviceMode: search.includes('edit=1') ? 'garmin' : 'ninguno', garminConnected: search.includes('edit=1'), garminEmail: search.includes('edit=1') ? 'owner@example.com' : null,
       patronAlimentario: 'vegano', allergiesStatus: 'sin_informacion', medicationsStatus: 'sin_informacion',
@@ -93,10 +93,9 @@ function loadFlow(search = '', fetchOverride) {
   return { elements, modeButtons, destinations, requests };
 }
 
-test('registration sends measured height and preferences proceeds directly to terms', async () => {
+test('registration sends email and measured height, then returns to login pending verification', async () => {
   const { elements, modeButtons, destinations, requests } = loadFlow();
-  assert.equal(elements['#loginCelular'].value, '0000000000');
-  assert.equal(elements['#loginPassword'].value, 'Demo-Prueba-2026!');
+  assert.equal(elements['#loginEmail'].value, '');
   modeButtons[1].dispatch('click');
   assert.equal(elements['#loginForm'].hidden, true);
   assert.equal(elements['#registerForm'].hidden, false);
@@ -104,6 +103,7 @@ test('registration sends measured height and preferences proceeds directly to te
   assert.equal(elements['#registerName'].value, 'Usuario de prueba');
   assert.equal(elements['#registerCountryCode'].value, 'MX');
   assert.equal(elements['#registerCelular'].value, '0000000000');
+  elements['#registerEmail'].value = 'user@example.com';
   assert.equal(elements['#registerAge'].value, '30');
   assert.equal(elements['#registerHeight'].value, '');
   assert.equal(elements['#registerSex'].value, 'masculino');
@@ -112,18 +112,10 @@ test('registration sends measured height and preferences proceeds directly to te
   elements['#confirmPassword'].value = 'correct-horse-123';
   elements['#registerHeight'].value = '168.5';
   await elements['#registerForm'].dispatch('submit');
-  assert.equal(destinations.pop(), '/');
+  assert.equal(destinations.pop(), '/login.html');
   const registration = requests.find(([url]) => url === '/api/auth/register');
   assert.equal(JSON.parse(registration[1].body).heightCm, '168.5');
-
-  elements['#dietPattern'].value = 'vegetariano';
-  await elements['#preferencesForm'].dispatch('submit');
-  assert.equal(destinations.pop(), '/terminos.html');
-  const [preferencesUrl, preferencesRequest] = requests.at(-1);
-  assert.equal(preferencesUrl, '/api/onboarding/preferences');
-  assert.equal(preferencesRequest.headers['X-Client-Timezone'], 'America/Mexico_City');
-  assert.equal(JSON.parse(preferencesRequest.body).patronAlimentario, 'vegetariano');
-  assert.equal(Object.hasOwn(JSON.parse(preferencesRequest.body), 'nutritionWindow'), false);
+  assert.equal(JSON.parse(registration[1].body).email, 'user@example.com');
 
 });
 
@@ -137,19 +129,37 @@ test('registration rejects mismatched passwords', () => {
   assert.equal(elements['#confirmPassword'].reportedValidity, true);
 });
 
+test('resending verification requires an email and displays a notice before sending', async () => {
+  const { elements, requests } = loadFlow();
+  await elements['#resendVerificationButton'].dispatch('click');
+  assert.equal(requests.some(([url]) => url === '/api/auth/resend-verification'), false);
+  assert.equal(elements['#loginEmail'].focused, true);
+  assert.match(elements['#errorMessage'].textContent, /Escribe el correo electrónico/);
+});
+
+test('email verification returns to login with the verified email filled in', async () => {
+  const { elements } = loadFlow('?verify=valid-token', async () => ({
+    ok: true,
+    json: async () => ({ ok: true, email: 'user@example.com' }),
+  }));
+  await settle();
+  assert.equal(elements['#loginEmail'].value, 'user@example.com');
+});
+
 test('registration requires identity fields and keeps country code separate from phone', () => {
   const html = readFileSync(require.resolve('./login.html'), 'utf8');
   const form = html.match(/<form id="registerForm"[^>]*>([\s\S]*?)<\/form>/)?.[1];
   assert.ok(form);
-  for (const id of ['registerName', 'registerCountryCode', 'registerCelular', 'registerPassword', 'confirmPassword', 'registerAge', 'registerSex', 'registerHeight']) {
+  for (const id of ['registerName', 'registerCountryCode', 'registerEmail', 'registerPassword', 'confirmPassword', 'registerAge', 'registerSex', 'registerHeight']) {
     assert.match(form, new RegExp(`<[^>]+id="${id}"[^>]*required`), `${id} must be required`);
   }
   assert.match(form, /<input id="registerHeight"[^>]*type="number"[^>]*min="80"[^>]*max="250"/);
   assert.match(form, /<select id="registerSex"[\s\S]*?value="masculino"[\s\S]*?value="femenino"/);
   assert.match(form, /<select id="registerCountryCode"[\s\S]*?value="MX" data-dial-code="\+52"/);
-  assert.match(form, /<input id="registerCelular"[^>]*type="tel"/);
-  assert.match(html, /<select id="loginCountryCode"[\s\S]*?value="MX" data-dial-code="\+52"/);
-  assert.match(html, /<input id="loginCelular"[^>]*autocomplete="tel-national"/);
+  assert.match(form, /<input id="registerEmail"[^>]*type="email"[^>]*required/);
+  assert.match(form, /<input id="registerCelular"[^>]*type="tel"[^>]*>/);
+  assert.doesNotMatch(form.match(/<input id="registerCelular"[^>]*>/)?.[0] || '', /required/);
+  assert.match(html, /<input id="loginEmail"[^>]*type="email"[^>]*autocomplete="email"[^>]*required/);
 });
 
 test('calendar-day preferences no longer expose interval controls', () => {

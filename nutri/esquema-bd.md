@@ -8,7 +8,7 @@ El runner `mysql/migrate.sh` crea y mantiene esta tabla al iniciar la app: `vers
 
 ## `usuarios`
 
-Una fila por cuenta: `id BIGINT UNSIGNED` PK autoincremental, `nombre VARCHAR(150)`, `edad TINYINT UNSIGNED` (13–120), `sexo VARCHAR(10)` restringido a `masculino`, `femenino` u `otro`, estatura `DECIMAL(5,2) NULL` en cm (80–250), `pais_iso CHAR(2)`, celular normalizado `celular_e164 VARCHAR(16)` con índice único, `password_salt BINARY(16)`, `password_hash BINARY(64)` (scrypt), `es_prueba` y `activo` booleanos, y `creado_en TIMESTAMP`. La estatura se captura al registrar la cuenta y se puede actualizar junto con sexo desde Más; la cuenta y sesión autenticada limitan la actualización a la propia fila. La contraseña nunca se guarda en claro.
+Una fila por cuenta: `id BIGINT UNSIGNED` PK autoincremental, `nombre VARCHAR(150)`, `edad TINYINT UNSIGNED` (13–120), `sexo VARCHAR(10)` restringido a `masculino`, `femenino` u `otro`, estatura `DECIMAL(5,2) NULL` en cm (80–250), `pais_iso CHAR(2)`, celular normalizado `celular_e164 VARCHAR(16) NULL` con índice único, correo normalizado `correo_electronico VARCHAR(254) NULL` con índice único y `correo_verificado_en DATETIME(3) NULL`, `password_salt BINARY(16)`, `password_hash BINARY(64)` (scrypt), `es_prueba` y `activo` booleanos, y `creado_en TIMESTAMP`. Las nuevas cuentas requieren correo verificado para iniciar sesión; el teléfono queda opcional. Las cuentas históricas sin correo requieren migración manual verificada antes de recuperar acceso. El correo de la cuenta existente confirmada se asignó después de aplicar la migración y permanece sin verificar hasta completar el flujo de correo. La estatura se captura al registrar la cuenta y se puede actualizar junto con sexo desde Más; la cuenta y sesión autenticada limitan la actualización a la propia fila. La contraseña nunca se guarda en claro.
 
 ## `dashboard_sessions`
 
@@ -18,7 +18,11 @@ Relación: `usuarios (1) → (N) dashboard_sessions`, con borrado en cascada de 
 
 ## `auth_login_rate_limits`
 
-Buckets temporales por dirección IP y teléfono normalizado. Solo se guarda un HMAC-SHA-256 (`key_hash`) derivado del secreto del servidor, nunca el IP o teléfono en claro; la PK por tipo+hash permite límites compartidos entre procesos. `window_started_at` y `attempts` cuentan fallos y verificaciones concurrentes durante 15 minutos; los intentos correctos liberan su reserva. Las filas de más de 24 horas se purgan gradualmente al iniciar sesión. Tabla creada por `mysql/migrations/0006_auth_login_rate_limits.sql`.
+Buckets temporales por dirección IP e identificador de cuenta (teléfono histórico o correo). Solo se guarda un HMAC-SHA-256 (`key_hash`) derivado del secreto del servidor, nunca el IP, teléfono o correo en claro; la PK por tipo+hash permite límites compartidos entre procesos. `window_started_at` y `attempts` cuentan fallos y verificaciones concurrentes durante 15 minutos; los intentos correctos liberan su reserva. Las filas de más de 24 horas se purgan gradualmente al iniciar sesión. Creada por `0006_auth_login_rate_limits.sql`; `0010_email_auth_recovery.sql` agrega `email` al enum.
+
+## `tokens_cuenta_email`
+
+Tokens de verificación y recuperación asociados a una cuenta; conserva solo SHA-256 de un token aleatorio de alta entropía, propósito, vencimiento, consumo y creación. Se eliminan en cascada con la cuenta. Cada token se consume una sola vez en operación atómica. Creada por `mysql/migrations/0010_email_auth_recovery.sql`, aplicada en MySQL el 2026-10-29. La migración añade columnas anulables para mantener compatibilidad con las cuentas existentes y no asigna correos por inferencia. El DDL no se aplica como transacción; si falla parcialmente, contrastar `SHOW CREATE TABLE` y `schema_migrations` con `mysql` antes de cualquier reintento. Recuperación: migración correctiva hacia delante, conservando los campos/correos ya creados y borrando solo los objetos vacíos no usados si la app aún no consume tokens; no restaurar una copia completa ni borrar correos verificados.
 
 ## `notificaciones_usuario`
 
