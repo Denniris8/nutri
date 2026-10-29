@@ -2290,7 +2290,82 @@ if (dashboardTabs.length) {
 }
 
 let progressLoadId = 0;
+async function loadBiometricTrends() {
+  const container = document.querySelector('#progressBiometricsCharts');
+  const panel = container?.closest('.progress-biometrics');
+  if (!container) return;
+  panel?.setAttribute('aria-busy', 'true');
+  try {
+    const response = await fetch('/api/biometrics', { credentials: 'same-origin' });
+    if (!response.ok) throw new Error();
+    const { records = [] } = await response.json();
+    const recent = records.slice(0, 5).reverse();
+    const fields = [
+      ['Peso', 'weightKg', 'kg'], ['IMC', 'bmi', 'kg/m²'], ['Grasa corporal', 'bodyFatPct', '%'],
+      ['Músculo esquelético', 'musclePct', '%'], ['Metabolismo basal', 'restingMetabolismKcal', 'kcal/día'],
+      ['Grasa visceral', 'visceralFat', 'nivel'], ['Edad corporal', 'bodyAge', 'años'],
+    ];
+    const format = new Intl.NumberFormat('es-MX', { maximumFractionDigits: 1 });
+    container.replaceChildren();
+    for (const [label, key, unit] of fields) {
+      const points = recent.map((record, index) => ({
+        index, date: String(record.measuredAt || '').slice(0, 10), value: record[key] == null || record[key] === '' ? null : Number(record[key]), source: record.source,
+      })).filter((point) => Number.isFinite(point.value) && point.date);
+      if (!points.length) continue;
+      const card = document.createElement('article');
+      card.className = 'biometric-trend-card';
+      const title = document.createElement('h3');
+      title.textContent = label;
+      const chart = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+      chart.setAttribute('viewBox', '0 0 320 112');
+      chart.setAttribute('class', 'biometric-trend-chart');
+      chart.setAttribute('role', 'img');
+      chart.setAttribute('aria-label', `${label}, ${points.length} mediciones en los últimos ${recent.length} registros; unidad ${unit}`);
+      const values = points.map((point) => point.value);
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const x = (index) => 12 + index * (296 / Math.max(recent.length - 1, 1));
+      const y = (value) => 68 - (max === min ? 0 : (value - min) / (max - min) * 48);
+      for (let index = 1; index < points.length; index++) {
+        const line = document.createElementNS(chart.namespaceURI, 'line');
+        line.setAttribute('x1', x(points[index - 1].index));
+        line.setAttribute('y1', y(points[index - 1].value));
+        line.setAttribute('x2', x(points[index].index));
+        line.setAttribute('y2', y(points[index].value));
+        chart.append(line);
+      }
+      for (const point of points) {
+        const circle = document.createElementNS(chart.namespaceURI, 'circle');
+        circle.setAttribute('cx', x(point.index));
+        circle.setAttribute('cy', y(point.value));
+        circle.setAttribute('r', '4');
+        circle.setAttribute('aria-label', `${point.date}: ${format.format(point.value)} ${unit}, ${point.source === 'bia' ? 'BIA' : 'manual'}`);
+        chart.append(circle);
+        const date = document.createElementNS(chart.namespaceURI, 'text');
+        date.setAttribute('x', x(point.index));
+        date.setAttribute('y', '96');
+        date.setAttribute('text-anchor', 'middle');
+        date.textContent = point.date.slice(5);
+        chart.append(date);
+      }
+      const details = document.createElement('p');
+      details.className = 'biometric-trend-values';
+      details.textContent = points.map((point) => `${point.date}: ${format.format(point.value)} ${unit} (${point.source === 'bia' ? 'BIA' : 'manual'})`).join(' · ');
+      card.append(title, chart, details);
+      container.append(card);
+    }
+    if (!container.childElementCount) container.textContent = 'Aún no hay mediciones biométricas disponibles.';
+    document.querySelector('#progressBiometricsCaption').textContent = `Últimos ${recent.length} de ${records.length} registros disponibles; cada lectura indica su fuente y los campos no medidos se omiten.`;
+  } catch {
+    container.textContent = 'No se pudieron cargar los registros biométricos.';
+    notifyApp('No se pudieron cargar las tendencias biométricas.', 'error');
+  } finally {
+    panel?.setAttribute('aria-busy', 'false');
+  }
+}
+
 async function loadProgressNutrition() {
+  void loadBiometricTrends();
   const loadId = ++progressLoadId;
   const metrics = document.querySelector('#progressNutritionMetrics');
   const summary = document.querySelector('#progressSummaryText');

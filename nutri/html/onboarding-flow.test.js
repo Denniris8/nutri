@@ -254,6 +254,9 @@ test('dashboard has responsive calendar and More exposes editable forms and acco
   assert.match(css, /\.more-actions\s*\{\s*grid-template-columns:\s*1fr;/);
   assert.match(html, /id="accountHeightCm"/);
   for (const id of ['progressCorrelationMetrics', 'progressActivityMetrics', 'progressActivityChart', 'progressQualityMetrics']) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /id="progressBiometricsCharts"/);
+  assert.match(html, /últimos cinco registros disponibles/i);
+  assert.match(css, /\.biometric-trend-grid/);
   assert.match(html, /no se guardan cargas\/volumen de fuerza/i);
 });
 

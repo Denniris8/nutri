@@ -185,6 +185,16 @@ button, select, input, summary, a { -webkit-tap-highlight-color: transparent; }
 .progress-chart-bar { display: block; width: var(--bar-width); height: 100%; border-radius: inherit; background: var(--bar-color, var(--accent)); }
 .progress-chart-bar.is-previous { background: var(--md-sys-color-outline); }
 .progress-chart-target { position: absolute; top: 0; bottom: 0; left: 66.667%; width: 2px; background: var(--text); }
+.biometric-trend-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr)); gap: 12px; margin-top: 12px; }
+.biometric-trend-card { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: var(--shape-md); background: var(--md-sys-color-surface-container-low); }
+.biometric-trend-card h3 { margin: 0; font-size: 14px; }
+.biometric-trend-card p { margin: 4px 0 0; color: var(--muted); font-size: 12px; }
+.biometric-trend-chart { display: block; width: 100%; height: auto; margin-top: 8px; overflow: visible; }
+.biometric-trend-chart line { stroke: var(--accent); stroke-width: 2; }
+.biometric-trend-chart circle { fill: var(--accent); stroke: var(--md-sys-color-surface-container-low); stroke-width: 2; }
+.biometric-trend-chart text { fill: var(--muted); font: 10px system-ui, sans-serif; }
+.biometric-trend-values { display: grid; gap: 3px; margin-top: 6px !important; }
+.progress-biometrics { min-width: 0; }
 .progress-quality-metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; margin-top: 12px; }
 .progress-correlation, .progress-activity, .progress-quality { min-width: 0; }
 .more-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
