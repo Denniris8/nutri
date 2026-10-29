@@ -2323,7 +2323,7 @@ async function loadProgressNutrition() {
     quality.replaceChildren(
       metric('Días con comidas registradas', `${current.loggedDays} / ${days}`, `Completo: ${current.completeDays} · incompleto: ${current.incompleteDays} · pendientes: ${nutrition.quality.currentPending}`),
       metric('Días sin comida registrada', String(Math.max(0, days - current.loggedDays)), 'No se consideran consumo cero.'),
-      metric('Fuente de macros', `USDA ${nutrition.quality.macroSources.usda} · usuario ${nutrition.quality.macroSources.declared}`, `Web ${nutrition.quality.macroSources.web} · OpenCode ${nutrition.quality.macroSources.opencode} · estimados ${nutrition.quality.macroSources.estimated}`),
+      metric('Fuente de macros', `USDA ${nutrition.quality.macroSources.usda} · usuario ${nutrition.quality.macroSources.declared}`, `Web ${nutrition.quality.macroSources.web} · estimados ${nutrition.quality.macroSources.estimated}`),
       metric('Mediciones de peso', String(body.current.measurements), `Periodo anterior: ${body.previous.measurements}`),
       metric('Registros de plicómetro', String(plicometric.current), `Periodo anterior: ${plicometric.previous}`),
       metric('Días con pasos', `${activity.current.stepDays} / ${days}`, `Periodo anterior: ${activity.previous.stepDays} días`),

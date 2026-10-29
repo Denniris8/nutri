@@ -996,7 +996,7 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
         }
         const cleanupFailed = error.code === 'TRAINING_PLAN_SESSION_CLEANUP';
         const sessionOpenFailed = error.code === 'TRAINING_PLAN_SESSION_OPEN';
-        const message = cleanupFailed ? 'No se pudo eliminar la sesión temporal de OpenCode; el plan no se guardó en la aplicación.' : sessionOpenFailed ? error.message : error.status ? error.message : 'No se pudo generar el plan de entrenamiento.';
+        const message = cleanupFailed ? 'No se pudo cerrar la sesión temporal; el plan no se guardó en la aplicación.' : sessionOpenFailed ? 'No se pudo preparar el análisis del plan.' : error.status ? error.message : 'No se pudo generar el plan de entrenamiento.';
         if (status >= 500) json(response, status, { error: message, traceId });
         else authError(response, status, message);
       }

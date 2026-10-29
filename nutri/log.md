@@ -632,3 +632,4 @@
 - 2026-10-28 15:25 CST — Chef: límite de 20 mensajes del usuario por sesión aplicado en servidor; estado sincronizado al abrir el modal, restantes visibles y envío bloqueado al agotarse. Cerrar la sesión reinicia el conteo; añadidas pruebas, no ejecutadas.
 - 2026-10-28 15:27 CST — Corrección del límite de Chef: eliminado el tope de 20 mensajes por sesión; el limitador de frecuencia ahora permite 20 solicitudes cada 2 minutos por IP. La entrada de 15:25 queda reemplazada por esta configuración.
 - 2026-10-28 15:28 CST — Versión incrementada de 0.1.40 a 0.1.41 para preparar el commit solicitado. Límite de Chef: 20 solicitudes cada 2 minutos por IP. No se ejecutaron pruebas.
+- 2026-10-28 20:13 CST — Eliminadas las menciones a OpenCode de los textos visibles de progreso, métricas y errores de la aplicación; los nombres internos y documentación técnica no cambian. VERSION incrementada a 0.1.42 para el commit. No se ejecutaron pruebas.

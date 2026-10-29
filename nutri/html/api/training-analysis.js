@@ -20,7 +20,7 @@ function reportTrainingProgress(userId, progressId, event) {
     analysis_context_started: 'Consultando peso y estatura registrados…',
     analysis_context_ready: 'Datos biométricos listos; preparando el análisis…',
     analysis_config: 'Leyendo las reglas de análisis…',
-    analysis_session: 'Abriendo o reutilizando sesión de OpenCode…',
+    analysis_session: 'Preparando el análisis…',
     analysis_sent: 'Enviando entrenamiento para análisis…',
     analysis_received: 'Respuesta recibida; validando actividad e intensidad…',
     analysis_steps_saved: 'Pasos diarios guardados por separado.',
@@ -28,7 +28,7 @@ function reportTrainingProgress(userId, progressId, event) {
     plan_context_started: 'Consultando perfil, preferencias y mediciones…',
     plan_context_ready: 'Contexto reunido; preparando la generación del plan…',
     plan_config: 'Leyendo las reglas del plan…',
-    plan_session: 'Preparando sesión de OpenCode…',
+    plan_session: 'Preparando el plan…',
     plan_sent: 'Enviando objetivos y contexto para generar el plan…',
     plan_received: 'Plan recibido; validando contenido y metas…',
     plan_complete: 'Plan generado; listo para revisar y guardar.',
@@ -76,7 +76,7 @@ function parseTrainingPlanReply(parts, systemPrompt, context) {
   const raw = parts.filter((part) => part.type === 'text').map((part) => part.text || '').join('\n').trim();
   let reply;
   try { reply = JSON.parse(raw); }
-  catch { throw new Error('OpenCode devolvió un plan que no cumple el formato JSON.'); }
+  catch { throw new Error('El plan generado no cumple el formato esperado.'); }
   const macros = reply?.macros_objetivo;
   const keys = ['proteinas_g', 'carbohidratos_g', 'grasas_g', 'calorias_kcal'];
   if (!reply || typeof reply !== 'object' || Array.isArray(reply)
@@ -84,12 +84,12 @@ function parseTrainingPlanReply(parts, systemPrompt, context) {
     || typeof reply.plan_markdown !== 'string' || !reply.plan_markdown.trim() || reply.plan_markdown.length > 30000
     || !macros || typeof macros !== 'object' || Array.isArray(macros)
     || Object.keys(macros).length !== keys.length || keys.some((key) => !Object.hasOwn(macros, key))) {
-    throw new Error('OpenCode devolvió un plan con campos incompletos.');
+    throw new Error('El plan generado tiene campos incompletos.');
   }
   const limits = { proteinas_g: 10000, carbohidratos_g: 10000, grasas_g: 10000, calorias_kcal: 100000 };
   for (const key of keys) {
     const value = macros[key];
-    if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > limits[key])) throw new Error('OpenCode devolvió metas de macros no válidas.');
+    if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > limits[key])) throw new Error('El plan generado contiene metas de macros no válidas.');
   }
   validatePlanSemantics(reply.plan_markdown, macros, extractPlanDisclosure(systemPrompt), context);
   return { plan: reply.plan_markdown.trim(), macros: Object.fromEntries(keys.map((key) => [key, macros[key]])) };
@@ -114,7 +114,7 @@ async function openTrainingSession(userId, config, request) {
     metadata: { trainingUserId: userId, trainingConfigSha256: fingerprint },
   }, config.requestTimeoutMs);
   const id = created.data?.id;
-  if (created.status < 200 || created.status >= 300 || !/^ses_[A-Za-z0-9_-]{4,120}$/.test(id || '')) throw new Error('No se pudo iniciar la sesión OpenCode de entrenamiento.');
+  if (created.status < 200 || created.status >= 300 || !/^ses_[A-Za-z0-9_-]{4,120}$/.test(id || '')) throw new Error('No se pudo preparar el análisis del entrenamiento.');
   sessions.set(userId, { id, fingerprint });
   return id;
 }
@@ -154,18 +154,18 @@ function parseReply(parts, biometricContext, explicitWeightKg, description = '',
   const text = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   let reply;
   try { reply = JSON.parse(text); }
-  catch { throw new Error('OpenCode devolvió una respuesta de entrenamiento no válida.'); }
+  catch { throw new Error('El análisis del entrenamiento devolvió una respuesta no válida.'); }
   const fields = ['trainingSession', 'question', 'activity', 'durationMinutes', 'met'];
   if (!reply || typeof reply !== 'object' || Array.isArray(reply)
     || Object.keys(reply).length !== fields.length || fields.some((key) => !Object.hasOwn(reply, key))
     || typeof reply.trainingSession !== 'boolean'
     || !(reply.question === null || typeof reply.question === 'string' && reply.question.trim() && reply.question.length <= 1000)) {
-    throw new Error('OpenCode devolvió datos de entrenamiento no válidos.');
+    throw new Error('El análisis devolvió datos de entrenamiento no válidos.');
   }
   const steps = extractExplicitSteps(description, stepContext);
   const fieldsAreNull = ['activity', 'durationMinutes', 'met'].every((key) => reply[key] === null);
   if (reply.trainingSession === false && (reply.question !== null || !fieldsAreNull)) {
-    throw new Error('OpenCode mezcló pasos diarios con una sesión de entrenamiento.');
+    throw new Error('La respuesta mezcló pasos diarios con una sesión de entrenamiento.');
   }
   if (!reply.trainingSession) return { ...reply, ...steps, caloriesKcal: null, weightKg: null, formula: null };
   const activity = typeof reply.activity === 'string' && reply.activity.trim() && reply.activity.length <= 120
@@ -219,7 +219,7 @@ async function analyzeTraining({ userId, description, userWeightContext = descri
       ...(config.variant ? { variant: config.variant } : {}),
       parts: [{ type: 'text', text: JSON.stringify({ description: text, biometricContext, stepContext }) }],
     }, config.requestTimeoutMs);
-    if (result.status < 200 || result.status >= 300) throw new Error('OpenCode no pudo analizar el entrenamiento.');
+    if (result.status < 200 || result.status >= 300) throw new Error('No se pudo analizar el entrenamiento.');
     reportTrainingProgress(id, progressId, 'analysis_received');
     const weightMatches = [...String(userWeightContext || text).matchAll(/(?:peso(?:\s+actual|\s+corporal)?\s*(?:es|de|:|=)?\s*)(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\b|^\s*(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\s*$/gim)];
     const weightMatch = weightMatches.at(-1);
@@ -234,7 +234,7 @@ async function deleteTrainingSession({ userId, requestOpenCode = openCodeRequest
     const cached = sessions.get(id);
     if (!cached) return;
     const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(cached.id)}`);
-    if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) throw new Error('No se pudo eliminar la sesión OpenCode de entrenamiento.');
+    if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) throw new Error('No se pudo cerrar la sesión de análisis del entrenamiento.');
     sessions.delete(id);
   };
   return alreadyLocked ? remove() : withUserLock(id, remove);
@@ -299,7 +299,7 @@ async function generateTrainingPlan({ userId, goals, context, progressId, reques
         ...(config.variant ? { variant: config.variant } : {}),
         parts: [{ type: 'text', text: JSON.stringify({ goals: text, context }) }],
       }, config.requestTimeoutMs);
-      if (result.status < 200 || result.status >= 300) throw new Error('OpenCode no pudo generar el plan.');
+      if (result.status < 200 || result.status >= 300) throw new Error('No se pudo generar el plan.');
       reportTrainingProgress(id, progressId, 'plan_received');
       const plan = parseTrainingPlanReply(result.data?.parts || [], systemPrompt, context);
       const runId = randomUUID();

@@ -225,14 +225,14 @@ async function recordFoodError({ dbQuery, textSql, userId, trace, stage, error, 
       : Number.isInteger(error?.status) ? `HTTP_${error.status}` : safeOpenCodeErrorCode(error);
   const errorName = typeof error?.name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error.name) ? error.name : null;
   const description = {
-    session_resolution_failed: 'No se pudo resolver o crear la sesión OpenCode de comidas.',
-    session_open_failed: 'No se pudo abrir la sesión OpenCode de comidas.',
-    session_recovery_failed: 'No se pudo recuperar la sesión OpenCode de comidas.',
-    message_failed: 'OpenCode no completó el análisis del registro de comida.',
+    session_resolution_failed: 'No se pudo preparar el análisis del registro de comida.',
+    session_open_failed: 'No se pudo preparar el análisis del registro de comida.',
+    session_recovery_failed: 'No se pudo reanudar el análisis del registro de comida.',
+    message_failed: 'No se pudo completar el análisis del registro de comida.',
     reply_parse_failed: 'La respuesta del análisis no pudo convertirse en datos válidos.',
     reply_validation_failed: 'La respuesta del análisis no pasó la validación de alimentos.',
     draft_candidate_persistence_failed: 'No se pudo guardar un candidato de alimento en el borrador; la aclaración se conservó.',
-    session_cleanup_failed: 'No se pudo limpiar la sesión OpenCode de comidas.',
+    session_cleanup_failed: 'No se pudo cerrar la sesión de análisis de comidas.',
   }[event] || (stage === 'persistence' ? 'No se pudieron guardar los alimentos analizados.' : 'Falló el registro de comida.');
   const upstreamStatus = [failure?.upstreamHttpStatus, failure?.httpStatus]
     .find((status) => Number.isInteger(status) && status >= 100 && status <= 599);
