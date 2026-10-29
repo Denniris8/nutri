@@ -1,7 +1,7 @@
 const cacheName = 'nutri-app-shell-v2';
 const appShell = new Set([
   '/login.html',
-  '/dashboard_nutricional.css', '/notifications.css', '/help-popups.css', '/onboarding-flow.js',
+  '/dashboard_nutricional.css', '/notifications.css', '/help-popups.css', '/cookie-consent.css', '/cookie-consent.js', '/onboarding-flow.js',
   '/manifest.webmanifest', '/pwa-icon.svg', '/pwa-icon-192.png', '/pwa-icon-512.png',
 ]);
 const loginShell = new Request(new URL('/login.html', self.location.origin));

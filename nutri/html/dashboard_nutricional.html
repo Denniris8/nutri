@@ -10,6 +10,7 @@
   <link rel="apple-touch-icon" href="/pwa-icon-192.png">
   <link rel="stylesheet" href="/dashboard_nutricional.css?v=69">
   <link rel="stylesheet" href="/notifications.css">
+  <link rel="stylesheet" href="/cookie-consent.css">
 </head>
 <body>
   <a class="skip-link" href="#mainContent">Saltar al contenido</a>
@@ -589,7 +590,12 @@
       <p id="notificationsStatus" class="hint" role="status" aria-live="polite">Cargando alertas…</p><ul id="notificationsList" class="notifications-list" aria-busy="true"></ul>
     </div>
   </dialog>
+  <aside id="cookieConsentNotice" class="cookie-consent" role="region" aria-label="Aviso de cookies" hidden>
+    <p><strong>Cookies necesarias.</strong> Nutri usa una cookie segura para mantener tu sesión. No usamos cookies de analítica ni publicidad.</p>
+    <button id="cookieConsentAcknowledge" type="button">Entendido</button>
+  </aside>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
+  <script src="/cookie-consent.js" defer></script>
   <script src="/pwa-register.js" defer></script>
   <script src="/onboarding-flow.js?v=progress-pause-hidden" defer></script>
 </body>

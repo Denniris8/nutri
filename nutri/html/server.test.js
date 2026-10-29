@@ -894,6 +894,7 @@ test('password reset consumes its token, updates the password hash, and revokes 
   assert.match(resetSql, /password_salt=UNHEX/);
   assert.match(resetSql, /password_hash=UNHEX/);
   assert.match(resetSql, /correo_verificado_en=COALESCE/);
+  assert.match(resetSql, /SET @password_reset_changed=\(ROW_COUNT\(\)>0\)/);
   assert.match(resetSql, /UPDATE dashboard_sessions/);
   assert.doesNotMatch(resetSql, /new-safe-password-123/);
 });

@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="/notifications.css">
+  <link rel="stylesheet" href="/cookie-consent.css">
   <meta name="theme-color" content="#101411">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/pwa-icon.svg" type="image/svg+xml">
@@ -112,7 +113,12 @@
       <button id="cancelPreferences" type="button" class="button-cancel">Cancelar</button>
     </form>
   </main>
+  <aside id="cookieConsentNotice" class="cookie-consent" role="region" aria-label="Aviso de cookies" hidden>
+    <p><strong>Cookies necesarias.</strong> Nutri usa una cookie segura para mantener tu sesión. No usamos cookies de analítica ni publicidad.</p>
+    <button id="cookieConsentAcknowledge" type="button">Entendido</button>
+  </aside>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
+  <script src="/cookie-consent.js" defer></script>
   <script src="/pwa-register.js" defer></script>
   <script src="/onboarding-flow.js?v=calendar-day-3" defer></script>
 </body>

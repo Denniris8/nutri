@@ -47,7 +47,8 @@ const files = new Map([
   ['/login.html', 'login.html'], ['/preferencias.html', 'preferencias.html'],
   ['/terminos.html', 'terminos.html'],
   ['/dashboard_nutricional.css', 'dashboard_nutricional.css'],
-  ['/help-popups.css', 'help-popups.css'], ['/notifications.css', 'notifications.css'], ['/onboarding-flow.js', 'onboarding-flow.js'],
+  ['/help-popups.css', 'help-popups.css'], ['/notifications.css', 'notifications.css'], ['/cookie-consent.css', 'cookie-consent.css'],
+  ['/cookie-consent.js', 'cookie-consent.js'], ['/onboarding-flow.js', 'onboarding-flow.js'],
   ['/manifest.webmanifest', 'manifest.webmanifest'], ['/pwa-icon.svg', 'pwa-icon.svg'],
   ['/pwa-icon-192.png', 'pwa-icon-192.png'], ['/pwa-icon-512.png', 'pwa-icon-512.png'],
   ['/service-worker.js', 'service-worker.js'], ['/pwa-register.js', 'pwa-register.js'],
@@ -523,7 +524,7 @@ COMMIT;`);
           const passwordHash = await derivePassword(password, salt);
           const result = await dbQuery(`START TRANSACTION;
 UPDATE tokens_cuenta_email t JOIN usuarios u ON u.id=t.usuario_id SET t.consumido_en=UTC_TIMESTAMP(3),u.password_salt=UNHEX('${salt.toString('hex')}'),u.password_hash=UNHEX('${passwordHash.toString('hex')}'),u.correo_verificado_en=COALESCE(u.correo_verificado_en,UTC_TIMESTAMP(3)) WHERE t.proposito='recuperacion' AND t.token_hash=UNHEX('${tokenHash}') AND t.consumido_en IS NULL AND t.vence_en>UTC_TIMESTAMP(3) AND u.activo=1 AND u.correo_electronico IS NOT NULL;
-SET @password_reset_changed=ROW_COUNT();
+SET @password_reset_changed=(ROW_COUNT()>0);
 UPDATE dashboard_sessions s JOIN tokens_cuenta_email t ON t.usuario_id=s.usuario_id SET s.revoked_at=UTC_TIMESTAMP() WHERE @password_reset_changed=1 AND t.proposito='recuperacion' AND t.token_hash=UNHEX('${tokenHash}') AND t.consumido_en IS NOT NULL AND s.revoked_at IS NULL;
 SELECT @password_reset_changed;
 COMMIT;`);

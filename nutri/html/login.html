@@ -8,6 +8,7 @@
   <link rel="icon" href="/pwa-icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/pwa-icon-192.png">
   <link rel="stylesheet" href="/notifications.css">
+  <link rel="stylesheet" href="/cookie-consent.css">
   <title>Acceso · Dashboard Nutricional</title>
   <style>
     :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #000; color: #f5f5f7; --surface: #111; --surface-raised: #2a2a2c; --ink-muted: #c7c7cc; --line: #48484a; --blue: #2997ff; }
@@ -72,7 +73,7 @@
       <button id="forgotPasswordButton" type="button" class="button-cancel">Recuperar contraseña</button>
     </form>
     <form id="recoveryRequestForm" hidden>
-      <p>Te enviaremos un enlace si existe una cuenta con ese correo.</p>
+      <p>Te enviaremos un enlace si existe una cuenta con ese correo. Al cambiar la contraseña, también quedará verificado.</p>
       <label for="recoveryEmail">Correo electrónico</label>
       <input id="recoveryEmail" name="email" type="email" autocomplete="email" maxlength="254" required>
       <button type="submit">Enviar enlace de recuperación</button>
@@ -152,7 +153,12 @@
     <p id="errorMessage" role="alert" aria-live="polite"></p>
     </section>
   </main>
+  <aside id="cookieConsentNotice" class="cookie-consent" role="region" aria-label="Aviso de cookies" hidden>
+    <p><strong>Cookies necesarias.</strong> Nutri usa una cookie segura para mantener tu sesión. No usamos cookies de analítica ni publicidad.</p>
+    <button id="cookieConsentAcknowledge" type="button">Entendido</button>
+  </aside>
   <div id="appNoticeDialog" class="app-notice" popover="manual"><div class="app-notice-row"><p id="appNoticeText" role="status" aria-live="polite"></p><button id="appNoticeClose" type="button" aria-label="Cerrar aviso">×</button></div></div>
+  <script src="/cookie-consent.js" defer></script>
   <script src="/pwa-register.js" defer></script>
   <script src="/onboarding-flow.js?v=password-recovery-v1" defer></script>
 </body>
