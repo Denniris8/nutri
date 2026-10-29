@@ -187,6 +187,13 @@ function setTrainingPlanTargets(macros) {
   renderMacroCards(currentFoodEntries);
 }
 
+function placeProgressBeforeLatestUserMessage(bubble) {
+  const messages = bubble.parentElement;
+  const latestUserMessage = [...messages.querySelectorAll('.food-chat-message[data-role="user"]')].at(-1);
+  if (latestUserMessage) messages.insertBefore(bubble, latestUserMessage);
+  messages.parentElement.scrollTop = messages.parentElement.scrollHeight;
+}
+
 function appendTrainingPlanMessage(role, content) {
   const bubble = document.createElement('div');
   bubble.className = 'food-chat-message';
@@ -205,6 +212,7 @@ function appendTrainingPlanMessage(role, content) {
 
 function startTrainingProgress(progressId, appendMessage) {
   const bubble = appendMessage('assistant', 'Conectando con el análisis…');
+  placeProgressBeforeLatestUserMessage(bubble);
   const text = bubble.querySelector('.food-chat-text');
   let currentLabel = 'Conectando con el análisis…';
   let currentAt = Date.now();
@@ -1976,6 +1984,7 @@ async function submitFoodMessage(retry = null) {
   description.disabled = true;
   const pendingMessage = retry?.pendingMessage || appendFoodChatMessage('user', text);
   const progressMessage = appendFoodChatMessage('assistant', 'Conectando con el análisis…');
+  placeProgressBeforeLatestUserMessage(progressMessage);
   const progressText = progressMessage.querySelector('.food-chat-text');
   let currentProgressLabel = 'Conectando con el análisis…';
   let currentProgressAt = Date.now();

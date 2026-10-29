@@ -635,3 +635,5 @@
 - 2026-10-28 20:13 CST — Eliminadas las menciones a OpenCode de los textos visibles de progreso, métricas y errores de la aplicación; los nombres internos y documentación técnica no cambian. VERSION incrementada a 0.1.42 para el commit. No se ejecutaron pruebas.
 - 2026-10-29 09:29 CST — Tiempos de análisis: añadida persistencia de eventos de progreso y duración por etapa para comidas, entrenamientos y planes, sin almacenar contenido del usuario ni respuestas; migración 0009 aplicada y consulta documentada. Prueba focalizada: 1/1 pasada. Servicio `nutri` detenido.
 - 2026-10-29 09:29 CST — VERSION incrementada de 0.1.42 a 0.1.43 para el commit de telemetría de análisis.
+- 2026-10-29 09:32 CST — Orden de chats: al iniciar cada análisis de comida, entrenamiento o plan, el indicador con sus tiempos queda inmediatamente antes del mensaje más reciente del usuario; el mensaje enviado permanece abajo. Cache-busting actualizado. No se ejecutaron pruebas.
+- 2026-10-29 09:33 CST — VERSION incrementada de 0.1.43 a 0.1.44 para preparar el commit del orden de chats.
