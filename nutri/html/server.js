@@ -17,6 +17,7 @@ const { deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, reco
 const { buildChefNutritionContext, deleteChefSession, sendChefMessage } = require('./api/chef-chat.js');
 const { recordApplicationError } = require('./api/application-errors.js');
 const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, getTrainingProgress, readTrainingPlanPrompt, reportTrainingProgress } = require('./api/training-analysis.js');
+const { createAnalysisProgressRecorder } = require('./api/analysis-progress.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
 const { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
 const { addNotification, markNotificationRead, notificationInsertSql, readNotifications, resolveNotificationsSql } = require('./api/notifications.js');
@@ -885,14 +886,15 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
         authError(response, 400, 'El historial del entrenamiento no es válido.'); return;
       }
       const traceId = randomUUID();
+      const progressRecorder = createAnalysisProgressRecorder({ dbQuery, textSql, userId: claims.sub, flow: 'entrenamiento', operationId: data.progressId || traceId });
       let stage = 'analysis';
       try {
-        reportTrainingProgress(claims.sub, data.progressId, 'analysis_context_started');
+        reportTrainingProgress(claims.sub, data.progressId, 'analysis_context_started', progressRecorder.record);
         const timezone = request.headers['x-client-timezone'] || 'UTC';
         const localDate = localCalendarDate(timezone);
         const biometricData = JSON.parse(await dbQuery(`SELECT JSON_OBJECT('latestBiometric',(SELECT JSON_OBJECT('weightKg',peso_kg,'measuredAt',DATE_FORMAT(medido_en,'%Y-%m-%d %H:%i:%s'),'source',fuente) FROM registros_biometricos WHERE usuario_id=${claims.sub} ORDER BY medido_en DESC,id DESC LIMIT 1),'registeredHeightCm',(SELECT estatura_cm FROM usuarios WHERE id=${claims.sub} LIMIT 1));`));
         const latest = biometricData.latestBiometric;
-        reportTrainingProgress(claims.sub, data.progressId, 'analysis_context_ready');
+        reportTrainingProgress(claims.sub, data.progressId, 'analysis_context_ready', progressRecorder.record);
         const measuredDate = typeof latest?.measuredAt === 'string' ? latest.measuredAt.slice(0, 10) : '';
         const ageDays = (Date.parse(`${localDate}T00:00:00Z`) - Date.parse(`${measuredDate}T00:00:00Z`)) / 86400000;
         const latestWeightStale = latest?.weightKg != null && (!Number.isFinite(ageDays) || ageDays < 0 || ageDays > 60);
@@ -902,23 +904,26 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
           weightMeasuredAt: latest?.measuredAt,
           weightSource: latest?.source,
           registeredHeightCm: biometricData.registeredHeightCm,
-        }, progressId: data.progressId, requestOpenCode: openCodeRequest });
+        }, progressId: data.progressId, progressRecorder, requestOpenCode: openCodeRequest });
         if (analysis.stepsCount !== null) {
           stage = 'steps';
           analysis.stepsSaved = await saveDailySteps({
             userId: claims.sub, date: analysis.stepsDate || localDate, localDate,
             stepsCount: analysis.stepsCount, source: 'manual', dbQuery, textSql,
           });
-          reportTrainingProgress(claims.sub, data.progressId, 'analysis_steps_saved');
+          reportTrainingProgress(claims.sub, data.progressId, 'analysis_steps_saved', progressRecorder.record);
         }
         if (analysis.trainingSession && analysis.caloriesKcal == null && analysis.question) {
           await dbQuery(`${resolveNotificationsSql({ userId: claims.sub, category: 'entrenamiento', textSql })};`);
           if (data.suppressNotification !== true) await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'requiere_respuesta', title: 'Entrenamiento: falta una aclaración', message: analysis.question, dbQuery, textSql });
         }
-        reportTrainingProgress(claims.sub, data.progressId, 'analysis_complete');
+        reportTrainingProgress(claims.sub, data.progressId, 'analysis_complete', progressRecorder.record);
+        await progressRecorder.flush();
         json(response, 200, { analysis });
       }
       catch (error) {
+        reportTrainingProgress(claims.sub, data.progressId, 'analysis_failed', progressRecorder.record);
+        await progressRecorder.flush();
         try { await recordTrainingError({ dbQuery, textSql, userId: claims.sub, traceId, stage, error, httpStatus: error.status || 502, action: 'POST /api/training-analysis' }); }
         catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
         if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'error', title: 'No se pudo analizar el entrenamiento', message: 'Revisa el modal de entrenamiento e inténtalo de nuevo.', dbQuery, textSql }); } catch {}
@@ -942,8 +947,9 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
         authError(response, 400, 'Solicitud de progreso no válida.'); return;
       }
       const traceId = randomUUID();
+      const progressRecorder = createAnalysisProgressRecorder({ dbQuery, textSql, userId: claims.sub, flow: 'plan', operationId: data.progressId || traceId });
       try {
-        reportTrainingProgress(claims.sub, data.progressId, 'plan_context_started');
+        reportTrainingProgress(claims.sub, data.progressId, 'plan_context_started', progressRecorder.record);
         const labels = new Set(['profile', 'preferences', 'biometrics', 'plicometrics', 'age', 'previousPlan']);
         const contextRows = await dbQuery(`SELECT 'profile'; ${accountProfileSql(claims.sub)}
 SELECT 'preferences'; ${preferencesSql(claims.sub)}
@@ -979,12 +985,15 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
           plicometricRecords: plicometrics,
           previousTrainingPlanSummary: summarizeTrainingPlan(previousPlanRow ? JSON.parse(previousPlanRow) : null),
         };
-        reportTrainingProgress(claims.sub, data.progressId, 'plan_context_ready');
-        const generated = await generateTrainingPlan({ userId: claims.sub, goals: data && typeof data === 'object' ? data.goals : undefined, context, progressId: data.progressId, requestOpenCode: openCodeRequest });
-        reportTrainingProgress(claims.sub, data.progressId, 'plan_complete');
+        reportTrainingProgress(claims.sub, data.progressId, 'plan_context_ready', progressRecorder.record);
+        const generated = await generateTrainingPlan({ userId: claims.sub, goals: data && typeof data === 'object' ? data.goals : undefined, context, progressId: data.progressId, progressRecorder, requestOpenCode: openCodeRequest });
+        reportTrainingProgress(claims.sub, data.progressId, 'plan_complete', progressRecorder.record);
+        await progressRecorder.flush();
         if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'generado', title: 'Plan generado, aún sin guardar', message: 'Tu plan está listo para revisar y guardar.', dbQuery, textSql }); } catch {}
         json(response, 200, generated);
       } catch (error) {
+        reportTrainingProgress(claims.sub, data.progressId, 'plan_failed', progressRecorder.record);
+        await progressRecorder.flush();
         if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'error', title: 'No se pudo generar el plan', message: 'Revisa el modal de plan e inténtalo de nuevo.', dbQuery, textSql }); } catch {}
         const status = error.status || 502;
         if (status >= 500) {

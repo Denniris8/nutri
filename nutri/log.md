@@ -633,3 +633,5 @@
 - 2026-10-28 15:27 CST — Corrección del límite de Chef: eliminado el tope de 20 mensajes por sesión; el limitador de frecuencia ahora permite 20 solicitudes cada 2 minutos por IP. La entrada de 15:25 queda reemplazada por esta configuración.
 - 2026-10-28 15:28 CST — Versión incrementada de 0.1.40 a 0.1.41 para preparar el commit solicitado. Límite de Chef: 20 solicitudes cada 2 minutos por IP. No se ejecutaron pruebas.
 - 2026-10-28 20:13 CST — Eliminadas las menciones a OpenCode de los textos visibles de progreso, métricas y errores de la aplicación; los nombres internos y documentación técnica no cambian. VERSION incrementada a 0.1.42 para el commit. No se ejecutaron pruebas.
+- 2026-10-29 09:29 CST — Tiempos de análisis: añadida persistencia de eventos de progreso y duración por etapa para comidas, entrenamientos y planes, sin almacenar contenido del usuario ni respuestas; migración 0009 aplicada y consulta documentada. Prueba focalizada: 1/1 pasada. Servicio `nutri` detenido.
+- 2026-10-29 09:29 CST — VERSION incrementada de 0.1.42 a 0.1.43 para el commit de telemetría de análisis.

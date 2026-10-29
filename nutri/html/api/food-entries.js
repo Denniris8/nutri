@@ -1,6 +1,7 @@
 const { randomUUID } = require('node:crypto');
 const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, maxFoodResponseWaitMs, recordFoodError, requestFoodDescription, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock } = require('./opencode-food.js');
 const { notificationInsertSql, resolveNotificationsSql } = require('./notifications.js');
+const { createAnalysisProgressRecorder } = require('./analysis-progress.js');
 const foodProgress = new Map();
 
 function getFoodEntryProgress(userId, requestId) {
@@ -10,7 +11,8 @@ function getFoodEntryProgress(userId, requestId) {
   return foodProgress.get(key) || null;
 }
 
-function reportFoodProgress(userId, requestId, event, details = {}) {
+function reportFoodProgress(userId, requestId, event, details = {}, recordEvent) {
+  recordEvent?.(event);
   const labels = {
     save_received: 'Validando solicitud…', entry_saved: 'Borrador guardado; preparando análisis…',
     session_resolution_started: 'Preparando sesión de análisis…', session_ready: 'Separando alimentos y cantidades…',
@@ -562,7 +564,8 @@ async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, r
   catch (error) { json(response, error.status || 400, { error: error.message }); return; }
 
   const trace = { id: randomUUID(), events: [] };
-  trace.onEvent = (event, details) => reportFoodProgress(userId, entry.requestId, event, details);
+  const progressRecorder = createAnalysisProgressRecorder({ dbQuery, textSql, userId, flow: 'comida', operationId: entry.requestId });
+  trace.onEvent = (event, details) => reportFoodProgress(userId, entry.requestId, event, details, progressRecorder.record);
   traceFoodSession(trace, 'save_received');
   let entryId;
   let committed = false;
@@ -584,6 +587,7 @@ async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, r
     const appended = await dbQuery(`SELECT JSON_OBJECT('entryId',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d')) FROM registros_comida_interacciones i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND i.request_id=${textSql(entry.requestId)} LIMIT 1;`);
     if (appended) {
       const prior = JSON.parse(appended);
+      await progressRecorder.flush();
       json(response, 200, { state: 'completado', entryId: prior.entryId, records: await readFoodEntries({ userId, fecha: prior.fecha, dbQuery, textSql }), message: 'Los alimentos ya se habían añadido a esa comida.' });
       return;
     }
@@ -1069,11 +1073,13 @@ SELECT LAST_INSERT_ID();`);
       try { await recordFoodError({ dbQuery, textSql, userId, trace, stage: 'after_food_saved', error, httpStatus: 200, action: 'DELETE /api/session/{id}' }); }
       catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: trace.id })); }
     }
+    await progressRecorder.flush();
     json(response, 200, { state: 'completado', entryId: append || updating ? destinationId : entryId, fecha: savedDate, requestId: entry.requestId, appended: append, updated: updating, records, messages: Array.isArray(messages) ? messages : [], message: confirmation });
   } catch (error) {
     traceFoodSession(trace, 'save_failed', { entryId: entryId || null, stage, errorCode: safeOpenCodeErrorCode(error) });
     try { await recordFoodError({ dbQuery, textSql, userId, trace, stage, error, httpStatus: entryId ? 502 : 503 }); }
     catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed' })); }
+    await progressRecorder.flush();
     if (committed) {
       json(response, 503, { state: 'completado', entryId: committedEntryId, requestId: entry.requestId, message: `${committedConfirmation} No pude verificar la lectura actualizada. Actualiza el día antes de volver a enviar la solicitud.` });
       return;
@@ -1086,9 +1092,11 @@ SELECT LAST_INSERT_ID();`);
               : 'El borrador quedó guardado, pero el asistente no completó el análisis. Puedes intentarlo de nuevo.';
       try { await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'assistant', content: `[ERROR_REGISTRO] ${message}` }); } catch {}
       if (!suppressNotification) try { await dbQuery(`${notificationInsertSql({ userId, category: 'comida', state: 'error', title: 'No se pudo completar el registro de comida', message, referenceId: entryId, textSql })};`); } catch {}
+      await progressRecorder.flush();
       json(response, 502, { entryId, requestId: entry.requestId, message });
       return;
     }
+    await progressRecorder.flush();
     json(response, 503, { error: 'No se pudo iniciar el registro de comida.' });
   }
 }
