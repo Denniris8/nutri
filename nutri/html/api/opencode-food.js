@@ -13,6 +13,19 @@ const sessionLocks = new Map();
 const verifiedFoodSessions = new Map();
 const openFoodFactsCache = new Map();
 const openFoodFactsInflight = new Map();
+const usdaCache = new Map();
+const primedFoodSessions = new Set();
+const sourceBreakers = { off: { failures: 0, openUntil: 0 }, usda: { failures: 0, openUntil: 0 } };
+const sessionRecheckMs = 30000;
+
+function forgetFoodSessionCache() { verifiedFoodSessions.clear(); primedFoodSessions.clear(); }
+
+function breakerOpen(name) { return sourceBreakers[name].openUntil > Date.now(); }
+function breakerRecord(name, ok) {
+  const breaker = sourceBreakers[name];
+  if (ok) { breaker.failures = 0; return; }
+  if (++breaker.failures >= 3) { breaker.failures = 0; breaker.openUntil = Date.now() + 5 * 60 * 1000; }
+}
 const foodConfigPath = path.resolve(__dirname, '../../configuracion-sesion.json');
 const foodBehaviorPath = path.resolve(__dirname, '../../comportamiento-sesion-comidas.md');
 
@@ -62,12 +75,15 @@ function normalizeOffName(value) {
   return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
-async function lookupOpenFoodFactsProduct(name, { timeoutMs = 8000, fetchImpl = fetch } = {}) {
+async function lookupOpenFoodFactsProduct(name, options = {}) {
+  const { timeoutMs = 8000, fetchImpl = fetch } = options;
+  const guarded = !options.fetchImpl;
   if (typeof name !== 'string' || !name.trim()) return null;
   const cacheKey = normalizeOffName(name);
   const cached = openFoodFactsCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.product;
   openFoodFactsCache.delete(cacheKey);
+  if (guarded && breakerOpen('off')) return null;
   const url = 'https://search.openfoodfacts.org/search';
   try {
     const response = await fetchImpl(url, {
@@ -75,8 +91,9 @@ async function lookupOpenFoodFactsProduct(name, { timeoutMs = 8000, fetchImpl = 
       body: JSON.stringify({ q: `"${name.trim()}"`, langs: ['es', 'en'], page_size: 10, fields: ['code', 'product_name', 'brands', 'nutriments'], boost_phrase: true }),
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!response.ok) return null;
+    if (!response.ok) { if (guarded) breakerRecord('off', false); return null; }
     const data = await response.json();
+    if (guarded) breakerRecord('off', true);
     const isNumber = (value) => value != null && String(value).trim() !== '' && Number.isFinite(Number(value));
     const matches = (Array.isArray(data.hits) ? data.hits : []).filter((candidate) =>
       normalizeOffName(candidate.product_name) === normalizeOffName(name)
@@ -108,7 +125,7 @@ async function lookupOpenFoodFactsProduct(name, { timeoutMs = 8000, fetchImpl = 
     openFoodFactsCache.set(cacheKey, { product: result, expiresAt: Date.now() + 900000 });
     if (openFoodFactsCache.size > 300) openFoodFactsCache.delete(openFoodFactsCache.keys().next().value);
     return result;
-  } catch { return null; }
+  } catch { if (guarded) breakerRecord('off', false); return null; }
 }
 
 async function findOpenFoodFactsProduct(name, options) {
@@ -123,8 +140,22 @@ async function findOpenFoodFactsProduct(name, options) {
   finally { if (openFoodFactsInflight.get(key) === lookup) openFoodFactsInflight.delete(key); }
 }
 
-async function findUsdaFood(name, { apiKey = process.env.USDA, timeoutMs = 10000, fetchImpl = fetch } = {}) {
+async function findUsdaFood(name, options = {}) {
+  const { apiKey = process.env.USDA, timeoutMs = 10000, fetchImpl = fetch } = options;
   if (typeof name !== 'string' || !name.trim() || !apiKey) return null;
+  const guarded = !options.fetchImpl;
+  const cacheKey = normalizeOffName(name);
+  if (guarded) {
+    const cached = usdaCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.product;
+    if (breakerOpen('usda')) return null;
+  }
+  const remember = (product, ttlMs) => {
+    if (!guarded) return product;
+    usdaCache.set(cacheKey, { product, expiresAt: Date.now() + ttlMs });
+    if (usdaCache.size > 300) usdaCache.delete(usdaCache.keys().next().value);
+    return product;
+  };
   const url = new URL('https://api.nal.usda.gov/fdc/v1/foods/search');
   url.searchParams.set('api_key', apiKey);
   url.searchParams.set('query', name.trim());
@@ -132,8 +163,9 @@ async function findUsdaFood(name, { apiKey = process.env.USDA, timeoutMs = 10000
   url.searchParams.set('pageSize', '10');
   try {
     const response = await fetchImpl(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(timeoutMs) });
-    if (!response.ok) return null;
+    if (!response.ok) { if (guarded) breakerRecord('usda', false); return null; }
     const data = await response.json();
+    if (guarded) breakerRecord('usda', true);
     const normalize = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
     const matches = (Array.isArray(data.foods) ? data.foods : []).filter((food) => normalize(food.description) === normalize(name));
     const macrosFor = (food) => {
@@ -142,18 +174,18 @@ async function findUsdaFood(name, { apiKey = process.env.USDA, timeoutMs = 10000
       return [result, [1008, 1003, 1005, 1004].every((id) => Number.isFinite(nutrients.get(id)))];
     };
     const valid = matches.map((food) => ({ food, ...macrosFor(food) })).filter((entry) => entry[1]);
-    if (!valid.length) return null;
+    if (!valid.length) return remember(null, 300000);
     const signature = (entry) => JSON.stringify(entry[0]);
-    if (valid.some((entry) => signature(entry) !== signature(valid[0]))) return null;
+    if (valid.some((entry) => signature(entry) !== signature(valid[0]))) return remember(null, 300000);
     const { food } = valid[0];
     const macros = valid[0][0];
-    return {
+    return remember({
       name: name.trim(), sourceName: 'USDA FoodData Central',
       sourceUrl: `https://fdc.nal.usda.gov/food/${encodeURIComponent(food.fdcId)}`,
       sourceQuote: `Valores por 100 g: ${macros.energyKcal} kcal, proteína ${macros.proteinG} g, carbohidratos ${macros.carbohydrateG} g, grasa ${macros.fatG} g${macros.fiberG == null ? '' : `, fibra ${macros.fiberG} g`}.`,
       macroBasis: 'per_100g', macroStatus: 'declarado', macroSource: 'webfetch', macros,
-    };
-  } catch { return null; }
+    }, 900000);
+  } catch { if (guarded) breakerRecord('usda', false); return null; }
 }
 
 const foodSessionPermissions = [
@@ -204,10 +236,15 @@ async function requestOpenCodePrompt(service, sessionId, body, timeoutMs) {
   if (typeof userMessageId !== 'string') throw new Error('OpenCode no devolvió el identificador del mensaje.');
   const waited = await requestBeforeDeadline('POST', waitPath);
   if (waited.status < 200 || waited.status >= 300) throw openCodeHttpError(waited.status, `POST ${waitPath}`, 'OpenCode no terminó el mensaje.');
-  const history = await requestBeforeDeadline('GET', `${messagePath}?order=desc&limit=20`);
-  if (history.status < 200 || history.status >= 300) throw openCodeHttpError(history.status, `GET ${messagePath}`, 'OpenCode no devolvió el historial del mensaje.');
-  const messages = Array.isArray(history.data?.data) ? history.data.data : Array.isArray(history.data) ? history.data : [];
-  const userIndex = messages.findIndex((message) => message.id === userMessageId);
+  let messages = [];
+  let userIndex = -1;
+  for (const limit of [4, 20]) {
+    const history = await requestBeforeDeadline('GET', `${messagePath}?order=desc&limit=${limit}`);
+    if (history.status < 200 || history.status >= 300) throw openCodeHttpError(history.status, `GET ${messagePath}`, 'OpenCode no devolvió el historial del mensaje.');
+    messages = Array.isArray(history.data?.data) ? history.data.data : Array.isArray(history.data) ? history.data : [];
+    userIndex = messages.findIndex((message) => message.id === userMessageId);
+    if (userIndex !== -1 || messages.length < limit) break;
+  }
   const reply = userIndex > 0 ? messages.slice(0, userIndex).find((message) => message.type === 'assistant') : null;
   if (!reply || reply.time?.completed == null) throw Object.assign(new Error('OpenCode no devolvió una respuesta completa.'), { code: 'OPEN_CODE_ERROR' });
   if (reply.error) throw Object.assign(new Error('OpenCode no pudo completar el mensaje.'), { code: 'OPEN_CODE_ERROR' });
@@ -376,10 +413,15 @@ async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpen
   const result = (sessionId, reused) => returnMetadata ? { sessionId, reused } : sessionId;
   return withUserLock(id, async () => {
     const cached = verifiedFoodSessions.get(id);
+    if (cached?.fingerprint === configFingerprint && Date.now() - cached.verifiedAt < sessionRecheckMs) {
+      traceFoodSession(trace, 'session_ready', { reused: true, session: shortSessionId(cached.sessionId) });
+      return result(cached.sessionId, true);
+    }
     if (cached?.fingerprint === configFingerprint) {
       const current = await requestOpenCode('GET', `/session/${encodeURIComponent(cached.sessionId)}`, undefined, config.requestTimeoutMs);
       if (current.status >= 200 && current.status < 300
         && current.data?.metadata?.foodUserId === id && current.data?.metadata?.foodConfigSha256 === configFingerprint) {
+        cached.verifiedAt = Date.now();
         traceFoodSession(trace, 'session_ready', { reused: true, session: shortSessionId(cached.sessionId) });
         return result(cached.sessionId, true);
       }
@@ -396,7 +438,7 @@ async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpen
         && current.data?.metadata?.foodConfigSha256 === configFingerprint) {
         const updated = await requestOpenCode('PATCH', `/session/${encodeURIComponent(stored)}`, { permission: foodSessionPermissions }, config.requestTimeoutMs);
         if (updated.status < 200 || updated.status >= 300) throw openCodeHttpError(updated.status, 'PATCH /api/session/{id}', 'No se pudieron actualizar los permisos de la sesión de comidas.');
-        verifiedFoodSessions.set(id, { sessionId: stored, fingerprint: configFingerprint });
+        verifiedFoodSessions.set(id, { sessionId: stored, fingerprint: configFingerprint, verifiedAt: Date.now() });
         traceFoodSession(trace, 'session_ready', { reused: true, session: shortSessionId(stored) });
         return result(stored, true);
       }
@@ -421,7 +463,7 @@ async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpen
       throw new Error('No se pudo iniciar la sesión OpenCode de comidas.');
     }
     await dbQuery(`INSERT INTO sesiones_comidas_opencode(usuario_id,session_id) VALUES (${id},${textSql(sessionId)}) AS incoming ON DUPLICATE KEY UPDATE session_id=incoming.session_id,actualizado_en=CURRENT_TIMESTAMP;`);
-    verifiedFoodSessions.set(id, { sessionId, fingerprint: configFingerprint });
+    verifiedFoodSessions.set(id, { sessionId, fingerprint: configFingerprint, verifiedAt: Date.now() });
     traceFoodSession(trace, 'session_ready', { reused: false, session: shortSessionId(sessionId) });
     return result(sessionId, false);
   }).catch((error) => {
@@ -452,7 +494,7 @@ async function deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode = op
 
 async function requestFoodDescription({ sessionId, description, initialDescription, conversation, comidasDisponibles = [], comidasReferencia = [], referenciaComidaSolicitada = false, openFoodFactsFirstPass = false, alimentosPendientes = [], continuacionRegistro = false, diaNutricional, genericEstimateApproved = false, retryFeedback, allowWebSearch = true, openFoodFactsCandidates = [], config, deadline, trace, requestOpenCode = openCodeRequest }) {
   config ||= await readFoodSessionConfig();
-  const system = await readFoodSystemPrompt(config.maxFoodItems);
+  const system = primedFoodSessions.has(sessionId) ? null : await readFoodSystemPrompt(config.maxFoodItems);
   const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
   const startedAt = Date.now();
   const requestContext = { description, ...(initialDescription ? { initialDescription } : {}), ...(conversation ? { conversation } : {}), ...(diaNutricional ? { diaNutricional } : {}), ...(genericEstimateApproved ? { genericEstimateApproved: true } : {}), ...(referenciaComidaSolicitada ? { referenciaComidaSolicitada: true } : {}), ...(openFoodFactsFirstPass ? { openFoodFactsFirstPass: true } : {}), ...(retryFeedback ? { correccionFormato: retryFeedback } : {}), ...(comidasDisponibles.length ? { comidasDisponibles } : {}), ...(comidasReferencia.length ? { comidasReferencia } : {}), ...(openFoodFactsCandidates.length ? { candidatosOpenFoodFacts: openFoodFactsCandidates } : {}), ...(alimentosPendientes.length ? { alimentosPendientes } : {}), ...(continuacionRegistro ? { continuacionRegistro: true } : {}) };
@@ -463,7 +505,7 @@ async function requestFoodDescription({ sessionId, description, initialDescripti
   let result;
   try {
     result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
-      system,
+      ...(system ? { system } : {}),
       tools,
       ...(model ? { model } : {}),
       ...(config.agent ? { agent: config.agent } : {}),
@@ -486,6 +528,8 @@ async function requestFoodDescription({ sessionId, description, initialDescripti
     throw openCodeHttpError(result.status, 'POST /api/session/{id}/prompt', 'OpenCode no pudo analizar la comida.');
   }
   const parts = result.data?.parts || [];
+  primedFoodSessions.add(sessionId);
+  if (primedFoodSessions.size > 200) primedFoodSessions.delete(primedFoodSessions.values().next().value);
   traceFoodSession(trace, 'message_received', {
     stage: 'separar_alimentos', session: shortSessionId(sessionId), durationMs: Date.now() - startedAt,
     httpStatus: result.status, messageId: result.data?.info?.id || null, partTypes: parts.map((part) => part.type),
@@ -495,6 +539,6 @@ async function requestFoodDescription({ sessionId, description, initialDescripti
 }
 
 module.exports = {
-  deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, openCodeRequest, recordFoodError, requestFoodDescription,
+  deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, forgetFoodSessionCache, openCodeRequest, recordFoodError, requestFoodDescription,
   getFoodSessionDefaults, maxFoodResponseWaitMs, readFoodSessionConfig, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock,
 };

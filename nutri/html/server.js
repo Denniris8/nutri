@@ -218,6 +218,19 @@ function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_S
     return userId === claims.sub ? claims : null;
   }
 
+  const progressAuth = new Map();
+  async function authenticatedForProgress(request) {
+    const token = cookieValue(request);
+    const hit = token && progressAuth.get(token);
+    if (hit && hit.until > Date.now()) return hit.claims;
+    const claims = await authenticated(request);
+    if (claims && token) {
+      progressAuth.set(token, { claims, until: Date.now() + 5000 });
+      if (progressAuth.size > 200) progressAuth.delete(progressAuth.keys().next().value);
+    }
+    return claims;
+  }
+
   async function reserveLoginAttempt(request, phone) {
     const ip = request.socket.remoteAddress || 'unknown';
     const keys = [
@@ -492,7 +505,7 @@ COMMIT;`);
       catch { authError(response, 400, 'La zona horaria no es válida.'); return; }
       try {
         const result = await syncGarminTraining({ userId: claims.sub, date, timezone, dbQuery, textSql, secret: jwtSecret });
-        if (result.saved) await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'guardado', title: 'Actividades Garmin guardadas', message: `Se guardaron ${result.saved} actividades de Garmin.`, dbQuery, textSql });
+        if (result.saved || result.updated) await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'guardado', title: 'Actividades Garmin sincronizadas', message: `Garmin: ${result.saved} nueva${result.saved === 1 ? '' : 's'} y ${result.updated} actualizada${result.updated === 1 ? '' : 's'}.`, dbQuery, textSql });
         json(response, 200, result);
       } catch (error) { authError(response, error.status || 502, error.status ? error.message : 'No se pudieron sincronizar las actividades Garmin.'); }
       return;
@@ -645,7 +658,7 @@ COMMIT;`);
     if (pathname === '/api/food-entries/progress') {
       if (request.method !== 'GET') { response.writeHead(405, { Allow: 'GET' }).end(); return; }
       let claims;
-      try { claims = await authenticated(request); }
+      try { claims = await authenticatedForProgress(request); }
       catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
       if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
       const requestId = new URL(request.url, 'http://localhost').searchParams.get('requestId') || '';
@@ -857,7 +870,7 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
     if (pathname === '/api/training-progress') {
       if (request.method !== 'GET') { response.writeHead(405, { Allow: 'GET' }).end(); return; }
       let claims;
-      try { claims = await authenticated(request); }
+      try { claims = await authenticatedForProgress(request); }
       catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
       if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
       const progressId = new URL(request.url, 'http://localhost').searchParams.get('progressId') || '';
@@ -997,8 +1010,9 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
         if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'error', title: 'No se pudo generar el plan', message: 'Revisa el modal de plan e inténtalo de nuevo.', dbQuery, textSql }); } catch {}
         const status = error.status || 502;
         if (status >= 500) {
-          const code = typeof error.code === 'string' && /^[A-Z][A-Z0-9_]{0,55}$/.test(error.code) ? error.code : 'TRAINING_PLAN_GENERATION_FAILED';
-          const name = typeof error.name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(error.name) ? error.name : 'Error';
+          const source = error.code === 'TRAINING_PLAN_SESSION_CLEANUP' && error.cause ? error.cause : error;
+          const code = typeof source.code === 'string' && /^[A-Z][A-Z0-9_]{0,55}$/.test(source.code) ? source.code : 'TRAINING_PLAN_GENERATION_FAILED';
+          const name = typeof source.name === 'string' && /^[A-Za-z][A-Za-z0-9]{0,63}$/.test(source.name) ? source.name : 'Error';
           try {
             await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,usuario_id,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('training-opencode')},${textSql(traceId)},${textSql('plan_generation_failed')},${textSql('generation')},${textSql('POST /api/training-plan')},${textSql('POST')},${textSql('/api/training-plan')},${claims.sub},${textSql(code)},${textSql(name)},${status},${textSql('No se pudo generar el plan de entrenamiento.')});`);
           } catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }

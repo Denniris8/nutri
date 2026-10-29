@@ -187,11 +187,10 @@ function setTrainingPlanTargets(macros) {
   renderMacroCards(currentFoodEntries);
 }
 
-function placeProgressBeforeLatestUserMessage(bubble) {
-  const messages = bubble.parentElement;
-  const latestUserMessage = [...messages.querySelectorAll('.food-chat-message[data-role="user"]')].at(-1);
-  if (latestUserMessage) messages.insertBefore(bubble, latestUserMessage);
-  messages.parentElement.scrollTop = messages.parentElement.scrollHeight;
+function placeProgressAfterLatestUserMessage(container, bubble) {
+  const latestUserMessage = [...container.querySelectorAll('.food-chat-message[data-role="user"]')].at(-1);
+  if (latestUserMessage) latestUserMessage.after(bubble);
+  else container.append(bubble);
 }
 
 function appendTrainingPlanMessage(role, content) {
@@ -212,7 +211,6 @@ function appendTrainingPlanMessage(role, content) {
 
 function startTrainingProgress(progressId, appendMessage) {
   const bubble = appendMessage('assistant', 'Conectando con el análisis…');
-  placeProgressBeforeLatestUserMessage(bubble);
   const text = bubble.querySelector('.food-chat-text');
   let currentLabel = 'Conectando con el análisis…';
   let currentAt = Date.now();
@@ -228,7 +226,7 @@ function startTrainingProgress(progressId, appendMessage) {
   };
   const polling = (async () => {
     while (active) {
-      try {
+      if (!document.hidden) try {
         const response = await fetch(`/api/training-progress?progressId=${encodeURIComponent(progressId)}`, { credentials: 'same-origin' });
         const { progress } = response.ok ? await response.json() : {};
         if (progress?.label && progress.label !== currentLabel && text.isConnected) {
@@ -1493,9 +1491,15 @@ syncGarminTrainingButton?.addEventListener('click', async () => {
     if (!response.ok) throw new Error(result.error || 'No se pudieron sincronizar las actividades Garmin.');
     await loadTrainingEntries(date);
     await loadDailySteps(date);
-    const activityMessage = result.saved
-      ? `Se guardaron ${result.saved} actividad${result.saved === 1 ? '' : 'es'} Garmin${result.skipped ? `; ${result.skipped} ya estaban guardadas o no se pudieron importar` : ''}.`
-      : result.activities ? 'Las actividades Garmin de este día ya estaban guardadas o no tenían datos importables.' : 'Garmin no tiene actividades para este día.';
+    const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
+    const activityParts = [
+      result.saved ? `${plural(result.saved, 'actividad nueva guardada', 'actividades nuevas guardadas')}` : '',
+      result.updated ? `${plural(result.updated, 'actividad actualizada por cambios en Garmin', 'actividades actualizadas por cambios en Garmin')}` : '',
+      result.unchanged ? `${plural(result.unchanged, 'sin cambios', 'sin cambios')}` : '',
+      result.skipped ? `${plural(result.skipped, 'no se pudo importar', 'no se pudieron importar')}` : '',
+    ].filter(Boolean);
+    const activityMessage = !result.activities ? `Garmin no tiene actividades para el ${date}.`
+      : activityParts.length ? `Actividades Garmin del ${date}: ${activityParts.join('; ')}.` : `Garmin no devolvió actividades importables para el ${date}.`;
     const stepsMessages = [
       result.stepsUpdated ? `Pasos Garmin guardados o actualizados para ${result.stepsUpdated} fecha${result.stepsUpdated === 1 ? '' : 's'}.` : '',
       result.stepsUnavailable ? `Garmin no devolvió pasos para ${result.stepsUnavailable} fecha${result.stepsUnavailable === 1 ? '' : 's'}.` : '',
@@ -1595,6 +1599,9 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     }
     if (!analysis.trainingSession) {
       trainingFeedback.textContent = analysis.stepsSaved ? 'Pasos guardados; no se registró una sesión ni se estimaron calorías.' : 'No se registró una sesión de entrenamiento.';
+      appendTrainingMessage('assistant', analysis.stepsSaved
+        ? 'Guardé tus pasos, pero no identifiqué una sesión de entrenamiento, así que no se guardó ninguna. Si hiciste ejercicio, descríbelo con actividad y duración, por ejemplo: «Corrí 30 minutos a ritmo moderado».'
+        : 'No identifiqué una sesión de entrenamiento en tu mensaje, así que no se guardó nada. Describe qué actividad hiciste y cuánto duró, por ejemplo: «Corrí 30 minutos a ritmo moderado».');
       await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'generado', 'Resultado del entrenamiento', trainingFeedback.textContent);
       return;
     }
@@ -1984,7 +1991,6 @@ async function submitFoodMessage(retry = null) {
   description.disabled = true;
   const pendingMessage = retry?.pendingMessage || appendFoodChatMessage('user', text);
   const progressMessage = appendFoodChatMessage('assistant', 'Conectando con el análisis…');
-  placeProgressBeforeLatestUserMessage(progressMessage);
   const progressText = progressMessage.querySelector('.food-chat-text');
   let currentProgressLabel = 'Conectando con el análisis…';
   let currentProgressAt = Date.now();
@@ -2001,7 +2007,7 @@ async function submitFoodMessage(retry = null) {
   let pollingProgress = true;
   const progressPoll = (async () => {
     while (pollingProgress) {
-      try {
+      if (!document.hidden) try {
         const response = await fetch(`/api/food-entries/progress?requestId=${encodeURIComponent(body.requestId)}`, { credentials: 'same-origin' });
         const { progress } = response.ok ? await response.json() : {};
         if (progress?.label && progressText.isConnected && progress.label !== currentProgressLabel) {
@@ -2041,7 +2047,7 @@ async function submitFoodMessage(retry = null) {
         foodRequestId = result.requestId;
         foodTargetEntryId = result.targetEntryId || foodTargetEntryId;
         const draft = await restoreFoodDraft(feedback);
-        document.querySelector('#foodChatMessages').append(progressMessage);
+        placeProgressAfterLatestUserMessage(document.querySelector('#foodChatMessages'), progressMessage);
         draftRestored = Boolean(draft?.messages?.some((message) => message.role === 'assistant' && message.content.startsWith('[ERROR_REGISTRO] ')));
       } else {
         pendingMessage.remove();
@@ -2051,7 +2057,7 @@ async function submitFoodMessage(retry = null) {
     pendingMessage.remove();
     renderFoodChat(result.messages || []);
     finishFoodProgress(result.state === 'requiere_aclaracion' ? 'Esperando aclaración.' : 'Registro completado.');
-    document.querySelector('#foodChatMessages').append(progressMessage);
+    placeProgressAfterLatestUserMessage(document.querySelector('#foodChatMessages'), progressMessage);
     if (result.state === 'requiere_aclaracion') {
       foodOpenCodeSessionActive = true;
       foodRequestId = result.requestId;
@@ -2089,7 +2095,7 @@ async function submitFoodMessage(retry = null) {
     }
   } catch (error) {
     finishFoodProgress('Análisis detenido; se conserva el borrador si llegó a guardarse.');
-    if (!progressMessage.isConnected) document.querySelector('#foodChatMessages').append(progressMessage);
+    if (!progressMessage.isConnected) placeProgressAfterLatestUserMessage(document.querySelector('#foodChatMessages'), progressMessage);
     if (pendingMessage.isConnected) {
       const button = document.createElement('button');
       button.type = 'button';
@@ -2106,7 +2112,7 @@ async function submitFoodMessage(retry = null) {
     pollingProgress = false;
     await progressPoll;
     if (!progressFinalized) finishFoodProgress('Solicitud finalizada.');
-    if (!progressMessage.isConnected) document.querySelector('#foodChatMessages').append(progressMessage);
+    if (!progressMessage.isConnected) placeProgressAfterLatestUserMessage(document.querySelector('#foodChatMessages'), progressMessage);
     foodPending = false;
     foodLoading.hidden = true;
     document.querySelector('#foodChatThread').hidden = !document.querySelector('#foodChatMessages').children.length;

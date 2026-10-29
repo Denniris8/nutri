@@ -1,9 +1,10 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { activateTrainingPlan, deleteTrainingPlan, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan, validateTrainingPlan } = require('./training-plans.js');
+const { activateTrainingPlan, deleteTrainingPlan, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan, validatePlanSemantics, validateTrainingPlan } = require('./training-plans.js');
 const requestId = '123e4567-e89b-42d3-a456-426614174000';
 const disclosure = 'Las metas de calorías y carbohidratos se ajustan según los entrenamientos registrados para el día seleccionado.';
-const plan = `[Datos Registrados]\nEdad registrada.\n[Estimaciones Calculadas]\nMacros estimados.\n[Supuestos Adoptados]\nDisponibilidad asumida.\n${disclosure}`;
+const planFor = (macros) => `[Datos Registrados]\nEdad registrada.\n[Estimaciones Calculadas]\nMacros estimados.\n| Macro | Meta diaria |\n| --- | --- |\n| Proteínas | ${macros.proteinas_g} g |\n| Carbohidratos | ${macros.carbohidratos_g} g |\n| Grasas | ${macros.grasas_g} g |\n| Calorías | ${macros.calorias_kcal} kcal |\n${disclosure}\n[Supuestos Adoptados]\nDisponibilidad asumida.`;
+const plan = planFor({ proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 });
 
 test('previous training plan is summarized as a bounded list', () => {
   const summary = summarizeTrainingPlan({
@@ -52,7 +53,7 @@ test('training plan persistence rejects oversized or empty input', () => {
   assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan: 'x'.repeat(30001), macros, disclosure }), { status: 400 });
   assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan, macros: { ...macros, proteinas_g: '140 g' }, disclosure }), { status: 400 });
   assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan: '# Plan', macros, disclosure }), /distinguir datos/);
-  assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan, macros: { ...macros, calorias_kcal: 2800 }, disclosure }), /4\/4\/9/);
+  assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan: planFor({ ...macros, calorias_kcal: 2800 }), macros: { ...macros, calorias_kcal: 2800 }, disclosure }), /4\/4\/9/);
 });
 
 test('saved plan listing is scoped to the authenticated user and limited to the latest three', async () => {
@@ -114,4 +115,18 @@ test('plan deletion returns conflict whenever any vigency exists', async () => {
     userId: '27', planId: '5',
     dbQuery: async () => '{"planExists":true,"hasVigencies":true,"deleted":false}',
   }), { status: 409, message: /días asociados/ });
+});
+
+test('body-data claims are rejected only when a missing measurement is presented as registered', () => {
+  const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
+  const context = { profile: { age: 32, sex: 'masculino', heightCm: 175 }, biometricRecords: [{ weightKg: 78.5 }], plicometricRecords: [] };
+  const withLine = (line) => plan.replace('Edad registrada.', line);
+  const check = (line) => validatePlanSemantics(withLine(line), macros, disclosure, context);
+  assert.doesNotThrow(() => check('Objetivo declarado: ganar masa muscular y entrenar 5 días.'));
+  assert.doesNotThrow(() => check('Objetivo: reducir grasa corporal a 15 % en 12 semanas.'));
+  assert.doesNotThrow(() => check('Metabolismo en reposo: no disponible. Plicometrías: 0 registros.'));
+  assert.throws(() => check('Masa muscular: 38 %.'), /no están en el perfil/);
+  assert.throws(() => check('IMC 25,6 registrado.'), /no están en el perfil/);
+  assert.throws(() => check('Grasa corporal registrada 22 %.'), /no están en el perfil/);
+  assert.throws(() => check('TMB de 1700 kcal.'), /no están en el perfil/);
 });

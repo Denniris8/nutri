@@ -77,7 +77,7 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
           const activityType = typeof type === 'string' ? type.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, 120) : '';
           const createdAt = Number.isFinite(timestamp) ? new Date(timestamp).toISOString().slice(0, 23).replace('T', ' ') : '';
           if (!Number.isSafeInteger(activityId) || activityId < 1 || !Number.isFinite(durationSeconds) || durationSeconds <= 0 || durationSeconds > 86400
-            || calorieValue == null || !Number.isFinite(calories) || !createdAt || createdAt < range.start || createdAt >= range.end || !activityType) return [null, null];
+            || calorieValue == null || !Number.isFinite(calories) || calories < 0 || calories > 9999999 || !createdAt || createdAt < range.start || createdAt >= range.end || !activityType) return [null, null];
           const distanceValue = activity.distanceInMeters ?? activity.distance;
           const distance = distanceValue == null ? NaN : Number(distanceValue);
           return [activityId, {
@@ -90,15 +90,17 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
             createdAt,
           }];
         }).filter(([id]) => id !== null));
-        if (!rows.size) return { activities: activities.length, saved: 0, skipped: activities.length, stepsUpdated, stepsUnavailable };
+        if (!rows.size) return { activities: activities.length, saved: 0, updated: 0, unchanged: 0, skipped: activities.length, stepsUpdated, stepsUnavailable };
         const vigencySql = `(SELECT id FROM vigencias_planes_entrenamiento WHERE usuario_id=${userId} AND fecha_inicio<=${textSql(date)} AND (fecha_fin IS NULL OR fecha_fin>=${textSql(date)}) ORDER BY fecha_inicio DESC,id DESC LIMIT 1)`;
         const statements = `START TRANSACTION;
 SELECT id INTO @locked_user FROM usuarios WHERE id=${userId} FOR UPDATE;
-${[...rows.values()].map((activity) => `INSERT IGNORE INTO registros_entrenamientos(usuario_id,plan_vigencia_id,descripcion,actividad,duracion_minutos,peso_kg,met,energia_kcal,distancia_metros,tipo_energia,origen,external_activity_id,creado_en) VALUES (${userId},${vigencySql},${textSql(activity.description)},${textSql(activity.activity)},${activity.duration},NULL,NULL,${activity.calories},${activity.distance ?? 'NULL'},'reportada_dispositivo','garmin',${textSql(String(activity.id))},${textSql(activity.createdAt)}); SELECT ROW_COUNT();`).join('\n')}
+${[...rows.values()].map((activity) => `INSERT INTO registros_entrenamientos(usuario_id,plan_vigencia_id,descripcion,actividad,duracion_minutos,peso_kg,met,energia_kcal,distancia_metros,tipo_energia,origen,external_activity_id,creado_en) VALUES (${userId},${vigencySql},${textSql(activity.description)},${textSql(activity.activity)},${activity.duration},NULL,NULL,${activity.calories},${activity.distance ?? 'NULL'},'reportada_dispositivo','garmin',${textSql(String(activity.id))},${textSql(activity.createdAt)}) ON DUPLICATE KEY UPDATE descripcion=VALUES(descripcion),actividad=VALUES(actividad),duracion_minutos=VALUES(duracion_minutos),energia_kcal=VALUES(energia_kcal),distancia_metros=VALUES(distancia_metros),creado_en=VALUES(creado_en); SELECT ROW_COUNT();`).join('\n')}
 COMMIT;`;
-        const inserted = await dbQuery(statements);
-        const saved = inserted.split(/\s+/).reduce((total, count) => total + (Number(count) === 1 ? 1 : 0), 0);
-        return { activities: activities.length, saved, skipped: activities.length - saved, stepsUpdated, stepsUnavailable };
+        const counts = (await dbQuery(statements)).split(/\s+/).filter(Boolean).map(Number);
+        const saved = counts.filter((count) => count === 1).length;
+        const updated = counts.filter((count) => count === 2).length;
+        const unchanged = counts.filter((count) => count === 0).length;
+        return { activities: activities.length, saved, updated, unchanged, skipped: activities.length - rows.size, stepsUpdated, stepsUnavailable };
       })(),
       new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Se agotó el tiempo de sincronización Garmin.')), 45000); }),
     ]);

@@ -46,13 +46,15 @@ function validatePlanSemantics(content, macros, disclosure, context) {
     const hasWeight = context.hasWeight ?? context.biometricRecords?.some((record) => Number.isFinite(Number(record.weightKg)) && Number(record.weightKg) >= 20);
     const missingWeight = !hasWeight && /\bpeso(?: corporal)?\b.{0,18}\b\d{2,3}(?:[.,]\d+)?\s*(?:kg|kilos?)?/i.test(section);
     const hasMetric = (key) => context.biometricRecords?.some((record) => record[key] != null) ?? context.bodyFacts?.[key] === true;
+    // El valor debe seguir directamente a la etiqueta (con un conector corto); así "ganar masa muscular y entrenar 5 días" no cuenta como dato medido.
+    const reported = (label) => new RegExp(`\\b(?:${label})\\b\\s*(?:registrad[oa]s?|medid[oa]s?)?\\s*(?:[:=]|es|fue|de|del)?\\s*\\d+(?:[.,]\\d+)?`, 'i');
     const missingBodyData = [
-      [/\b(?:IMC|BMI)\b.{0,24}\b\d+(?:[.,]\d+)?/i, 'bmi'],
-      [/\b(?:grasa corporal|porcentaje de grasa)\b.{0,24}\b\d+(?:[.,]\d+)?/i, 'bodyFatPct'],
-      [/\bmasa muscular\b.{0,24}\b\d+(?:[.,]\d+)?/i, 'musclePct'],
-      [/\bgrasa visceral\b.{0,24}\b\d+(?:[.,]\d+)?/i, 'visceralFat'],
-      [/\bedad corporal\b.{0,24}\b\d+(?:[.,]\d+)?/i, 'bodyAge'],
-      [/\b(?:TMB|metabolismo basal)\b.{0,24}\b\d+(?:[.,]\d+)?/i, 'restingMetabolismKcal'],
+      [reported('IMC|BMI'), 'bmi'],
+      [reported('grasa corporal|porcentaje de grasa'), 'bodyFatPct'],
+      [reported('masa muscular'), 'musclePct'],
+      [reported('grasa visceral'), 'visceralFat'],
+      [reported('edad corporal'), 'bodyAge'],
+      [reported('TMB|metabolismo basal'), 'restingMetabolismKcal'],
     ].some(([pattern, key]) => !(hasMetric(key) || key === 'restingMetabolismKcal' && context.profile?.restingMetabolismKcal != null) && pattern.test(section));
     const plicometryFields = [
       [/\btríceps\b.{0,24}\b\d+(?:[.,]\d+)?\s*mm\b/i, 'tricepsMm'],

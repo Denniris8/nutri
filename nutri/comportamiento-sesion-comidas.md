@@ -55,6 +55,15 @@ Con `clarificationQuestion` no nula, devuelve también `action`, `targetEntryId`
 
 Para una sola comida con cantidad y macros completos de la porción confirmados por el usuario, el servidor acepta antes de crear sesión o llamar a OpenCode el formato exacto: `Alimento | cantidad consumida: 150 g | 135 kcal; 15 g proteína; 9 g carbohidratos; 4 g grasa; 0 g fibra`. La fibra puede omitirse si no fue indicada. El servidor valida gramos, campos y coherencia energética 4-4-9; ante formato incompleto o inválido continúa por el flujo normal y no interpreta faltantes como cero. La limpieza de una sesión anterior se conserva.
 
+### Reutilización local y ahorro de llamadas
+
+- **Varias líneas declaradas:** el atajo anterior acepta hasta 12 líneas en ese formato; si cualquiera no cumple, se usa el flujo normal.
+- **Alimentos ya registrados:** si el mensaje es solo `alimento cantidad g` (separados por salto de línea, coma, `;`, `+` o ` y `) y **todos** los alimentos ya existen en comidas completadas de la misma cuenta, el servidor escala sus macros guardados (más reciente primero) sin llamar a OpenCode. Cualquier duda (otro formato, hora, aclaración pendiente, corrección o alimento desconocido) usa el flujo normal. Conserva la procedencia y el estado (`declarado`/`estimado`) del registro original.
+- **Primer análisis con historial:** tras el primer análisis, los alimentos ya conocidos de la cuenta reutilizan su historial y solo los demás consultan Open Food Facts/USDA y, si hace falta, la web; así se evita la segunda llamada cuando todo está resuelto.
+- **Energía estimada:** solo para macros `opencode_estimado`, si la energía no concuerda con 4-4-9 se recalcula localmente en vez de pedir otra respuesta; las fuentes declaradas o verificadas nunca se modifican.
+- **Sesión y prompt:** el prompt canónico se envía solo en el primer mensaje de cada sesión; la sesión se revalida como máximo cada 30 s; el contexto de comidas del día se reduce a identificador, nombre y cantidad salvo que haya aclaración, corrección, adición u hora.
+- **Fuentes externas:** USDA se cachea (15 min si hay resultado, 5 min si no); tras 3 fallos seguidos, Open Food Facts o USDA se omiten 5 minutos.
+
 ## Flujo
 
 1. El servidor valida la cookie JWT y usa el `usuario_id` autenticado; nunca acepta IDs de usuario o sesión del navegador.

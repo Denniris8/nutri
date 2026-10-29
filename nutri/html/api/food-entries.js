@@ -18,7 +18,7 @@ function reportFoodProgress(userId, requestId, event, details = {}, recordEvent)
     session_resolution_started: 'Preparando sesión de análisis…', session_ready: 'Separando alimentos y cantidades…',
     message_sent: 'Analizando los alimentos…', message_received: 'Respuesta recibida; revisando alimentos…',
     openfoodfacts_lookup_started: 'Consultando Open Food Facts…', usda_lookup_started: 'Consultando USDA…',
-    web_resolution_started: 'Buscando y verificando una fuente…', reply_validation_retry: 'Validando macros; reintentando análisis…',
+    known_foods_reused: 'Reutilizando alimentos ya registrados…', web_resolution_started: 'Buscando y verificando una fuente…', reply_validation_retry: 'Validando macros; reintentando análisis…',
     reply_validated: 'Macros validados; guardando comida…', items_saved: 'Alimentos guardados; verificando registro…',
     persistence_verified: 'Registro verificado.', save_failed: 'El análisis se detuvo; se conserva el borrador.',
   };
@@ -110,7 +110,7 @@ function applyFoodMacroReferences(items, referenceItems) {
 function applyOpenFoodFactsMacros(items, products) {
   return items.map((item) => {
     const product = products.find((candidate) => candidate.name === item.name);
-    return product && item.targetItemId == null && item.macroSource !== 'declarado_usuario' ? { ...item, ...product } : item;
+    return product && item.targetItemId == null && item.macroSource !== 'declarado_usuario' && !hasExplicitVolume(item) ? { ...item, ...product } : item;
   });
 }
 
@@ -261,8 +261,8 @@ function isFoodIdentityRefusal(message) {
   return message?.role === 'assistant' && /no se registr[oó].*identidad autenticada|no me proporciona la identidad autenticada|no usar[eé] un usuario ni una sesi[oó]n supuesta|(?:sin|no (?:tengo|cuento con|dispongo de)).{0,100}(?:contexto|identidad).{0,80}(?:autenticad|sesi[oó]n)|no (?:have|has).{0,60}authenticated (?:session )?context|missing authenticated (?:session )?context/i.test(content);
 }
 
-async function readFoodConversationText({ entryId, dbQuery, fallback, excludeLatestUser = false }) {
-  const messages = await readFoodConversationMessages({ entryId, dbQuery });
+async function readFoodConversationText({ entryId, dbQuery, fallback, excludeLatestUser = false, messages: provided }) {
+  const messages = [...(provided ?? await readFoodConversationMessages({ entryId, dbQuery }))];
   if (excludeLatestUser && messages.at(-1)?.role === 'user') messages.pop();
   return messages.map((message) => `${message.role === 'user' ? 'Usuario' : 'Asistente'}: ${message.content}`).join('\n') || fallback;
 }
@@ -290,14 +290,8 @@ function hasGenericEstimateApproval(messages, pendingQuestion, answer) {
   return approved;
 }
 
-async function readFoodUserText({ entryId, dbQuery }) {
-  const rows = await dbQuery(`SELECT JSON_OBJECT('content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} AND role='user' ORDER BY id;`);
-  return rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row).content).join('\n') : '';
-}
-
-async function foodDayChoiceAnswered({ entryId, dbQuery }) {
-  const rows = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`);
-  const messages = rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [];
+async function foodDayChoiceAnswered({ entryId, dbQuery, messages: provided }) {
+  const messages = provided ?? await readFoodConversationMessages({ entryId, dbQuery });
   return messages.some((message, index) => {
     if (message.role !== 'assistant' || !isEarlyFoodDayChoiceQuestion(message.content)) return false;
     const answer = messages.slice(index + 1).find((next) => next.role === 'user');
@@ -311,12 +305,8 @@ async function readDraftFoodItems({ entryId, userId, dbQuery }) {
 }
 
 async function saveFoodInteraction({ dbQuery, textSql, entryId, role, content }) {
-  const previous = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id DESC LIMIT 1;`);
-  if (previous) {
-    const last = JSON.parse(previous);
-    if (last.role === role && last.content === content) return;
-  }
-  await dbQuery(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},${textSql(role)},${textSql(content.slice(0,5000))});`);
+  const text = content.slice(0, 5000);
+  await dbQuery(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) SELECT ${entryId},${textSql(role)},${textSql(text)} FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM (SELECT role,contenido FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id DESC LIMIT 1) AS last WHERE last.role=${textSql(role)} AND BINARY last.contenido=BINARY ${textSql(text)});`);
 }
 
 async function deleteFoodEntry({ userId, entryId, dbQuery }) {
@@ -439,7 +429,7 @@ function validFoodItem(item) {
   return foodItemIssues(item).length === 0;
 }
 
-function parseDeclaredFoodShortcut(description) {
+function parseDeclaredFoodLine(description) {
   const [name, quantityText, macroText, ...extra] = String(description || '').split('|').map((part) => part.trim());
   const quantity = quantityText?.match(/^cantidad consumida:\s*(\d+(?:[.,]\d+)?)\s*g$/i);
   const parts = macroText?.split(';').map((part) => part.trim()) || [];
@@ -462,7 +452,14 @@ function parseDeclaredFoodShortcut(description) {
     sourceName: null, sourceUrl: null, sourceQuote: null,
     macros: { energyKcal, proteinG, carbohydrateG, fatG, fiberG },
   };
-  return foodItemIssues(item).length ? null : { action: 'new', targetEntryId: null, items: [item], clarificationQuestion: null };
+  return foodItemIssues(item).length ? null : item;
+}
+
+function parseDeclaredFoodShortcut(description) {
+  const lines = String(description || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length || lines.length > 12) return null;
+  const items = lines.map(parseDeclaredFoodLine);
+  return items.every(Boolean) ? { action: 'new', targetEntryId: null, items, clarificationQuestion: null } : null;
 }
 
 function usedFoodWebTools(parts) {
@@ -552,8 +549,75 @@ function pendingFoodItemSql(entryId, item, textSql) {
   const value = (field) => field == null ? 'NULL' : textSql(field);
   const energy449 = 4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG;
   const method = item.macroSource === 'webfetch' ? 'webfetch' : item.macroSource === 'opencode_estimado' ? 'opencode_estimado' : 'declarado_usuario';
-  const fields = [entryId, textSql(item.sourceText), textSql(item.name.trim()), value(item.sourceName), value(item.sourceUrl), value(item.sourceQuote), value(item.quantityText), item.quantityGrams == null ? 'NULL' : item.quantityGrams, textSql(item.macroSource), textSql(method), textSql(item.macroBasis), textSql(item.macroStatus), macros.energyKcal, energy449, macros.proteinG, macros.carbohydrateG, macros.fatG, value(macros.fiberG)];
+  const fields = [entryId, textSql(item.sourceText), textSql(item.name.trim()), value(item.sourceName), value(item.sourceUrl), value(item.sourceQuote), value(item.quantityText), item.quantityGrams == null ? 'NULL' : item.quantityGrams, textSql(item.macroSource), textSql(method), textSql(item.macroBasis), textSql(item.macroStatus), macros.energyKcal, energy449, macros.proteinG, macros.carbohydrateG, macros.fatG, macros.fiberG == null ? 'NULL' : macros.fiberG];
   return `INSERT INTO registros_comida_items(registro_comida_id,fragmento_original,nombre_alimento,nombre_fuente_web,url_fuente_web,cita_fuente,cantidad_texto,cantidad_g,fuente_macros,metodo_energia,base_macros,estado_macros,energia_kcal,energia_449_kcal,proteina_g,carbohidratos_g,grasa_g,fibra_g) VALUES (${fields.join(',')})`;
+}
+
+const foodKey = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+
+async function readKnownFoods({ userId, names, dbQuery, textSql }) {
+  const unique = [...new Set((names || []).map((name) => String(name || '').trim()).filter((name) => name && name.length <= 150))].slice(0, 12);
+  const known = new Map();
+  if (!unique.length) return known;
+  const rows = await dbQuery(`SELECT JSON_OBJECT('name',i.nombre_alimento,'grams',i.cantidad_g,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente,'energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g,'fiberG',i.fibra_g) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.estado='completado' AND i.base_macros='per_portion' AND i.cantidad_g>0 AND i.energia_kcal IS NOT NULL AND i.nombre_alimento IN (${unique.map(textSql).join(',')}) ORDER BY e.creado_en DESC,i.id DESC LIMIT 200;`);
+  for (const row of rows ? rows.split(/\r?\n/).filter(Boolean) : []) {
+    let food;
+    try { food = JSON.parse(row); } catch { continue; }
+    const key = foodKey(food.name);
+    const grams = Number(food.grams);
+    if (known.has(key) || !['declarado_usuario', 'webfetch', 'opencode_estimado'].includes(food.macroSource) || !Number.isFinite(grams) || grams <= 0) continue;
+    const value = (field) => field == null ? null : Number(field);
+    known.set(key, {
+      name: food.name, grams, macroStatus: food.macroStatus, macroSource: food.macroSource,
+      sourceName: food.sourceName, sourceUrl: food.sourceUrl, sourceQuote: food.sourceQuote,
+      macros: { energyKcal: value(food.energyKcal), proteinG: value(food.proteinG), carbohydrateG: value(food.carbohydrateG), fatG: value(food.fatG), fiberG: value(food.fiberG) },
+    });
+  }
+  return known;
+}
+
+function scaleKnownMacros(food, factor, decimals) {
+  const round = 10 ** decimals;
+  return Object.fromEntries(Object.entries(food.macros).map(([key, value]) => [key, value == null ? null : Math.round(value * factor * round) / round]));
+}
+
+function knownFoodProduct(food, name) {
+  return {
+    name, macroBasis: 'per_100g', macroStatus: food.macroStatus, macroSource: food.macroSource,
+    sourceName: food.sourceName, sourceUrl: food.sourceUrl, sourceQuote: food.sourceQuote,
+    macros: scaleKnownMacros(food, 100 / food.grams, 4),
+  };
+}
+
+async function knownFoodsShortcut({ description, userId, dbQuery, textSql }) {
+  const segments = String(description || '').split(/\r?\n|;|,|\s+y\s+|\+/i).map((part) => part.trim()).filter(Boolean);
+  if (!segments.length || segments.length > 12) return null;
+  const parsed = segments.map((segment) => segment.match(/^(.{1,150}?)\s+(\d+(?:[.,]\d+)?)\s*(?:g|gr|grs|gramos?)\.?$/i));
+  if (parsed.some((match) => !match)) return null;
+  const known = await readKnownFoods({ userId, names: parsed.map((match) => match[1]), dbQuery, textSql });
+  const items = [];
+  for (const [, rawName, rawGrams] of parsed) {
+    const food = known.get(foodKey(rawName));
+    const grams = Number(rawGrams.replace(',', '.'));
+    if (!food || !(grams > 0)) return null;
+    items.push({
+      sourceText: `${rawGrams} g de ${food.name}`, name: food.name, quantityGrams: grams, quantityText: `${grams} g`,
+      macroBasis: 'per_portion', macroStatus: food.macroStatus, macroSource: food.macroSource,
+      sourceName: food.sourceName, sourceUrl: food.sourceUrl, sourceQuote: food.sourceQuote,
+      macros: scaleKnownMacros(food, grams / food.grams, 2),
+    });
+  }
+  return items.every((item) => !foodItemIssues(item).length) ? { action: 'new', targetEntryId: null, items, clarificationQuestion: null } : null;
+}
+
+function repairEstimatedEnergy(items) {
+  return items.map((item) => {
+    const macros = item?.macros;
+    if (item?.macroSource !== 'opencode_estimado' || !macros || !['proteinG', 'carbohydrateG', 'fatG'].every((key) => Number.isFinite(macros[key]) && macros[key] >= 0)) return item;
+    const expected = Math.round((4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG) * 10) / 10;
+    const consistent = Number.isFinite(macros.energyKcal) && Math.abs(macros.energyKcal - expected) <= Math.max(25, macros.energyKcal * 0.25, (macros.fiberG || 0) * 2);
+    return consistent ? item : { ...item, macros: { ...macros, energyKcal: expected } };
+  });
 }
 
 async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, requestOpenCode }) {
@@ -573,9 +637,20 @@ async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, r
   let committedConfirmation;
   let stage = 'draft';
   try {
-    const preferenceTimezone = await dbQuery(`SELECT zona_horaria FROM preferencias_usuario WHERE usuario_id=${userId} LIMIT 1;`);
-    if (preferenceTimezone) entry.timezone = preferenceTimezone;
-    const existingDraftDate = await dbQuery(`SELECT DATE_FORMAT(fecha_consumo,'%Y-%m-%d') FROM registros_comidas WHERE usuario_id=${userId} AND request_id=${textSql(entry.requestId)} AND estado='borrador_chat' LIMIT 1;`);
+    const initial = { timezone: '', draftDate: '', prior: '' };
+    let initialSection = '';
+    for (const row of (await dbQuery(`SELECT 'timezone';
+SELECT zona_horaria FROM preferencias_usuario WHERE usuario_id=${userId} LIMIT 1;
+SELECT 'draftDate';
+SELECT DATE_FORMAT(fecha_consumo,'%Y-%m-%d') FROM registros_comidas WHERE usuario_id=${userId} AND request_id=${textSql(entry.requestId)} AND estado='borrador_chat' LIMIT 1;
+SELECT 'prior';
+SELECT JSON_OBJECT('entryId',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d')) FROM registros_comida_interacciones i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND i.request_id=${textSql(entry.requestId)} LIMIT 1;`)).split(/\r?\n/).filter(Boolean)) {
+      if (Object.hasOwn(initial, row)) initialSection = row;
+      else if (initialSection) initial[initialSection] = row;
+    }
+    if (initial.timezone) entry.timezone = initial.timezone;
+    const existingDraftDate = initial.draftDate;
+    const appended = initial.prior;
     const requestedChatDate = chatFoodDate(entry.descripcion, entry.timezone);
     if (requestedChatDate) {
       entry.fecha = requestedChatDate;
@@ -584,7 +659,6 @@ async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, r
         entry.targetEntryId = null;
       }
     } else if (existingDraftDate) entry.fecha = existingDraftDate;
-    const appended = await dbQuery(`SELECT JSON_OBJECT('entryId',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d')) FROM registros_comida_interacciones i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND i.request_id=${textSql(entry.requestId)} LIMIT 1;`);
     if (appended) {
       const prior = JSON.parse(appended);
       await progressRecorder.flush();
@@ -595,13 +669,14 @@ async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, r
       json(response, 404, { error: 'La comida que quieres ajustar ya no está disponible.' });
       return;
     }
-    const inserted = await dbQuery(`INSERT INTO registros_comidas(usuario_id,registro_comida_destino_id,request_id,fecha_consumo,descripcion_original,estado,creado_en) VALUES (${userId},${entry.targetEntryId || 'NULL'},${textSql(entry.requestId)},${textSql(entry.fecha)},${textSql(entry.descripcion)},'borrador_chat',CURRENT_TIMESTAMP(3)) AS incoming ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id);
-SELECT LAST_INSERT_ID();`);
-    entryId = inserted.split(/\s+/).at(-1);
-    if (!/^\d+$/.test(entryId || '')) throw new Error('food_entry_insert_failed');
+    const [insertedId, savedRow] = (await dbQuery(`INSERT INTO registros_comidas(usuario_id,registro_comida_destino_id,request_id,fecha_consumo,descripcion_original,estado,creado_en) VALUES (${userId},${entry.targetEntryId || 'NULL'},${textSql(entry.requestId)},${textSql(entry.fecha)},${textSql(entry.descripcion)},'borrador_chat',CURRENT_TIMESTAMP(3)) AS incoming ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id);
+SELECT LAST_INSERT_ID();
+SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),'description',descripcion_original,'question',pregunta_pendiente,'targetEntryId',registro_comida_destino_id) FROM registros_comidas WHERE id=LAST_INSERT_ID() AND usuario_id=${userId} LIMIT 1;`)).split(/\r?\n/);
+    entryId = String(insertedId || '').trim();
+    if (!/^\d+$/.test(entryId)) throw new Error('food_entry_insert_failed');
     traceFoodSession(trace, 'entry_saved', { entryId });
 
-    const saved = JSON.parse(await dbQuery(`SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),'description',descripcion_original,'question',pregunta_pendiente,'targetEntryId',registro_comida_destino_id) FROM registros_comidas WHERE id=${entryId} AND usuario_id=${userId} LIMIT 1;`));
+    const saved = JSON.parse(savedRow);
     if (saved.state === 'completado') {
       json(response, 200, { state: 'completado', entryId, records: await readFoodEntries({ userId, fecha: saved.fecha, dbQuery, textSql }), message: 'Esta comida ya estaba guardada.' });
       return;
@@ -618,13 +693,17 @@ SELECT LAST_INSERT_ID();`);
         await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'assistant', content: saved.question });
       }
     }
-    const pendingFoodItems = saved.question ? await readDraftFoodItems({ entryId, userId, dbQuery }) : [];
-    await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'user', content: entry.descripcion });
-    const genericEstimateApproved = hasGenericEstimateApproval(await readFoodConversationMessages({ entryId, dbQuery }), saved.question, entry.descripcion);
+    const [pendingFoodItems] = await Promise.all([
+      saved.question ? readDraftFoodItems({ entryId, userId, dbQuery }) : [],
+      saveFoodInteraction({ dbQuery, textSql, entryId, role: 'user', content: entry.descripcion }),
+    ]);
+    let conversationMessages;
+    const readConversation = () => conversationMessages ??= readFoodConversationMessages({ entryId, dbQuery });
+    const genericEstimateApproved = hasGenericEstimateApproval(await readConversation(), saved.question, entry.descripcion);
     const asksTimeChoice = /Hay varias comidas a esa hora|¿Te refieres a las .*a\. m\. o p\. m\./i.test(saved.question || '');
     const asksDayChoice = isEarlyFoodDayChoiceQuestion(saved.question);
     const asksPreviousDayConfirmation = /¿La guardo en el día nutricional anterior .*11:59:59 p\. m\./i.test(saved.question || '');
-    const priorUserText = asksTimeChoice || asksDayChoice || asksPreviousDayConfirmation ? await readFoodUserText({ entryId, dbQuery }) : '';
+    const priorUserText = asksTimeChoice || asksDayChoice || asksPreviousDayConfirmation ? (await readConversation()).filter((message) => message.role === 'user').map((message) => message.content).join('\n') : '';
     const parsedFoodReference = parseFoodReferenceTime(entry.descripcion) || parseFoodReferenceTime(saved.description);
     const foodReference = parsedFoodReference?.time && !parsedFoodReference.time.invalid ? parsedFoodReference : null;
     const requestedTime = parseFoodTime(foodReference?.withoutReferenceTime || entry.descripcion) || (priorUserText ? parseFoodTime(priorUserText) : null);
@@ -641,15 +720,17 @@ SELECT LAST_INSERT_ID();`);
       entry.targetEntryId = null;
     }
     let modelDescription = asksPreviousDayConfirmation && previousSaveAnswer?.confirmed ? saved.description : entry.descripcion;
-    const conversation = await readFoodConversationText({ entryId, dbQuery, fallback: '', excludeLatestUser: true });
+    const conversation = await readFoodConversationText({ entryId, dbQuery, fallback: '', excludeLatestUser: true, messages: await readConversation() });
     const localClock = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
       timeZone: entry.timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit',
     }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
     const localClockMinutes = Number(localClock.hour) * 60 + Number(localClock.minute);
-    const directFastPath = !saved.question && !conversation && !genericEstimateApproved && !reuseAsNewMeal
+    const fastPathAllowed = !saved.question && !conversation && !genericEstimateApproved && !reuseAsNewMeal
       && !correctionIntent && !asksAddition && entry.targetEntryId == null && !requestedTime && !foodReference
-      && (requestedChatDate || !isEarlyNutritionHour(localClockMinutes))
-      ? parseDeclaredFoodShortcut(modelDescription) : null;
+      && (requestedChatDate || !isEarlyNutritionHour(localClockMinutes));
+    const directFastPath = fastPathAllowed
+      ? parseDeclaredFoodShortcut(modelDescription) || await knownFoodsShortcut({ description: modelDescription, userId, dbQuery, textSql })
+      : null;
     const dayMeals = directFastPath ? [] : (await readFoodEntries({ userId, fecha: entry.fecha, dbQuery, textSql })).filter((record) => record.state === 'completado').map((record) => {
       const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: entry.timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(record.createdAt)).map(({ type, value }) => [type, value]));
       return {
@@ -673,11 +754,14 @@ SELECT LAST_INSERT_ID();`);
       ? dayMeals.filter((meal) => requestedTime.hours.includes(meal.hour24) && (requestedTime.precision === 'hour' || requestedTime.minute === meal.minute))
       : dayMeals;
     if (requestedTime?.ambiguous && matchedMeals.length === 1) requestedTime.hours = [matchedMeals[0].hour24];
-    const mealsForModel = matchedMeals;
+    const needsFullMeals = Boolean(saved.question || correctionIntent || asksAddition || requestedTime || foodReference || activeTarget);
+    const mealsForModel = needsFullMeals ? matchedMeals : matchedMeals.map((meal) => ({
+      ...meal, items: meal.items.map(({ targetItemId, name, quantity, quantityGrams }) => ({ targetItemId, name, quantity, quantityGrams })),
+    }));
     const statedTimeMinutes = requestedTime && !requestedTime.invalid && requestedTime.hours.length === 1
       ? requestedTime.hours[0] * 60 + requestedTime.minute : null;
     const dayChoiceAnswered = !requestedChatDate && (isEarlyNutritionHour(localClockMinutes) || isEarlyNutritionHour(statedTimeMinutes))
-      ? await foodDayChoiceAnswered({ entryId, dbQuery }) : false;
+      ? await foodDayChoiceAnswered({ messages: await readConversation() }) : false;
     const needsNutritionDayChoice = !requestedChatDate && !activeTarget && !correctionIntent && !dayChoiceAnswered
       && (isEarlyNutritionHour(localClockMinutes) || isEarlyNutritionHour(statedTimeMinutes));
     const returnDayClarification = async (question) => {
@@ -692,11 +776,11 @@ SELECT LAST_INSERT_ID();`);
       return;
     }
     if (asksDayChoice && !dayChoice) {
-      returnDayClarification(saved.question);
+      await returnDayClarification(saved.question);
       return;
     }
     if (asksPreviousDayConfirmation && !previousSaveAnswer?.confirmed) {
-      returnDayClarification(saved.question);
+      await returnDayClarification(saved.question);
       return;
     }
     if (needsNutritionDayChoice && !asksDayChoice && !asksPreviousDayConfirmation) {
@@ -734,7 +818,7 @@ SELECT LAST_INSERT_ID();`);
           await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode, forgetOnError: true });
           const renewed = await ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode, trace, returnMetadata: true });
           sessionId = renewed.sessionId;
-          const conversation = await readFoodConversationText({ entryId, dbQuery, fallback: '', excludeLatestUser: true });
+          const conversation = await readFoodConversationText({ entryId, dbQuery, fallback: '', excludeLatestUser: true, messages: await readConversation() });
           const parts = await send({ conversation: conversation || args.conversation || undefined });
           stage = previousStage;
           traceFoodSession(trace, 'session_recovery_succeeded', { stage: previousStage });
@@ -749,7 +833,7 @@ SELECT LAST_INSERT_ID();`);
       }
     };
     if (directReply) {
-      traceFoodSession(trace, 'declared_food_fast_path', { itemCount: 1 });
+      traceFoodSession(trace, 'declared_food_fast_path', { itemCount: directReply.items.length });
     } else {
       if (identityRefusal) {
         await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode, forgetOnError: true });
@@ -769,7 +853,7 @@ SELECT LAST_INSERT_ID();`);
       catch (error) {
         traceFoodSession(trace, 'reply_parse_failed', { partTypes: parts.map((part) => part.type) });
         if (error.code !== 'FOOD_IDENTITY_REFUSAL') throw error;
-        modelDescription = await readFoodConversationText({ entryId, dbQuery, fallback: entry.descripcion });
+        modelDescription = await readFoodConversationText({ entryId, dbQuery, fallback: entry.descripcion, messages: await readConversation() });
         await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode, forgetOnError: true });
         traceFoodSession(trace, 'identity_refusal_session_reset');
         const renewed = await ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode, trace, returnMetadata: true });
@@ -783,29 +867,42 @@ SELECT LAST_INSERT_ID();`);
     }
     if (result?.items?.length) result.items = applyExplicitQuantities(result.items, quantityContext, answeredPendingQuantity);
     if (result?.items?.length && openFoodFactsFirstPass) {
-      const names = [...new Set(result.items.filter((item) => item.targetItemId == null && item.macroSource !== 'declarado_usuario').map((item) => item.name).filter(Boolean))];
-      traceFoodSession(trace, 'openfoodfacts_lookup_started', { itemCount: names.length });
-      for (let index = 0; index < names.length; index += 3) {
-        const products = await Promise.all(names.slice(index, index + 3).map((name) => findOpenFoodFactsProduct(name)));
-        openFoodFactsProducts.push(...products.filter(Boolean));
+      const names = [...new Set(result.items.filter((item) => item.targetItemId == null && item.macroSource !== 'declarado_usuario' && !hasExplicitVolume(item)).map((item) => item.name).filter(Boolean))];
+      const known = await readKnownFoods({ userId, names, dbQuery, textSql });
+      const knownNames = names.filter((name) => known.has(foodKey(name)));
+      if (knownNames.length) {
+        traceFoodSession(trace, 'known_foods_reused', { itemCount: knownNames.length });
+        openFoodFactsProducts.push(...knownNames.map((name) => knownFoodProduct(known.get(foodKey(name)), name)));
       }
-      const unresolvedNames = names.filter((name) => !openFoodFactsProducts.some((product) => product.name === name));
+      const lookupNames = names.filter((name) => !known.has(foodKey(name)));
       const usdaProducts = [];
-      if (unresolvedNames.length) traceFoodSession(trace, 'usda_lookup_started', { itemCount: unresolvedNames.length });
-      for (let index = 0; index < unresolvedNames.length; index += 3) {
-        usdaProducts.push(...(await Promise.all(unresolvedNames.slice(index, index + 3).map((name) => findUsdaFood(name)))).filter(Boolean));
+      const offProducts = [];
+      let usdaQueried = 0;
+      if (lookupNames.length) {
+        traceFoodSession(trace, 'openfoodfacts_lookup_started', { itemCount: lookupNames.length });
+        const queue = [...lookupNames];
+        await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => {
+          for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
+            const product = await findOpenFoodFactsProduct(name);
+            if (product) { offProducts.push(product); continue; }
+            if (!usdaQueried++) traceFoodSession(trace, 'usda_lookup_started');
+            const usda = await findUsdaFood(name);
+            if (usda) usdaProducts.push(usda);
+          }
+        }));
+        openFoodFactsProducts.push(...offProducts, ...usdaProducts);
+        traceFoodSession(trace, 'food_sources_lookup', {
+          queried: lookupNames.length, openFoodFactsMatched: offProducts.length,
+          usdaQueried, usdaMatched: usdaProducts.length,
+        });
       }
-      openFoodFactsProducts.push(...usdaProducts);
-      traceFoodSession(trace, 'food_sources_lookup', {
-        queried: names.length, openFoodFactsMatched: openFoodFactsProducts.length - usdaProducts.length,
-        usdaQueried: unresolvedNames.length, usdaMatched: usdaProducts.length,
-      });
-      const unresolved = result.items.some((item) => item.targetItemId == null && item.macroSource !== 'declarado_usuario' && !openFoodFactsProducts.some((product) => product.name === item.name));
+      const needsSource = (item) => item.targetItemId == null && item.macroSource !== 'declarado_usuario' && (hasExplicitVolume(item) || !openFoodFactsProducts.some((product) => product.name === item.name));
+      const unresolved = result.items.some(needsSource);
       if (unresolved) {
         requestArgs.allowWebSearch = true;
         requestArgs.openFoodFactsFirstPass = false;
         requestArgs.openFoodFactsCandidates = openFoodFactsProducts;
-        traceFoodSession(trace, 'web_resolution_started', { unresolvedCount: result.items.filter((item) => item.targetItemId == null && item.macroSource !== 'declarado_usuario' && !openFoodFactsProducts.some((product) => product.name === item.name)).length });
+        traceFoodSession(trace, 'web_resolution_started', { unresolvedCount: result.items.filter(needsSource).length });
         parts = await requestFoodWithSessionRecovery({
           ...requestArgs, retryFeedback: 'Primero se consultó Open Food Facts. Usa sus candidatos solo si el producto coincide exactamente; conserva esos macros y su procedencia sin sustituirlos. Usa websearch/webfetch únicamente para los alimentos que no tengan candidato coincidente. No inventes ni cambies productos.',
         });
@@ -819,7 +916,7 @@ SELECT LAST_INSERT_ID();`);
       requestArgs.openFoodFactsFirstPass = false;
     }
     if (reuseAsNewMeal && result) { result.action = 'new'; result.targetEntryId = null; }
-    let items = applyOpenFoodFactsMacros(applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems), openFoodFactsProducts);
+    let items = repairEstimatedEnergy(applyOpenFoodFactsMacros(applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems), openFoodFactsProducts));
     if (result) result.items = items;
     const getReplyIssues = () => [
       ...(!['new', 'append', 'update'].includes(result?.action) ? ['action'] : []),
@@ -843,7 +940,7 @@ SELECT LAST_INSERT_ID();`);
       stage = 'parse';
       result = parseReply(parts);
       if (reuseAsNewMeal && result) { result.action = 'new'; result.targetEntryId = null; }
-      items = applyOpenFoodFactsMacros(applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems), openFoodFactsProducts);
+      items = repairEstimatedEnergy(applyOpenFoodFactsMacros(applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems), openFoodFactsProducts));
       if (result) result.items = items;
       replyIssues = getReplyIssues();
       if ((replyIssues.length || (!items.length && !result?.clarificationQuestion)) && attempt === retryLimit) {
@@ -989,15 +1086,18 @@ SELECT LAST_INSERT_ID();`);
       if (!suppressNotification) statements.push(notificationInsertSql({ userId, category: 'comida', state: 'requiere_respuesta', title: 'Comida: falta una aclaración', message: question, referenceId: entryId, textSql }));
       statements.push('COMMIT');
       await dbQuery(`${statements.join(';')};`);
-      for (const item of items) {
-        if (foodItemIssues(item).length) continue;
-        try {
-          await dbQuery(`${pendingFoodItemSql(entryId, item, textSql)};`);
-        } catch (error) {
+      const candidates = items.filter((item) => !foodItemIssues(item).length);
+      const persistCandidate = async (item) => {
+        try { await dbQuery(`${pendingFoodItemSql(entryId, item, textSql)};`); }
+        catch (error) {
           traceFoodSession(trace, 'draft_candidate_persistence_failed', { stage: 'persistence', errorCode: safeOpenCodeErrorCode(error) });
           try { await recordFoodError({ dbQuery, textSql, userId, trace, stage: 'persistence', error }); }
           catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed' })); }
         }
+      };
+      if (candidates.length) {
+        try { await dbQuery(`START TRANSACTION;${candidates.map((item) => pendingFoodItemSql(entryId, item, textSql)).join(';')};COMMIT;`); }
+        catch { for (const item of candidates) await persistCandidate(item); }
       }
       const messages = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`);
       json(response, 200, { state: 'requiere_aclaracion', entryId, requestId: entry.requestId, targetEntryId: clarificationTargetId, question, messages: messages ? messages.split(/\r?\n/).map((row) => JSON.parse(row)) : [], message: question });
@@ -1053,11 +1153,11 @@ SELECT LAST_INSERT_ID();`);
     committedEntryId = destinationId;
     committedConfirmation = confirmation;
     traceFoodSession(trace, 'items_saved', { itemCount: items.length, appended: append });
-    const messages = append || updating
-      ? await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${destinationId} ORDER BY id;`).then((rows) => rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [])
-      : await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`).then((rows) => rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : []);
     stage = 'verification';
-    const records = await readFoodEntries({ userId, fecha: savedDate, dbQuery, textSql });
+    const [messages, records] = await Promise.all([
+      dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${append || updating ? destinationId : entryId} ORDER BY id;`).then((rows) => rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : []),
+      readFoodEntries({ userId, fecha: savedDate, dbQuery, textSql }),
+    ]);
     const persisted = records.find((record) => String(record.id) === String(destinationId) && record.state === 'completado');
     const expectedItemCount = append ? (target?.items.length || 0) + items.length
       : updating ? (target?.items.length || 0) + items.filter((item) => item.targetItemId == null).length : items.length;
@@ -1085,11 +1185,15 @@ SELECT LAST_INSERT_ID();`);
       return;
     }
     if (entryId && /^\d+$/.test(entryId)) {
+      const errorCode = safeOpenCodeErrorCode(error);
       const message = error.code === 'FOOD_IDENTITY_REFUSAL' ? 'Se renovó la sesión para continuar el análisis sin pedir tu identidad; vuelve a enviar el alimento.'
         : stage === 'persistence' ? 'El análisis terminó, pero no se pudieron guardar sus alimentos y macros.'
           : stage === 'session_recovery' || stage === 'session_resolution' ? 'No se pudo recuperar la sesión del asistente. Tu borrador y el contexto del chat se conservaron; vuelve a intentarlo.'
             : ['parse', 'validation'].includes(stage) ? 'No pude validar la respuesta después de varios intentos. Tu borrador y el contexto del chat se conservaron; pulsa «Enviar mensaje» para reintentarlo.'
-              : 'El borrador quedó guardado, pero el asistente no completó el análisis. Puedes intentarlo de nuevo.';
+              : errorCode === 'TIMEOUT' ? 'El asistente tardó demasiado en responder. Tu borrador se conservó; vuelve a intentarlo.'
+                : errorCode === 'SERVICE_CONFIG' ? 'El servicio de análisis no está configurado correctamente. Tu borrador se conservó; avisa al administrador.'
+                  : ['SERVICE_UNAVAILABLE', 'SERVICE_START_FAILED', 'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND'].includes(errorCode) ? 'El servicio de análisis no está disponible por ahora. Tu borrador se conservó; vuelve a intentarlo en unos minutos.'
+                    : 'El borrador quedó guardado, pero el asistente no completó el análisis. Puedes intentarlo de nuevo.';
       try { await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'assistant', content: `[ERROR_REGISTRO] ${message}` }); } catch {}
       if (!suppressNotification) try { await dbQuery(`${notificationInsertSql({ userId, category: 'comida', state: 'error', title: 'No se pudo completar el registro de comida', message, referenceId: entryId, textSql })};`); } catch {}
       await progressRecorder.flush();
@@ -1098,7 +1202,9 @@ SELECT LAST_INSERT_ID();`);
     }
     await progressRecorder.flush();
     json(response, 503, { error: 'No se pudo iniciar el registro de comida.' });
+  } finally {
+    await progressRecorder.flush();
   }
 }
 
-module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, localDateTimeToUtc, normalizeFoodReply, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, readFoodEntries, readPendingFoodDraft, reportFoodProgress, saveFoodEntry, usedFoodWebFetch, usedFoodWebTools, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, knownFoodsShortcut, localDateTimeToUtc, normalizeFoodReply, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, usedFoodWebFetch, usedFoodWebTools, validateFoodEntry, validFoodItem };

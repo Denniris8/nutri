@@ -13,11 +13,8 @@ test('registra leche y whey con cantidades del mensaje tras respuesta inválida 
   let committed = false;
   const dbQuery = async (sql) => {
     statements.push(sql);
-    if (sql.includes('SELECT zona_horaria')) return 'UTC';
-    if (sql.includes('SELECT DATE_FORMAT(fecha_consumo')) return '';
-    if (sql.includes("SELECT JSON_OBJECT('entryId',e.id")) return '';
-    if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return '501';
-    if (sql.includes("SELECT JSON_OBJECT('state',estado")) return JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-22', description, question: null, targetEntryId: null });
+    if (sql.includes("SELECT 'timezone';")) return 'timezone\nUTC\ndraftDate\nprior';
+    if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return `501\n${JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-22', description, question: null, targetEntryId: null })}`;
     if (sql.includes('SELECT session_id FROM sesiones_comidas_opencode')) return '';
     if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)')) return '';
     if (sql.includes("SELECT 'records';")) return committed ? [
@@ -73,11 +70,8 @@ test('guarda el formato completo declarado sin crear ni consultar una sesión Op
   let committed = false;
   const dbQuery = async (sql) => {
     statements.push(sql);
-    if (sql.includes('SELECT zona_horaria')) return 'UTC';
-    if (sql.includes('SELECT DATE_FORMAT(fecha_consumo')) return '';
-    if (sql.includes("SELECT JSON_OBJECT('entryId',e.id")) return '';
-    if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return '502';
-    if (sql.includes("SELECT JSON_OBJECT('state',estado")) return JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-22', description, question: null, targetEntryId: null });
+    if (sql.includes("SELECT 'timezone';")) return 'timezone\nUTC\ndraftDate\nprior';
+    if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return `502\n${JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-22', description, question: null, targetEntryId: null })}`;
     if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)')) return '';
     if (sql.includes("SELECT 'records';")) return committed ? [
       'records', JSON.stringify({ id: '502', fecha: '2026-10-22', createdAt: '2026-10-22T12:00:00Z', state: 'completado', description }),

@@ -11,6 +11,7 @@ const permissions = [{ permission: '*', pattern: '*', action: 'deny' }];
 const sessions = new Map();
 const pendingPlanSessions = new Map();
 const locks = new Map();
+const planLocks = new Map();
 const progress = new Map();
 const trainingPromptPath = path.resolve(__dirname, '../../comportamiento-sesion-entrenamientos.md');
 const trainingPlanPromptPath = path.resolve(__dirname, '../../comportamiento-sesion-plan.md');
@@ -35,6 +36,7 @@ function reportTrainingProgress(userId, progressId, event, recordEvent) {
     plan_received: 'Plan recibido; validando contenido y metas…',
     plan_complete: 'Plan generado; listo para revisar y guardar.',
     analysis_failed: 'El análisis del entrenamiento se detuvo.', plan_failed: 'La generación del plan se detuvo.',
+    analysis_retry: 'Respuesta incompleta; reintentando el análisis…', plan_retry: 'Plan incompleto; reintentando la generación…',
   };
   const label = labels[event];
   if (!label) return;
@@ -68,15 +70,16 @@ async function readTrainingPlanPrompt() {
   return prompt[1].trim();
 }
 
-function withUserLock(userId, run) {
-  const previous = locks.get(userId) || Promise.resolve();
+function withUserLock(userId, run, store = locks) {
+  const previous = store.get(userId) || Promise.resolve();
   const current = previous.catch(() => {}).then(run);
-  locks.set(userId, current);
-  return current.finally(() => { if (locks.get(userId) === current) locks.delete(userId); });
+  store.set(userId, current);
+  return current.finally(() => { if (store.get(userId) === current) store.delete(userId); });
 }
 
 function parseTrainingPlanReply(parts, systemPrompt, context) {
-  const raw = parts.filter((part) => part.type === 'text').map((part) => part.text || '').join('\n').trim();
+  const raw = parts.filter((part) => part.type === 'text').map((part) => part.text || '').join('\n').trim()
+    .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   let reply;
   try { reply = JSON.parse(raw); }
   catch { throw new Error('El plan generado no cumple el formato esperado.'); }
@@ -101,9 +104,11 @@ function parseTrainingPlanReply(parts, systemPrompt, context) {
 async function openTrainingSession(userId, config, request) {
   const fingerprint = createHash('sha256').update(JSON.stringify({ userId, scope: 'training-analysis', model: config.model, agent: config.agent, variant: config.variant })).digest('hex');
   const cached = sessions.get(userId);
+  if (cached?.fingerprint === fingerprint && Date.now() - cached.verifiedAt < 30000) return cached.id;
   if (cached?.fingerprint === fingerprint) {
     const current = await request('GET', `/session/${encodeURIComponent(cached.id)}`, undefined, config.requestTimeoutMs);
     if (current.status >= 200 && current.status < 300 && current.data?.metadata?.trainingUserId === userId && current.data?.metadata?.trainingConfigSha256 === fingerprint) {
+      cached.verifiedAt = Date.now();
       return cached.id;
     }
     sessions.delete(userId);
@@ -118,7 +123,7 @@ async function openTrainingSession(userId, config, request) {
   }, config.requestTimeoutMs);
   const id = created.data?.id;
   if (created.status < 200 || created.status >= 300 || !/^ses_[A-Za-z0-9_-]{4,120}$/.test(id || '')) throw new Error('No se pudo preparar el análisis del entrenamiento.');
-  sessions.set(userId, { id, fingerprint });
+  sessions.set(userId, { id, fingerprint, verifiedAt: Date.now() });
   return id;
 }
 
@@ -214,20 +219,35 @@ async function analyzeTraining({ userId, description, userWeightContext = descri
     const sessionId = await openTrainingSession(id, config, requestOpenCode);
     const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
     reportTrainingProgress(id, progressId, 'analysis_sent', progressRecorder?.record);
-    const result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
-      system: systemPrompt,
-      tools: {},
-      ...(model ? { model } : {}),
-      ...(config.agent ? { agent: config.agent } : {}),
-      ...(config.variant ? { variant: config.variant } : {}),
-      parts: [{ type: 'text', text: JSON.stringify({ description: text, biometricContext, stepContext }) }],
-    }, config.requestTimeoutMs);
-    if (result.status < 200 || result.status >= 300) throw new Error('No se pudo analizar el entrenamiento.');
-    reportTrainingProgress(id, progressId, 'analysis_received', progressRecorder?.record);
     const weightMatches = [...String(userWeightContext || text).matchAll(/(?:peso(?:\s+actual|\s+corporal)?\s*(?:es|de|:|=)?\s*)(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\b|^\s*(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\s*$/gim)];
     const weightMatch = weightMatches.at(-1);
     const explicitWeightKg = weightMatch ? numeric(Number((weightMatch[1] || weightMatch[2]).replace(',', '.')), 20, 400) : null;
-    return { ...parseReply(result.data?.parts || [], biometricContext, explicitWeightKg, text, stepContext), biometricContext, requestedSaveTime: savedTime.value, saveTimeStatus: savedTime.status };
+    const analyze = async (correccionFormato) => {
+      const result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
+        system: systemPrompt,
+        tools: {},
+        ...(model ? { model } : {}),
+        ...(config.agent ? { agent: config.agent } : {}),
+        ...(config.variant ? { variant: config.variant } : {}),
+        parts: [{ type: 'text', text: JSON.stringify({ description: text, biometricContext, stepContext, ...(correccionFormato ? { correccionFormato } : {}) }) }],
+      }, config.requestTimeoutMs);
+      if (result.status === 404) sessions.delete(id);
+      if (result.status < 200 || result.status >= 300) throw new Error('No se pudo analizar el entrenamiento.');
+      reportTrainingProgress(id, progressId, 'analysis_received', progressRecorder?.record);
+      return parseReply(result.data?.parts || [], biometricContext, explicitWeightKg, text, stepContext);
+    };
+    let reply;
+    try { reply = await analyze(); }
+    catch (error) {
+      if (error.message === 'No se pudo analizar el entrenamiento.') throw error;
+      reportTrainingProgress(id, progressId, 'analysis_retry', progressRecorder?.record);
+      reply = await analyze('Devuelve únicamente el JSON con todos los campos requeridos y con los tipos indicados.');
+    }
+    if (!reply.trainingSession && /\bentren/i.test(text)) {
+      reportTrainingProgress(id, progressId, 'analysis_no_session_retry', progressRecorder?.record);
+      reply = await analyze('El usuario mencionó un entrenamiento. Si afirma haberlo realizado, clasifícalo con trainingSession:true y pregunta solo el dato que falte. Si solo menciona pasos o niega haber entrenado, mantén trainingSession:false.');
+    }
+    return { ...reply, biometricContext, requestedSaveTime: savedTime.value, saveTimeStatus: savedTime.status };
   });
 }
 
@@ -257,7 +277,7 @@ async function closePendingPlanSession(userId, requestOpenCode, runId) {
 async function deleteTrainingPlanSession({ userId, runId, requestOpenCode = openCodeRequest }) {
   const id = String(userId);
   if (!/^\d+$/.test(id) || runId != null && typeof runId !== 'string') return false;
-  return withUserLock(id, () => closePendingPlanSession(id, requestOpenCode, runId));
+  return withUserLock(id, () => closePendingPlanSession(id, requestOpenCode, runId), planLocks);
 }
 
 async function generateTrainingPlan({ userId, goals, context, progressId, progressRecorder, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
@@ -292,32 +312,45 @@ async function generateTrainingPlan({ userId, goals, context, progressId, progre
       throw Object.assign(new Error('No se pudo abrir la sesión para crear el plan.'), { code: 'TRAINING_PLAN_SESSION_OPEN' });
     }
     let retained = false;
+    let failure;
     try {
       reportTrainingProgress(id, progressId, 'plan_sent', progressRecorder?.record);
-      const result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
-        system: systemPrompt,
-        tools: {},
-        ...(model ? { model } : {}),
-        ...(config.agent ? { agent: config.agent } : {}),
-        ...(config.variant ? { variant: config.variant } : {}),
-        parts: [{ type: 'text', text: JSON.stringify({ goals: text, context }) }],
-      }, config.requestTimeoutMs);
-      if (result.status < 200 || result.status >= 300) throw new Error('No se pudo generar el plan.');
-      reportTrainingProgress(id, progressId, 'plan_received', progressRecorder?.record);
-      const plan = parseTrainingPlanReply(result.data?.parts || [], systemPrompt, context);
+      const generate = async (correccionFormato) => {
+        const result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
+          system: systemPrompt,
+          tools: {},
+          ...(model ? { model } : {}),
+          ...(config.agent ? { agent: config.agent } : {}),
+          ...(config.variant ? { variant: config.variant } : {}),
+          parts: [{ type: 'text', text: JSON.stringify({ goals: text, context, ...(correccionFormato ? { correccionFormato } : {}) }) }],
+        }, config.requestTimeoutMs);
+        if (result.status < 200 || result.status >= 300) throw Object.assign(new Error('No se pudo generar el plan.'), { upstream: true });
+        reportTrainingProgress(id, progressId, 'plan_received', progressRecorder?.record);
+        return parseTrainingPlanReply(result.data?.parts || [], systemPrompt, context);
+      };
+      let plan;
+      try { plan = await generate(); }
+      catch (error) {
+        if (error.upstream) throw error;
+        reportTrainingProgress(id, progressId, 'plan_retry', progressRecorder?.record);
+        plan = await generate(`Corrige la respuesta anterior: ${String(error.message).slice(0, 300)} Devuelve únicamente el JSON completo requerido.`);
+      }
       const runId = randomUUID();
       pendingPlanSessions.set(id, { sessionId, runId });
       retained = true;
       return { ...plan, runId };
+    } catch (error) {
+      failure = error;
+      throw error;
     } finally {
       if (!retained) {
         try {
           const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(sessionId)}`, undefined, config.requestTimeoutMs);
           if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) throw new Error();
-        } catch { throw Object.assign(new Error('No se pudo cerrar la sesión temporal del plan.'), { code: 'TRAINING_PLAN_SESSION_CLEANUP' }); }
+        } catch { throw Object.assign(new Error('No se pudo cerrar la sesión temporal del plan.'), { code: 'TRAINING_PLAN_SESSION_CLEANUP', cause: failure }); }
       }
     }
-  });
+  }, planLocks);
 }
 
 module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, extractExplicitSteps, generateTrainingPlan, getTrainingProgress, parseReply, parseTrainingPlanReply, readTrainingPlanPrompt, reportTrainingProgress };

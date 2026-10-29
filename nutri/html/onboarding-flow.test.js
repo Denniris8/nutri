@@ -18,7 +18,11 @@ class Element {
   setAttribute(name, value) { this.attributes[name] = value; }
   setCustomValidity(message) { this.validationMessage = message; }
   reportValidity() { this.reportedValidity = true; }
+  isConnected = true;
   matches() { return false; }
+  querySelector(selector) { return (this.queried ||= {})[selector] ||= new Element(); }
+  querySelectorAll() { return []; }
+  after() {}
   focus() { this.focused = true; }
   append(...children) { this.children = [...(this.children || []), ...children]; for (const child of children) child.parent = this; }
   replaceChildren(...children) { this.children = children; }
@@ -34,6 +38,8 @@ class Element {
     return pending.length ? Promise.all(pending).then(() => event) : event;
   }
 }
+
+const settle = async () => { for (let turn = 0; turn < 10; turn += 1) await new Promise(setImmediate); };
 
 function loadFlow(search = '', fetchOverride) {
   const ids = [
@@ -83,7 +89,7 @@ function loadFlow(search = '', fetchOverride) {
   const window = { fetch, addEventListener() {}, location: { href: `http://localhost/dashboard_nutricional.html${search}`, search, pathname: '/dashboard_nutricional.html', assign: (url) => destinations.push(url) } };
   const source = readFileSync(require.resolve('./onboarding-flow.js'), 'utf8');
   const Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'America/Mexico_City' }) }) };
-  vm.runInNewContext(source, { document, window, fetch, Intl, URL, URLSearchParams, navigator: { wakeLock: null }, setTimeout: () => 0, clearTimeout() {}, crypto: { randomUUID: () => '123e4567-e89b-42d3-a456-426614174000', getRandomValues: (bytes) => bytes.fill(1) } });
+  vm.runInNewContext(source, { document, window, fetch, Intl, URL, URLSearchParams, navigator: { wakeLock: null }, setTimeout: (callback, ms) => { if (ms <= 1500) setImmediate(callback); return 0; }, clearTimeout() {}, crypto: { randomUUID: () => '123e4567-e89b-42d3-a456-426614174000', getRandomValues: (bytes) => bytes.fill(1) } });
   return { elements, modeButtons, destinations, requests };
 }
 
@@ -276,6 +282,7 @@ test('food modal can reopen during analysis without resubmitting the request', a
   assert.equal(elements['#saveFoodButton'].disabled, true);
   finishRequest({ ok: true, json: async () => ({ records: [], message: 'Descripción enviada.' }) });
   await submission;
+  await settle();
   assert.equal(requests.some(([url]) => url.startsWith('/api/food-entries?fecha=')), false);
   assert.equal(elements['#foodEntryFeedback'].textContent, 'Descripción enviada.');
   assert.equal(elements['#saveFoodButton'].disabled, false);
@@ -295,6 +302,7 @@ test('food modal shows a safe OpenCode transport error without trace details', a
   await elements['#registerFoodButton'].dispatch('click');
   elements['#foodDescription'].value = '150 g de pollo';
   await elements['#registerFoodForm'].dispatch('submit');
+  await settle();
   assert.match(elements['#foodEntryFeedback'].textContent, /El servicio no respondió/);
   assert.equal(elements['#saveFoodButton'].disabled, false);
   assert.equal(elements['#foodLoading'].hidden, true);
@@ -310,7 +318,7 @@ test('More tab switches the visible dashboard section', () => {
     querySelectorAll: (selector) => selector === '[data-dashboard-tab]' ? nodeList(tabs) : selector === '[data-dashboard-view]' ? nodeList(views) : nodeList([]),
   };
   const window = { fetch: async () => ({ ok: true }), addEventListener() {}, location: { search: '', href: 'http://localhost/dashboard_nutricional.html', pathname: '/dashboard_nutricional.html', assign() {} } };
-  vm.runInNewContext(readFileSync(require.resolve('./onboarding-flow.js'), 'utf8'), { document, window, fetch: async () => ({ ok: true }), Intl, URL, URLSearchParams, navigator: { wakeLock: null }, setTimeout: () => 0, clearTimeout() {} });
+  vm.runInNewContext(readFileSync(require.resolve('./onboarding-flow.js'), 'utf8'), { document, window, fetch: async () => ({ ok: true }), Intl, URL, URLSearchParams, navigator: { wakeLock: null }, setTimeout: (callback, ms) => { if (ms <= 1500) setImmediate(callback); return 0; }, clearTimeout() {} });
   tabs[2].dispatch('click');
   assert.equal(views[2].hidden, false);
   assert.equal(views[0].hidden, true);

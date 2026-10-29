@@ -2,9 +2,12 @@ const assert = require('node:assert/strict');
 const { createHash, randomBytes, scryptSync } = require('node:crypto');
 const http = require('node:http');
 const test = require('node:test');
+const { beforeEach } = test;
 const { createServer, signJwt } = require('./server.js');
 const { validateBiometric } = require('./api/biometrics.js');
-const { ensureFoodOpenCodeSession, openCodeRequest, requestFoodDescription, getFoodSessionDefaults } = require('./api/opencode-food.js');
+const { ensureFoodOpenCodeSession, forgetFoodSessionCache, openCodeRequest, requestFoodDescription, getFoodSessionDefaults } = require('./api/opencode-food.js');
+
+beforeEach(() => forgetFoodSessionCache());
 const { saveFoodEntry } = require('./api/food-entries.js');
 
 const demo = {
@@ -55,7 +58,7 @@ test('progress nutrition endpoint returns account-scoped nutrition, body, activi
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { nutrition, body, activity, plicometric: { current: 1, previous: 0 } });
   });
-  assert.equal(queries.filter((sql) => sql.includes('usuario_id=27')).length, 1);
+  assert.equal(queries.filter((sql) => !sql.includes('SELECT s.usuario_id') && sql.includes('usuario_id=27')).length, 1);
 });
 
 test('only versioned CSS and JavaScript assets receive immutable caching', async () => {
@@ -158,16 +161,16 @@ test('food save rejects an invalid OpenCode response without exposing it to the 
   const queries = [];
   let storedSession = '';
   let sent;
+  let firstSent;
   const description = '100g frijoles negros cocidos';
   const rawReply = [{ type: 'text', text: '{"items":[{"name":"frijoles negros"}]}' }];
   await withServer(async (sql) => {
     queries.push(sql);
     if (sql.includes('SELECT s.usuario_id')) return '27';
     if (sql.includes('SELECT session_id FROM sesiones_comidas_opencode')) return storedSession;
-    if (sql.includes("SELECT JSON_OBJECT('state',estado")) return JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-13', description, question: null, targetEntryId: null });
+    if (sql.includes('INSERT INTO registros_comidas(')) return `61\n${JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-13', description, question: null, targetEntryId: null })}`;
     const sessionInsert = sql.match(/INSERT INTO sesiones_comidas_opencode[^]*?VALUES \(27,CONVERT\(0x([a-f\d]+) USING utf8mb4\)\)/i);
     if (sessionInsert) { storedSession = Buffer.from(sessionInsert[1], 'hex').toString(); return ''; }
-    if (sql.includes('INSERT INTO registros_comidas(')) return '61';
     return '';
   }, async (base) => {
     const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
@@ -183,8 +186,9 @@ test('food save rejects an invalid OpenCode response without exposing it to the 
     assert.equal(storedSession, 'ses_private_food');
     assert.equal(sent.route, '/session/ses_private_food/message');
     assert.deepEqual(sent.body.tools, { websearch: true, webfetch: true });
-    assert.equal(typeof sent.body.system, 'string');
-    assert.match(sent.body.system, /`items` \(máximo \d+\)/);
+    assert.equal(typeof firstSent.body.system, 'string');
+    assert.match(firstSent.body.system, /Si se excede `\d+`/);
+    assert.equal(sent.body.system, undefined);
     assert.ok(JSON.stringify(sent.body).includes(description));
     assert.equal(sent.body.format, undefined);
 
@@ -195,6 +199,7 @@ test('food save rejects an invalid OpenCode response without exposing it to the 
       if (method === 'GET') return { status: 200, data: { id: route.split('/').at(-1) } };
       if (route === '/session') return { status: 201, data: { id: 'ses_private_food' } };
       sent = { route, body };
+      firstSent ||= sent;
       return { status: 200, data: { parts: rawReply } };
     },
   });
@@ -210,14 +215,14 @@ test('food day query returns only authenticated user records for the selected da
   await withServer(async (sql) => {
     queries.push(sql);
     if (sql.includes('SELECT s.usuario_id')) return '27';
-    if (sql.includes('FROM registros_comidas e WHERE')) return records.map((record) => JSON.stringify(record)).join('\n');
+    if (sql.includes("SELECT 'records';")) return ['records', ...records.map((record) => JSON.stringify(record)), 'items', 'clarifications'].join('\n');
     return '';
   }, async (base) => {
     const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
     const response = await fetch(`${base}/api/food-entries?fecha=2026-10-13&userId=999`, { headers: { Cookie: cookie } });
     assert.equal(response.status, 200);
     assert.deepEqual((await response.json()).records, records);
-    const listSql = queries.find((sql) => sql.includes('FROM registros_comidas e WHERE'));
+    const listSql = queries.find((sql) => sql.includes("SELECT 'records';"));
     assert.match(listSql, /e\.usuario_id=27/);
     assert.doesNotMatch(listSql, /999/);
   });
@@ -388,7 +393,7 @@ test.skip('retired macro-resolution flow: food parser accepts reordered grounded
 test('food request sends the current description and returns OpenCode parts unchanged', async () => {
   let sent;
   const reply = await requestFoodDescription({
-    sessionId: 'ses_private_food', description: '150 g de pollo cocido',
+    sessionId: 'ses_private_food_parts', description: '150 g de pollo cocido',
     comidasReferencia: [{ id: 'meal-4pm', items: [{ targetItemId: '41', name: 'Pollo asado', quantityGrams: 100 }] }],
     referenciaComidaSolicitada: true,
     originalDescription: 'texto anterior', replies: [{ role: 'assistant', content: 'pregunta anterior' }],
@@ -397,7 +402,7 @@ test('food request sends the current description and returns OpenCode parts unch
       return { status: 200, data: { parts: [{ type: 'text', text: '{"items":[],"clarificationQuestion":"Aclara la cantidad."}' }] } };
     },
   });
-  assert.match(sent.system, /macros:\{energyKcal,proteinG,carbohydrateG,fatG,fiberG\}/);
+  assert.match(sent.system, /`macros` con `energyKcal`, `proteinG`, `carbohydrateG`, `fatG`/);
   assert.match(sent.system, /macroStatus:"estimado"/);
   assert.equal(sent.format, undefined);
   assert.deepEqual(sent.tools, {});
@@ -412,7 +417,7 @@ test('food request sends the current description and returns OpenCode parts unch
 test('food request disables web tools after the server confirms generic authorization', async () => {
   let sent;
   await requestFoodDescription({
-    sessionId: 'ses_private_food', description: 'Sí', initialDescription: '24 g salchicha Kir', genericEstimateApproved: true,
+    sessionId: 'ses_private_food_generic', description: 'Sí', initialDescription: '24 g salchicha Kir', genericEstimateApproved: true,
     requestOpenCode: async (_method, _route, body) => {
       sent = body;
       return { status: 200, data: { parts: [{ type: 'text', text: '{}' }] } };
@@ -420,7 +425,18 @@ test('food request disables web tools after the server confirms generic authoriz
   });
   assert.deepEqual(sent.tools, {});
   assert.equal(JSON.parse(sent.parts[0].text).genericEstimateApproved, true);
-  assert.match(sent.system, /Estimaciones autorizadas/);
+  assert.match(sent.system, /Estimación autorizada/);
+});
+
+test('the canonical food prompt is sent only with the first message of each session', async () => {
+  const systems = [];
+  const requestOpenCode = async (_method, _route, body) => { systems.push(body.system); return { status: 200, data: { parts: [{ type: 'text', text: '{}' }] } }; };
+  await requestFoodDescription({ sessionId: 'ses_private_food_once', description: 'Pollo 100 g', requestOpenCode });
+  await requestFoodDescription({ sessionId: 'ses_private_food_once', description: 'Es pollo cocido', requestOpenCode });
+  await requestFoodDescription({ sessionId: 'ses_private_food_other', description: 'Pollo 100 g', requestOpenCode });
+  assert.equal(typeof systems[0], 'string');
+  assert.equal(systems[1], undefined);
+  assert.equal(typeof systems[2], 'string');
 });
 
 test('food first pass has web tools disabled and carries the exact Open Food Facts candidate', async () => {
@@ -635,6 +651,20 @@ test('OpenCode food sessions are private per authenticated user and reused on re
   assert.equal(await ensureFoodOpenCodeSession({ userId: '44', dbQuery, textSql: (value) => `CONVERT(0x${Buffer.from(value).toString('hex')} USING utf8mb4)`, requestOpenCode }), 'ses_private2');
   assert.deepEqual([...sessions.entries()], [['27', 'ses_private1'], ['44', 'ses_private2']]);
   assert.equal(created, 2);
+});
+
+test('a food session verified within 30 seconds is reused without querying OpenCode again', async () => {
+  const methods = [];
+  const requestOpenCode = async (method, route, body) => {
+    methods.push(method);
+    if (method === 'POST') return { status: 201, data: { id: 'ses_recheck1' } };
+    return { status: 200, data: { id: 'ses_recheck1', metadata: body?.metadata } };
+  };
+  const textSql = (value) => `CONVERT(0x${Buffer.from(value).toString('hex')} USING utf8mb4)`;
+  assert.equal(await ensureFoodOpenCodeSession({ userId: '61', dbQuery: async () => '', textSql, requestOpenCode }), 'ses_recheck1');
+  const afterCreate = methods.length;
+  assert.equal(await ensureFoodOpenCodeSession({ userId: '61', dbQuery: async () => '', textSql, requestOpenCode }), 'ses_recheck1');
+  assert.equal(methods.length, afterCreate);
 });
 
 test('an existing session is recreated when injected session defaults change', async () => {
@@ -964,7 +994,7 @@ test('expired JWT sessions are rejected before consulting the database', async (
     const response = await fetch(base + '/api/dashboard/profile', { headers: { Cookie: expiredCookie } });
     assert.equal(response.status, 401);
     assert.equal(queries, 0);
-  }, { now: () => 8 * 60 * 60 });
+  }, { now: () => 8 * 24 * 60 * 60 });
 });
 
 test('login persists failed credential buckets and logs no credential data', async () => {
@@ -1064,7 +1094,7 @@ test('authenticated user can generate and save a training plan through the API',
   const requests = [];
   const disclosure = 'Las metas de calorías y carbohidratos se ajustan según los entrenamientos registrados para el día seleccionado.';
   const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
-  const plan = `[Datos Registrados]\nEdad: 32 años; sexo masculino; estatura 175 cm.\n[Estimaciones Calculadas]\nMacros estimados.\n[Supuestos Adoptados]\nDisponibilidad asumida.\n${disclosure}`;
+  const plan = `[Datos Registrados]\nEdad: 32 años; sexo masculino; estatura 175 cm.\n[Estimaciones Calculadas]\nMacros estimados.\n| Macro | Meta diaria |\n| --- | --- |\n| Proteínas | 140 g |\n| Carbohidratos | 220 g |\n| Grasas | 65 g |\n| Calorías | 2000 kcal |\n${disclosure}\n[Supuestos Adoptados]\nDisponibilidad asumida.`;
   let saveRequest;
   await withServer(async (sql) => {
     queries.push(sql);
@@ -1128,7 +1158,7 @@ test('training plan save logs a sanitized MySQL error code', async () => {
   const opencodeCalls = [];
   const disclosure = 'Las metas de calorías y carbohidratos se ajustan según los entrenamientos registrados para el día seleccionado.';
   const goals = 'Ganar fuerza';
-  const plan = `[Datos Registrados]\nEdad: 32 años; sexo masculino; estatura 175 cm.\n[Estimaciones Calculadas]\nMacros estimados.\n[Supuestos Adoptados]\nDisponibilidad asumida.\n${disclosure}`;
+  const plan = `[Datos Registrados]\nEdad: 32 años; sexo masculino; estatura 175 cm.\n[Estimaciones Calculadas]\nMacros estimados.\n| Macro | Meta diaria |\n| --- | --- |\n| Proteínas | 140 g |\n| Carbohidratos | 220 g |\n| Grasas | 65 g |\n| Calorías | 2000 kcal |\n${disclosure}\n[Supuestos Adoptados]\nDisponibilidad asumida.`;
   const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
   await withServer(async (sql) => {
     statements.push(sql);

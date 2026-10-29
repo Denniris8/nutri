@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { extractExplicitSteps, getTrainingProgress, parseReply, reportTrainingProgress } = require('./training-analysis.js');
+const { analyzeTraining, extractExplicitSteps, getTrainingProgress, parseReply, reportTrainingProgress } = require('./training-analysis.js');
 
 const context = { latestWeightKg: 70, latestWeightStale: false };
 const reply = (overrides = {}) => [{ type: 'text', text: JSON.stringify({
@@ -11,6 +11,49 @@ test('training progress is scoped to the authenticated user and progress id', ()
   reportTrainingProgress('27', 'training-progress-test', 'analysis_sent');
   assert.equal(getTrainingProgress('27', 'training-progress-test').label, 'Enviando entrenamiento para análisis…');
   assert.equal(getTrainingProgress('28', 'training-progress-test'), null);
+});
+
+test('retries once when the training reply is malformed', async () => {
+  const calls = [];
+  const requestOpenCode = async (method, path) => {
+    calls.push(`${method} ${path}`);
+    if (method === 'POST' && path === '/session') return { status: 200, data: { id: 'ses_retrytest1' } };
+    const attempt = calls.filter((call) => call.endsWith('/message')).length;
+    const text = attempt === 1 ? 'no json' : JSON.stringify({ trainingSession: true, question: null, activity: 'Correr', durationMinutes: 30, met: 7 });
+    return { status: 200, data: { parts: [{ type: 'text', text }] } };
+  };
+  const result = await analyzeTraining({
+    userId: '901', description: 'Corrí 30 minutos', biometricData: { latestWeightKg: 70 },
+    stepContext: { localDate: '2026-10-26', timezone: 'UTC' }, requestOpenCode, readConfig: async () => ({ requestTimeoutMs: 1000 }),
+  });
+  assert.equal(result.caloriesKcal, 257.3);
+  assert.equal(calls.filter((call) => call.endsWith('/message')).length, 2);
+});
+
+test('gives the assistant a second chance when an explicit training is classified as no session', async () => {
+  const messages = [];
+  const requestOpenCode = async (method, path, body) => {
+    if (method === 'POST' && path === '/session') return { status: 200, data: { id: 'ses_retrytest2' } };
+    messages.push(body.parts[0].text);
+    const trainingSession = messages.length > 1;
+    const text = JSON.stringify({ trainingSession, question: null, activity: trainingSession ? 'Correr' : null, durationMinutes: trainingSession ? 30 : null, met: trainingSession ? 7 : null });
+    return { status: 200, data: { parts: [{ type: 'text', text }] } };
+  };
+  const result = await analyzeTraining({
+    userId: '902', description: 'Entrené: corrí 30 minutos', biometricData: { latestWeightKg: 70 },
+    stepContext: { localDate: '2026-10-26', timezone: 'UTC' }, requestOpenCode, readConfig: async () => ({ requestTimeoutMs: 1000 }),
+  });
+  assert.equal(result.trainingSession, true);
+  assert.equal(messages.length, 2);
+  messages.length = 0;
+  const steps = await analyzeTraining({
+    userId: '903', description: 'Hoy caminé 8000 pasos', biometricData: { latestWeightKg: 70 },
+    stepContext: { localDate: '2026-10-26', timezone: 'UTC' }, requestOpenCode: async (m, p, b) => m === 'POST' && p === '/session'
+      ? { status: 200, data: { id: 'ses_retrytest3' } }
+      : { status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({ trainingSession: false, question: null, activity: null, durationMinutes: null, met: null }) }] } },
+    readConfig: async () => ({ requestTimeoutMs: 1000 }),
+  });
+  assert.equal(steps.trainingSession, false);
 });
 
 test('calories are calculated from MET, duration and server-selected weight', () => {

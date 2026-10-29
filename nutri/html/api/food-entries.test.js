@@ -1,6 +1,13 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitGrams, foodItemIssues, getFoodEntryProgress, parseDeclaredFoodShortcut, reportFoodProgress, usedFoodWebFetch, usedFoodWebTools } = require('./food-entries.js');
+const { applyExplicitGrams, applyOpenFoodFactsMacros, foodItemIssues, getFoodEntryProgress, knownFoodsShortcut, parseDeclaredFoodShortcut, pendingFoodItemSql, repairEstimatedEnergy, reportFoodProgress, usedFoodWebFetch, usedFoodWebTools } = require('./food-entries.js');
+
+test('draft candidate SQL accepts numeric fiber without treating it as text', () => {
+  const textSql = (value) => `CONVERT(0x${Buffer.from(value, 'utf8').toString('hex')} USING utf8mb4)`;
+  const item = { name: 'Ensalada', sourceText: 'Ensalada', quantityGrams: 120, quantityText: '120 g', macroBasis: 'per_portion', macroStatus: 'estimado', macroSource: 'opencode_estimado', macros: { energyKcal: 60, proteinG: 2, carbohydrateG: 6, fatG: 3, fiberG: 2 } };
+  assert.match(pendingFoodItemSql(1, item, textSql), /,2\)$/);
+  assert.match(pendingFoodItemSql(1, { ...item, macros: { ...item.macros, fiberG: null } }, textSql), /,NULL\)$/);
+});
 
 test('parses only a complete, validated user-declared single-food shortcut', () => {
   const reply = parseDeclaredFoodShortcut('Yogur natural | cantidad consumida: 150 g | 135 kcal; 15 g proteína; 9 g carbohidratos; 4 g grasa; 0 g fibra');
@@ -62,4 +69,41 @@ test('checks 4-4-9 energy even when fiber was not declared', () => {
     quantityGrams: 100, macros: { energyKcal: 400, proteinG: 10, carbohydrateG: 10, fatG: 10, fiberG: null },
   });
   assert.ok(issues.includes('energy_4_4_9_mismatch'));
+});
+
+test('declared shortcut accepts several complete lines and rejects mixed input', () => {
+  const yogur = 'Yogur natural | cantidad consumida: 150 g | 135 kcal; 15 g proteína; 9 g carbohidratos; 4 g grasa';
+  const queso = 'Queso fresco | cantidad consumida: 50 g | 130 kcal; 9 g proteína; 2 g carbohidratos; 9 g grasa';
+  assert.equal(parseDeclaredFoodShortcut(`${yogur}\n${queso}`).items.length, 2);
+  assert.equal(parseDeclaredFoodShortcut(`${yogur}\nQueso fresco 50 g`), null);
+});
+
+test('estimated energy is recomputed with 4/4/9 only for estimated macros that disagree', () => {
+  const estimated = { macroSource: 'opencode_estimado', macros: { energyKcal: 999, proteinG: 10, carbohydrateG: 10, fatG: 5, fiberG: null } };
+  const web = { ...estimated, macroSource: 'webfetch' };
+  const consistent = { ...estimated, macros: { ...estimated.macros, energyKcal: 130 } };
+  const [fixed, untouchedWeb, untouchedConsistent] = repairEstimatedEnergy([estimated, web, consistent]);
+  assert.equal(fixed.macros.energyKcal, 125);
+  assert.equal(untouchedWeb.macros.energyKcal, 999);
+  assert.equal(untouchedConsistent.macros.energyKcal, 130);
+});
+
+test('known foods shortcut scales previously saved macros and ignores unknown foods', async () => {
+  const textSql = (value) => `'${String(value).replace(/'/g, "''")}'`;
+  const row = JSON.stringify({ name: 'Pollo', grams: 150, macroStatus: 'estimado', macroSource: 'opencode_estimado', sourceName: null, sourceUrl: null, sourceQuote: null, energyKcal: 200, proteinG: 38, carbohydrateG: 0, fatG: 5, fiberG: null });
+  const dbQuery = async () => row;
+  const reply = await knownFoodsShortcut({ description: 'pollo 200 g', userId: 1, dbQuery, textSql });
+  assert.equal(reply.items[0].macros.energyKcal, 266.67);
+  assert.equal(reply.items[0].name, 'Pollo');
+  assert.equal(await knownFoodsShortcut({ description: 'Pavo 200 g', userId: 1, dbQuery, textSql }), null);
+  assert.equal(await knownFoodsShortcut({ description: 'pollo asado con salsa', userId: 1, dbQuery, textSql }), null);
+});
+
+test('per-100 g source products are never applied to foods measured by volume', () => {
+  const product = { name: 'Leche', macroBasis: 'per_100g', macroStatus: 'estimado', macroSource: 'opencode_estimado', macros: { energyKcal: 50, proteinG: 3.3, carbohydrateG: 4.8, fatG: 2, fiberG: null } };
+  const volume = { name: 'Leche', quantityGrams: null, quantityText: '250 ml', macroBasis: 'per_portion', macros: { energyKcal: 125, proteinG: 8, carbohydrateG: 12, fatG: 5, fiberG: null } };
+  const grams = { name: 'Leche', quantityGrams: 200, quantityText: '200 g', macroBasis: 'per_portion', macros: {} };
+  const [kept, replaced] = applyOpenFoodFactsMacros([volume, grams], [product]);
+  assert.equal(kept.macroBasis, 'per_portion');
+  assert.equal(replaced.macroBasis, 'per_100g');
 });
