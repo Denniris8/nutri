@@ -480,7 +480,7 @@ function explicitFoodMasses(description) {
 
 function hasExplicitVolume(item) {
   return item?.quantityGrams == null && typeof item?.quantityText === 'string'
-    && /\b\d+(?:[.,]\d+)?\s*(?:ml|millilitros?)\b/i.test(item.quantityText);
+    && /\b(?:\d+(?:[.,]\d+)?|un(?:a|o)?|dos|tres|cuatro|cinco)\s*(?:ml|millilitros?|cucharaditas?|cditas?|cucharadas?|cdas?|pizcas?|tazas?|vasos?|puñados?|piezas?|rebanadas?|cucharones?)\b/i.test(item.quantityText);
 }
 
 function explicitFoodMeasures(descriptions) {
@@ -1207,4 +1207,4 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
   }
 }
 
-module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, knownFoodsShortcut, localDateTimeToUtc, normalizeFoodReply, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, usedFoodWebFetch, usedFoodWebTools, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, localDateTimeToUtc, normalizeFoodReply, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, usedFoodWebFetch, usedFoodWebTools, validateFoodEntry, validFoodItem };

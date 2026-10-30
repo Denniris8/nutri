@@ -1,6 +1,12 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitGrams, applyOpenFoodFactsMacros, foodItemIssues, getFoodEntryProgress, knownFoodsShortcut, parseDeclaredFoodShortcut, pendingFoodItemSql, repairEstimatedEnergy, reportFoodProgress, usedFoodWebFetch, usedFoodWebTools } = require('./food-entries.js');
+const { applyExplicitGrams, applyOpenFoodFactsMacros, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, parseDeclaredFoodShortcut, pendingFoodItemSql, repairEstimatedEnergy, reportFoodProgress, usedFoodWebFetch, usedFoodWebTools } = require('./food-entries.js');
+
+test('accepts confirmed teaspoon and tablespoon quantities without requiring grams', () => {
+  for (const quantityText of ['1 cucharadita', 'una cucharadita', '2 cditas.', '1 cucharada', 'dos cucharadas', '2 cdas.', 'una pizca', '1 taza', 'un puñado', '2 piezas']) {
+    assert.equal(hasExplicitVolume({ quantityGrams: null, quantityText }), true);
+  }
+});
 
 test('draft candidate SQL accepts numeric fiber without treating it as text', () => {
   const textSql = (value) => `CONVERT(0x${Buffer.from(value, 'utf8').toString('hex')} USING utf8mb4)`;

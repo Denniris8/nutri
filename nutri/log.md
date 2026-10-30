@@ -27,6 +27,14 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-30 00:33 CST — Preparación del commit solicitado mediante `git`: VERSION incrementada de 0.1.49 a 0.1.50; dashboard sincronizado desde ese archivo. Se incluyen reglas de sesión de comidas y reconocimiento de medidas caseras; no se ejecutaron pruebas.
+- 2026-10-30 00:18 CST — Contrato de comidas: añadidas reglas concisas para desglosar platillos sin inventar ingredientes, porción consumida/sobras, parte comestible y escalado de etiquetas envasadas; aclarado el guardado de medidas caseras sin permiso de conversión.
+- 2026-10-30 00:18 CST — Contrato de comidas: unificadas y acortadas las reglas de cantidad, permisos independientes para macros/peso, escalado y persistencia; eliminadas contradicciones entre prompt y flujo.
+- 2026-10-30 00:18 CST — Contrato de comidas: condensadas reglas de cantidades para medidas caseras/ambiguas, reparto entre alimentos, estado crudo/cocido y conversión ml-g; se conserva el permiso previo para equivalencias estimadas. No se ejecutaron pruebas.
+- 2026-10-30 00:18 CST — Comidas: `comportamiento-sesion-comidas.md` ahora define autorización previa para estimar equivalencias en gramos de medidas caseras, preservando medida original y etiquetando el peso estimado por separado de los macros. `AGENTS.md` remite esta política al contrato canónico. No se ejecutaron pruebas.
+- 2026-10-30 00:18 CST — Registro de comidas: aclarado en el prompt que una respuesta de cantidad debe integrarse al alimento pendiente y devolver la lista completa sin volver a pedir alimentos/cantidades ya confirmados. El servidor reconoce medidas caseras (pizca, cucharas, taza, puñado, pieza y rebanada) también escritas con palabras y evita exigir gramos de nuevo. Prueba añadida; no se ejecutó.
+- 2026-10-30 00:16 CST — Registro de comidas: cucharaditas/cucharadas conservan la cantidad confirmada sin re-preguntar gramos; el prompt pide conversión a peso solo con equivalencia específica verificable y mantiene medida casera/macros por porción cuando no hay conversión fiable. Añadida prueba unitaria; no se ejecutó.
+
 - 2026-10-28 13:00 CST — Preparación del commit solicitado mediante `git`: VERSION incrementada de 0.1.38 a 0.1.39; el dashboard lee la versión desde ese archivo. No se ejecutaron pruebas.
 - 2026-10-28 12:41 CST — OpenCode de comidas: el análisis, incluidos reintentos de formato, tiene un límite total de 10 minutos; envío, espera y lectura comparten ese presupuesto. Ante sesión expirada (404), se renueva una vez y se reenvía con el historial del borrador, con trazas de recuperación y aviso específico. Prueba añadida.
 - 2026-10-28 12:46 CST — Ejecutada la prueba del presupuesto total de respuesta OpenCode: 1 aprobada.
