@@ -100,18 +100,15 @@
           <option value="14">14 días</option>
           <option value="30" selected>30 días</option>
         </select>
-      </section>
-      <section class="panel panel-pad progress-chart">
-        <div class="section-head"><div><h2>Objetivo y consumo</h2><p>Últimos días disponibles en el periodo.</p></div></div>
-        <div class="chart-frame"><div class="chart-scroll"><div class="trend-grid" id="trendCharts"></div></div></div>
+        <p id="progressRangeCaption" role="status" aria-live="polite"></p>
       </section>
       <section class="panel panel-pad progress-nutrition" aria-labelledby="progressNutritionTitle" aria-busy="true">
-        <div class="section-head"><div><h2 id="progressNutritionTitle">Nutrición</h2><p id="progressNutritionCaption">Promedio de días con registros completos, frente a tu plan guardado.</p></div></div>
+        <div class="section-head"><div><h2 id="progressNutritionTitle">Nutrición</h2><p id="progressNutritionCaption">Promedios de días con macros completos; se muestra la cobertura.</p></div></div>
         <div id="progressNutritionMetrics" class="progress-nutrition-metrics" role="status" aria-live="polite">Cargando datos nutricionales…</div>
         <div id="progressNutritionChart" class="progress-chart-rows" aria-label="Consumo promedio como porcentaje de la meta"></div>
       </section>
       <section class="panel panel-pad progress-biometrics" aria-labelledby="progressBiometricsTitle" aria-busy="true">
-        <div class="section-head"><div><h2 id="progressBiometricsTitle">Tendencia biométrica</h2><p id="progressBiometricsCaption">Últimos cinco registros disponibles; cada métrica conserva su unidad y fuente.</p></div></div>
+        <div class="section-head"><div><h2 id="progressBiometricsTitle">Tendencia biométrica</h2><p id="progressBiometricsCaption">Hasta cinco mediciones del periodo elegido; cada métrica conserva su unidad y fuente.</p></div></div>
         <div id="progressBiometricsCharts" class="biometric-trend-grid" role="status" aria-live="polite">Cargando registros biométricos…</div>
       </section>
       <section class="panel panel-pad progress-period-summary" aria-labelledby="progressSummaryTitle" aria-busy="true">
@@ -120,7 +117,7 @@
         <div id="progressSummaryChart" class="progress-chart-rows" aria-label="Comparación de energía entre periodos"></div>
       </section>
       <section class="panel panel-pad progress-correlation" aria-labelledby="progressCorrelationTitle">
-        <div class="section-head"><div><h2 id="progressCorrelationTitle">Ingesta y evolución del peso</h2><p>Lecturas observadas en periodos iguales; relación descriptiva, no causal.</p></div></div>
+        <div class="section-head"><div><h2 id="progressCorrelationTitle">Comparación de ingesta y peso</h2><p>Compara el promedio de ingesta con el cambio entre mediciones observadas; no es una correlación estadística ni demuestra causalidad.</p></div></div>
         <div id="progressCorrelationMetrics" class="progress-nutrition-metrics" role="status" aria-live="polite">Cargando relación entre ingesta y peso…</div>
       </section>
       <section class="panel panel-pad progress-activity" aria-labelledby="progressActivityTitle">

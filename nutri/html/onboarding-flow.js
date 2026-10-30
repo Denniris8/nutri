@@ -2300,16 +2300,23 @@ if (dashboardTabs.length) {
 }
 
 let progressLoadId = 0;
-async function loadBiometricTrends() {
+async function loadBiometricTrends(days, end) {
   const container = document.querySelector('#progressBiometricsCharts');
   const panel = container?.closest('.progress-biometrics');
   if (!container) return;
   panel?.setAttribute('aria-busy', 'true');
   try {
-    const response = await fetch('/api/biometrics', { credentials: 'same-origin' });
+    const periodStart = new Date(`${end}T12:00:00Z`);
+    periodStart.setUTCDate(periodStart.getUTCDate() - days + 1);
+    const start = periodStart.toISOString().slice(0, 10);
+    const response = await fetch(`/api/biometrics?desde=${encodeURIComponent(start)}&hasta=${encodeURIComponent(end)}`, { credentials: 'same-origin' });
     if (!response.ok) throw new Error();
     const { records = [] } = await response.json();
-    const recent = records.slice(0, 5).reverse();
+    const periodRecords = records.filter((record) => {
+      const date = String(record.measuredAt || '').slice(0, 10);
+      return date >= start && date <= end;
+    }).sort((a, b) => String(b.measuredAt).localeCompare(String(a.measuredAt)));
+    const recent = periodRecords.slice(0, 5).reverse();
     const fields = [
       ['Peso', 'weightKg', 'kg'], ['IMC', 'bmi', 'kg/m²'], ['Grasa corporal', 'bodyFatPct', '%'],
       ['Músculo esquelético', 'musclePct', '%'], ['Metabolismo basal', 'restingMetabolismKcal', 'kcal/día'],
@@ -2365,7 +2372,7 @@ async function loadBiometricTrends() {
       container.append(card);
     }
     if (!container.childElementCount) container.textContent = 'Aún no hay mediciones biométricas disponibles.';
-    document.querySelector('#progressBiometricsCaption').textContent = `Últimos ${recent.length} de ${records.length} registros disponibles; cada lectura indica su fuente y los campos no medidos se omiten.`;
+    document.querySelector('#progressBiometricsCaption').textContent = `Mostrando ${recent.length} de ${periodRecords.length} mediciones del ${start} al ${end} (máximo 5); la línea conecta lecturas observadas, sin interpolar. El espaciado representa el orden de registros, no el tiempo transcurrido; cada lectura indica su fuente.`;
   } catch {
     container.textContent = 'No se pudieron cargar los registros biométricos.';
     notifyApp('No se pudieron cargar las tendencias biométricas.', 'error');
@@ -2375,7 +2382,6 @@ async function loadBiometricTrends() {
 }
 
 async function loadProgressNutrition() {
-  void loadBiometricTrends();
   const loadId = ++progressLoadId;
   const metrics = document.querySelector('#progressNutritionMetrics');
   const summary = document.querySelector('#progressSummaryText');
@@ -2390,6 +2396,18 @@ async function loadProgressNutrition() {
   if (!metrics || !summary) return;
   const days = Number(document.querySelector('#rangeSelect')?.value || 30);
   const end = document.querySelector('#daySelect')?.value || localDate();
+  const shiftDate = (date, offset) => {
+    const shifted = new Date(`${date}T12:00:00Z`);
+    shifted.setUTCDate(shifted.getUTCDate() + offset);
+    return shifted.toISOString().slice(0, 10);
+  };
+  const formatDate = (date) => new Intl.DateTimeFormat('es-MX', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(`${date}T12:00:00Z`));
+  const currentStart = shiftDate(end, 1 - days);
+  const previousEnd = shiftDate(currentStart, -1);
+  const previousStart = shiftDate(previousEnd, 1 - days);
+  const rangeCaption = document.querySelector('#progressRangeCaption');
+  if (rangeCaption) rangeCaption.textContent = `Seleccionado: ${formatDate(currentStart)}–${formatDate(end)} (${days} días). Comparación anterior: ${formatDate(previousStart)}–${formatDate(previousEnd)} (${days} días).`;
+  void loadBiometricTrends(days, end);
   const cacheKey = `${days}:${end}`;
   nutritionPanel.setAttribute('aria-busy', 'true');
   summaryPanel.setAttribute('aria-busy', 'true');
@@ -2425,7 +2443,10 @@ async function loadProgressNutrition() {
       value.textContent = amount == null ? '—' : `${format.format(amount)} ${unit}`;
       const goal = nutrition.goals?.[key];
       const detail = document.createElement('p');
-      detail.textContent = goal == null ? 'Meta: no hay un plan vigente durante todo el periodo' : `Meta del plan vigente todo el periodo: ${format.format(goal)} ${unit}`;
+      detail.textContent = !nutrition.goals
+        ? 'Sin comparación: ningún plan estuvo vigente durante todo el periodo.'
+        : goal == null ? 'El plan vigente durante todo el periodo no tiene una meta registrada para este indicador.'
+          : `Meta: ${format.format(goal)} ${unit}; el mismo plan estuvo vigente todo el periodo.`;
       item.append(title, value, detail);
       return item;
     }));
@@ -2434,7 +2455,7 @@ async function loadProgressNutrition() {
     if (chartTargets.length) {
       const legend = document.createElement('p');
       legend.className = 'progress-chart-legend';
-      legend.textContent = 'Promedio consumido frente a la meta del plan que rigió todo el periodo (escala hasta 150% de la meta).';
+      legend.textContent = 'Promedio de días completos frente a la meta del mismo plan, vigente durante todo el periodo; escala hasta 150%.';
       nutritionChart.append(legend);
       for (const [label, key, unit, color] of chartTargets) {
         const goal = Number(nutrition.goals[key]);
@@ -2458,9 +2479,11 @@ async function loadProgressNutrition() {
         nutritionChart.append(row);
       }
     } else {
-      nutritionChart.textContent = 'La gráfica requiere promedios completos y metas numéricas en el último plan guardado.';
+      nutritionChart.textContent = !nutrition.goals
+        ? 'No se compara con una meta porque ningún plan estuvo vigente durante todo el periodo.'
+        : 'No hay metas numéricas para comparar en el plan que cubrió todo el periodo.';
     }
-    document.querySelector('#progressNutritionCaption').textContent = `Promedio diario en ${nutrition.current.completeDays} de ${days} días con macros completos. Incluye estimaciones registradas; metas del último plan guardado.`;
+    document.querySelector('#progressNutritionCaption').textContent = `Promedio calculado solo con ${nutrition.current.completeDays} de ${days} días con macros completos. Incluye macros estimados; los días faltantes no cuentan como cero.`;
     const current = nutrition.current;
     const previous = nutrition.previous;
     summaryChart.replaceChildren();
@@ -2481,12 +2504,13 @@ async function loadProgressNutrition() {
     };
     const weightDelta = (period) => period.measurements > 1 && period.firstKg != null && period.lastKg != null
       ? Number(period.lastKg) - Number(period.firstKg) : null;
+    const weightCoverage = (period) => !period.measurements ? 'Sin mediciones' : `${period.measurements} medición${period.measurements === 1 ? '' : 'es'}${period.firstDate ? `; primera ${period.firstDate}${period.firstKg == null ? '' : `: ${format.format(Number(period.firstKg))} kg`}` : ''}${period.lastDate && period.lastDate !== period.firstDate ? `; última ${period.lastDate}${period.lastKg == null ? '' : `: ${format.format(Number(period.lastKg))} kg`}` : ''}`;
     const currentWeightDelta = weightDelta(body.current);
     const previousWeightDelta = weightDelta(body.previous);
     const signedKg = (value) => `${value > 0 ? '+' : ''}${format.format(value)} kg`;
     correlation.replaceChildren(
-      metric('Ingesta promedio', current.kcal == null ? 'Sin datos completos' : `${format.format(current.kcal)} kcal/día`, `Periodo anterior: ${previous.kcal == null ? 'sin datos completos' : `${format.format(previous.kcal)} kcal/día`}`),
-      metric('Cambio de peso', currentWeightDelta == null ? body.current.measurements ? 'Una medición; sin tendencia' : 'Sin mediciones' : signedKg(currentWeightDelta), `Periodo anterior: ${previousWeightDelta == null ? body.previous.measurements ? 'una medición; sin tendencia' : 'sin mediciones' : signedKg(previousWeightDelta)}`),
+      metric('Ingesta promedio', current.kcal == null ? 'Sin días completos' : `${format.format(current.kcal)} kcal/día`, `${current.completeDays} días completos de ${days}; anterior: ${previous.kcal == null ? 'sin días completos' : `${format.format(previous.kcal)} kcal/día en ${previous.completeDays} días`}`),
+      metric('Cambio entre mediciones de peso', currentWeightDelta == null ? body.current.measurements ? 'Una medición; no hay cambio calculable' : 'Sin mediciones' : signedKg(currentWeightDelta), `${weightCoverage(body.current)}. Anterior: ${weightCoverage(body.previous)}.`),
     );
     const activityRows = [
       ['Promedio de pasos/día', activity.current.avgSteps, activity.previous.avgSteps, 'pasos'],
@@ -2496,7 +2520,9 @@ async function loadProgressNutrition() {
       ['Energía manual estimada', activity.current.manualKcal, activity.previous.manualKcal, 'kcal'],
       ['Energía reportada por dispositivo', activity.current.deviceKcal, activity.previous.deviceKcal, 'kcal'],
     ];
-    activityMetrics.replaceChildren(...activityRows.map(([label, amount, prior, unit]) => metric(label, amount == null ? 'Sin registros' : `${format.format(amount)} ${unit}`, `Periodo anterior: ${prior == null ? 'sin registros' : `${format.format(prior)} ${unit}`}`)));
+    activityMetrics.replaceChildren(...activityRows.map(([label, amount, prior, unit], index) => metric(label, amount == null ? 'Sin registros' : `${format.format(amount)} ${unit}`, index === 0
+      ? `${activity.current.stepDays} de ${days} días con lectura; anterior: ${activity.previous.stepDays} de ${days} días. Promedio solo sobre días con datos.`
+      : `Periodo anterior: ${prior == null ? 'sin registros' : `${format.format(prior)} ${unit}`}`)));
     activityChart.replaceChildren();
     const chartLegend = document.createElement('p');
     chartLegend.className = 'progress-chart-legend';
@@ -2523,13 +2549,16 @@ async function loadProgressNutrition() {
         activityChart.append(row);
       }
     }
+    const sources = nutrition.quality.macroSources;
+    const otherSources = Math.max(0, sources.items - sources.usda - sources.declared - sources.web - sources.opencode);
     quality.replaceChildren(
-      metric('Días con comidas registradas', `${current.loggedDays} / ${days}`, `Completo: ${current.completeDays} · incompleto: ${current.incompleteDays} · pendientes: ${nutrition.quality.currentPending}`),
-      metric('Días sin comida registrada', String(Math.max(0, days - current.loggedDays)), 'No se consideran consumo cero.'),
-      metric('Fuente de macros', `USDA ${nutrition.quality.macroSources.usda} · usuario ${nutrition.quality.macroSources.declared}`, `Web ${nutrition.quality.macroSources.web} · estimados ${nutrition.quality.macroSources.estimated}`),
+      metric('Días con comidas completadas', `${current.loggedDays} / ${days}`, `Días completos en macros: ${current.completeDays} · incompletos: ${current.incompleteDays}.`),
+      metric('Días sin comida completada', String(Math.max(0, days - current.loggedDays)), 'No equivalen a consumo cero; los registros pendientes se muestran por separado.'),
+      metric('Alimentos por origen de macros', `${sources.items} alimentos`, `USDA ${sources.usda} · usuario ${sources.declared} · web ${sources.web} · OpenCode ${sources.opencode} · otros/sin origen ${otherSources}. Marcados estimados: ${sources.estimated} (pueden solaparse con el origen).`),
       metric('Mediciones de peso', String(body.current.measurements), `Periodo anterior: ${body.previous.measurements}`),
       metric('Registros de plicómetro', String(plicometric.current), `Periodo anterior: ${plicometric.previous}`),
       metric('Días con pasos', `${activity.current.stepDays} / ${days}`, `Periodo anterior: ${activity.previous.stepDays} días`),
+      metric('Registros pendientes', String(nutrition.quality.currentPending), 'Comidas que aún no están completadas; se excluyen de promedios de consumo.'),
       metric('Sesiones registradas', String(activity.current.trainingSessions), `Manual: ${activity.current.manualSessions} · dispositivo: ${activity.current.deviceSessions}`),
     );
     const notes = [];
@@ -2553,7 +2582,7 @@ async function loadProgressNutrition() {
       notes.push(stepDelta === 0 ? 'pasos promedio se mantuvieron' : `pasos promedio ${stepDelta > 0 ? '+' : ''}${format.format(stepDelta)}/día`);
     } else notes.push('pasos insuficientes para comparar');
     if (activity.current.trainingSessions != null && activity.previous.trainingSessions != null) notes.push(activity.current.trainingSessions === activity.previous.trainingSessions ? `sesiones se mantuvieron en ${activity.current.trainingSessions}` : `sesiones ${activity.current.trainingSessions} actuales frente a ${activity.previous.trainingSessions} anteriores`);
-    notes.push(`${current.completeDays}/${days} días con macros completos (${current.incompleteDays} incompletos, ${nutrition.quality.currentPending} comidas pendientes y ${Math.max(0, days - current.loggedDays)} días sin comidas guardadas)`);
+    notes.push(`${current.completeDays}/${days} días con macros completos (${current.incompleteDays} días incompletos, ${nutrition.quality.currentPending} registros pendientes y ${Math.max(0, days - current.loggedDays)} días sin comidas completadas)`);
     summary.textContent = `${notes.join('. ')}. Son asociaciones descriptivas, no evidencia de causalidad ni predicción de composición corporal.`;
     if (current.kcal != null && previous.kcal != null) {
       const max = Math.max(current.kcal, previous.kcal, 1);

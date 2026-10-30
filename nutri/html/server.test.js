@@ -4,7 +4,7 @@ const http = require('node:http');
 const test = require('node:test');
 const { beforeEach } = test;
 const { createServer, signJwt } = require('./server.js');
-const { validateBiometric } = require('./api/biometrics.js');
+const { readBiometrics, validateBiometric } = require('./api/biometrics.js');
 const { ensureFoodOpenCodeSession, forgetFoodSessionCache, openCodeRequest, requestFoodDescription, getFoodSessionDefaults } = require('./api/opencode-food.js');
 
 beforeEach(() => forgetFoodSessionCache());
@@ -44,7 +44,7 @@ const post = (url, data, headers = {}) => fetch(url, {
 
 test('progress nutrition endpoint returns account-scoped nutrition, body, activity and coverage', async () => {
   const queries = [];
-  const nutrition = { days: 7, current: { loggedDays: 1, completeDays: 1, incompleteDays: 0, kcal: 1800, protein: 100, carbs: 200, fat: 60 }, previous: { loggedDays: 0, completeDays: 0, incompleteDays: 0, kcal: null, protein: null, carbs: null, fat: null }, quality: { currentPending: 0, previousPending: 0, macroSources: { usda: 1, declared: 0, web: 0, opencode: 0, estimated: 0 } }, goals: null };
+  const nutrition = { days: 7, current: { loggedDays: 1, completeDays: 1, incompleteDays: 0, kcal: 1800, protein: 100, carbs: 200, fat: 60 }, previous: { loggedDays: 0, completeDays: 0, incompleteDays: 0, kcal: null, protein: null, carbs: null, fat: null }, quality: { currentPending: 0, previousPending: 0, macroSources: { items: 1, usda: 1, declared: 0, web: 0, opencode: 0, estimated: 0 } }, goals: null };
   const body = { current: { measurements: 2, firstKg: 80, lastKg: 79 }, previous: { measurements: 0, firstKg: null, lastKg: null } };
   const activity = { current: { stepDays: 1, avgSteps: 8000, trainingSessions: 1, manualSessions: 1, deviceSessions: 0, manualMinutes: 45, deviceMinutes: null, manualKcal: 300, deviceKcal: null }, previous: { stepDays: 0, avgSteps: null, trainingSessions: 0, manualSessions: 0, deviceSessions: 0, manualMinutes: null, deviceMinutes: null, manualKcal: null, deviceKcal: null } };
   await withServer(async (sql) => {
@@ -59,6 +59,16 @@ test('progress nutrition endpoint returns account-scoped nutrition, body, activi
     assert.deepEqual(await response.json(), { nutrition, body, activity, plicometric: { current: 1, previous: 0 } });
   });
   assert.equal(queries.filter((sql) => !sql.includes('SELECT s.usuario_id') && sql.includes('usuario_id=27')).length, 1);
+  assert.match(queries.find((sql) => sql.includes('WITH daily AS')), /estado='completado'.{0,120}fecha_consumo/);
+});
+
+test('biometric range query validates dates and reads only the selected period', async () => {
+  let query = '';
+  assert.deepEqual(await readBiometrics({ userId: 27, start: '2026-10-01', end: '2026-10-07', dbQuery: async (sql) => { query = sql; return '[]'; } }), []);
+  assert.match(query, /medido_en>=CAST\('2026-10-01 00:00:00' AS DATETIME\)/);
+  assert.match(query, /medido_en<DATE_ADD\(CAST\('2026-10-07 00:00:00' AS DATETIME\),INTERVAL 1 DAY\)/);
+  assert.doesNotMatch(query, /LIMIT 100/);
+  await assert.rejects(readBiometrics({ userId: 27, start: '2026-02-30', end: '2026-03-01', dbQuery: async () => '[]' }), /invalid_biometric_range/);
 });
 
 test('only versioned CSS and JavaScript assets receive immutable caching', async () => {

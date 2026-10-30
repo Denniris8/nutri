@@ -239,6 +239,7 @@ test('calendar date picker navigates arbitrary dates and keeps the selected day 
 test('dashboard has responsive calendar and More exposes editable forms and account actions', () => {
   const html = readFileSync(require.resolve('./dashboard_nutricional.html'), 'utf8');
   const css = readFileSync(require.resolve('./dashboard_nutricional.css'), 'utf8');
+  const js = readFileSync(require.resolve('./onboarding-flow.js'), 'utf8');
   assert.match(html, /<input id="daySelect"[^>]*type="date"/);
   assert.doesNotMatch(html, /objetivos-iniciales|personalObjectivesPanel|objectivesEditDialog|moreObjectivesButton/);
   assert.ok(html.indexOf('id="todayView"') < html.indexOf('id="daySelect"'));
@@ -255,7 +256,9 @@ test('dashboard has responsive calendar and More exposes editable forms and acco
   assert.match(html, /id="accountHeightCm"/);
   for (const id of ['progressCorrelationMetrics', 'progressActivityMetrics', 'progressActivityChart', 'progressQualityMetrics']) assert.match(html, new RegExp(`id="${id}"`));
   assert.match(html, /id="progressBiometricsCharts"/);
-  assert.match(html, /últimos cinco registros disponibles/i);
+  assert.match(html, /id="progressRangeCaption"/);
+  assert.match(js, /la línea conecta lecturas observadas/i);
+  assert.doesNotMatch(html, /id="trendCharts"/);
   assert.match(css, /\.biometric-trend-grid/);
   assert.match(html, /no se guardan cargas\/volumen de fuerza/i);
 });
