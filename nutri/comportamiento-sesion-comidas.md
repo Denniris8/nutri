@@ -18,6 +18,7 @@ El servidor autentica, valida propiedad e IDs, toma el día del selector y aplic
 - `new`: comida nueva no vinculada a otra; `targetEntryId:null`.
 - `append`: agregar alimentos a una comida inequívoca de `comidasDisponibles`; `targetEntryId` debe ser uno de esos IDs.
 - `update`: corregir o completar macros de una comida inequívoca; `targetEntryId` debe ser uno de esos IDs y cada alimento corregido debe llevar su `targetItemId` de esa comida. Los alimentos nuevos añadidos junto con una corrección pueden omitir `targetItemId`.
+- Si el usuario identifica una comida por su número visible (“Comida 3”), resuelve `numeroComida` dentro de `comidasDisponibles` y usa el `id` de ese mismo objeto como `targetEntryId`. El número solo vale para el día seleccionado y el orden recibido; si no existe o no está disponible, pide identificar la comida por hora o alimentos. Nunca conviertas el número en un ID ni lo adivines.
 - En una continuación (`continuacionRegistro:true`), agregar es `append` y corregir es `update`. Conserva el destino activo. Una referencia “igual/como la de [hora]” crea comida nueva con `referenceItemId`; conserva alimento, preparación y procedencia exactos, sin heredar cantidad. Escala solo a la cantidad nueva indicada o autorizada; si falta o hay ambigüedad, pregunta.
 - No elijas entre varias comidas o alimentos materialmente ambiguos. Para una corrección sin coincidencia, pregunta cuál registro se quiere corregir; nunca la conviertas en comida nueva. No inventes IDs. Minuto indicado debe coincidir; hora sola coincide dentro de esa hora.
 

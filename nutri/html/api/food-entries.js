@@ -122,6 +122,9 @@ function isEarlyNutritionHour(minutes) { return Number.isInteger(minutes) && min
 function needsSelectedNutritionDateConfirmation(selectedDate, localDate, minutes) {
   return isEarlyNutritionHour(minutes) && selectedDate !== localDate;
 }
+function numberVisibleFoodMeals(records) {
+  return records.map((record, index) => ({ ...record, numeroComida: index + 1 }));
+}
 
 function previousDate(date) {
   const value = new Date(`${date}T00:00:00Z`);
@@ -655,7 +658,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     const localClockMinutes = localNow.minutes;
     const asksSelectedDateConfirmation = isSelectedNutritionDateQuestion(saved.question);
     const selectedDateAnswer = asksSelectedDateConfirmation ? selectedNutritionDateAnswer(saved.question, entry.descripcion) : null;
-    const correctionIntent = /\b(corrige|corregir|actualiza|actualizar|reemplaza|reemplazar|cambia|cambiar)\b/i.test(entry.descripcion)
+    const correctionIntent = /\b(corrige|corregir|actualiza|actualizar|reemplaza|reemplazar|cambia|cambiar|modifica|modificar)\b/i.test(entry.descripcion)
       || /\b(?:complet(?:a|ar|en)|recalcul(?:a|ar|en))\b.{0,60}\bmacros?\b|\bmacros?\b.{0,60}\b(?:faltantes?|incompletos?|recalcular)\b/i.test(entry.descripcion);
     const returnDayClarification = async (question) => {
       await dbQuery(`UPDATE registros_comidas SET estado='borrador_chat',pregunta_pendiente=${textSql(question)} WHERE id=${entryId} AND usuario_id=${userId} AND estado='borrador_chat';`);
@@ -705,10 +708,10 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     const directFastPath = fastPathAllowed
       ? parseDeclaredFoodShortcut(modelDescription) || await knownFoodsShortcut({ description: modelDescription, userId, dbQuery, textSql })
       : null;
-    const dayMeals = directFastPath ? [] : (await readFoodEntries({ userId, fecha: entry.fecha, dbQuery, textSql })).filter((record) => record.state === 'completado').map((record) => {
+    const dayMeals = directFastPath ? [] : numberVisibleFoodMeals(await readFoodEntries({ userId, fecha: entry.fecha, dbQuery, textSql })).filter((record) => record.state === 'completado').map((record) => {
       const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: entry.timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(record.createdAt)).map(({ type, value }) => [type, value]));
       return {
-        id: String(record.id), hora: new Intl.DateTimeFormat('es-MX', { timeZone: entry.timezone, hour: '2-digit', minute: '2-digit' }).format(new Date(record.createdAt)),
+        id: String(record.id), numeroComida: record.numeroComida, hora: new Intl.DateTimeFormat('es-MX', { timeZone: entry.timezone, hour: '2-digit', minute: '2-digit' }).format(new Date(record.createdAt)),
         hour24: Number(parts.hour), minute: Number(parts.minute),
         alimentos: record.items.map((item) => `${item.name}${item.quantity ? ` (${item.quantity})` : ''}`),
         items: record.items.map(({ itemId, sourceText, name, quantity, quantityGrams, basis, energyKcal, proteinG, carbohydrateG, fatG, fiberG, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote }) => ({ targetItemId: String(itemId), sourceText, name, quantity, quantityGrams, basis, energyKcal, proteinG, carbohydrateG, fatG, fiberG, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote })),
@@ -1143,4 +1146,4 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
   }
 }
 
-module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, localDateTimeToUtc, needsSelectedNutritionDateConfirmation, normalizeFoodReply, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, selectedNutritionDateAnswer, usedFoodWebFetch, usedFoodWebTools, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, localDateTimeToUtc, needsSelectedNutritionDateConfirmation, normalizeFoodReply, numberVisibleFoodMeals, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, selectedNutritionDateAnswer, usedFoodWebFetch, usedFoodWebTools, validateFoodEntry, validFoodItem };

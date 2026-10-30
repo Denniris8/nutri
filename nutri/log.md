@@ -27,6 +27,8 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-30 12:22 CST — Preparación del commit solicitado mediante `git`: VERSION incrementada de 0.1.51 a 0.1.52; el dashboard sigue leyendo la versión desde ese archivo. No se ejecutaron pruebas.
+- 2026-10-30 12:21 CST — Referencias por ordinal: comidas disponibles para OpenCode incluyen `numeroComida` con la misma posición visible de la lista; el contrato mapea ese número al ID de la comida y pide aclaración si no coincide. “Modificar” cuenta como intención de corrección. Añadida prueba de numeración; no ejecutada.
 - 2026-10-30 10:55 CST — Preparación del commit solicitado con `git`: VERSION incrementada de 0.1.50 a 0.1.51; el dashboard continúa leyendo la versión desde ese archivo. Ajustado el contrato para que las fechas mencionadas en el chat no cambien el día seleccionado. No se ejecutaron pruebas.
 - 2026-10-30 10:12 CST — Confirmación de comida de madrugada: mensaje aclara que registrar en el día seleccionado agrega la comida y suma sus macros a ese balance.
 - 2026-10-30 10:12 CST — Comidas de madrugada: confirmación antes de leer comidas o abrir OpenCode; 23:59:59 queda como hora visible sugerida y el selector determina el balance. Cancelar elimina el borrador sin abrir OpenCode. Cubiertos límites 00:00/03:59/04:00 y cancelación en pruebas (sin ejecutar).

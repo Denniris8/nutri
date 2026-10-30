@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitGrams, applyOpenFoodFactsMacros, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, needsSelectedNutritionDateConfirmation, parseDeclaredFoodShortcut, pendingFoodItemSql, repairEstimatedEnergy, reportFoodProgress, selectedNutritionDateAnswer, usedFoodWebFetch, usedFoodWebTools } = require('./food-entries.js');
+const { applyExplicitGrams, applyOpenFoodFactsMacros, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, needsSelectedNutritionDateConfirmation, numberVisibleFoodMeals, parseDeclaredFoodShortcut, pendingFoodItemSql, repairEstimatedEnergy, reportFoodProgress, selectedNutritionDateAnswer, usedFoodWebFetch, usedFoodWebTools } = require('./food-entries.js');
 
 test('accepts confirmed teaspoon and tablespoon quantities without requiring grams', () => {
   for (const quantityText of ['1 cucharadita', 'una cucharadita', '2 cditas.', '1 cucharada', 'dos cucharadas', '2 cdas.', 'una pizca', '1 taza', 'un puñado', '2 piezas']) {
@@ -20,6 +20,12 @@ test('uses the suggested end-of-day time only when the selected-date confirmatio
   assert.deepEqual(selectedNutritionDateAnswer(question, 'Sí'), { confirmed: true, time: { hours: [23], minute: 59 }, lastSecond: true });
   assert.equal(selectedNutritionDateAnswer(question, 'No').declined, true);
   assert.equal(selectedNutritionDateAnswer(question, 'A las 8:30 p. m.').time.hours[0], 20);
+});
+
+test('numbers meals in visible list order before completed-only filtering', () => {
+  const meals = numberVisibleFoodMeals([{ id: 'a', state: 'completado' }, { id: 'b', state: 'pendiente' }, { id: 'c', state: 'completado' }]);
+  assert.deepEqual(meals.map(({ numeroComida }) => numeroComida), [1, 2, 3]);
+  assert.deepEqual(meals.filter(({ state }) => state === 'completado').map(({ numeroComida }) => numeroComida), [1, 3]);
 });
 
 test('draft candidate SQL accepts numeric fiber without treating it as text', () => {
