@@ -3,6 +3,30 @@ const test = require('node:test');
 const { applyExplicitQuantities, applyFoodMacroReferences, normalizeFoodReply, parseFoodReferenceTime, parseFoodReply, saveFoodEntry } = require('./food-entries.js');
 const { deleteFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, openCodeRequest } = require('./opencode-food.js');
 
+test('cancela la confirmación de fecha sin consultar comidas ni abrir OpenCode', async () => {
+  const statements = [];
+  const question = '¿Confirmas registrar esta comida en el día nutricional seleccionado (2026-10-29)?';
+  const dbQuery = async (sql) => {
+    statements.push(sql);
+    if (sql.includes("SELECT 'timezone';")) return 'timezone\nUTC\ndraftDate\nprior';
+    if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return `501\n${JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-29', description: 'Avena', question, targetEntryId: null })}`;
+    if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)')) return '';
+    return '';
+  };
+  let openCodeCalls = 0;
+  const response = await new Promise((resolve) => saveFoodEntry({
+    response: {}, data: { fecha: '2026-10-29', descripcion: 'No', requestId: '8e4d53e9-4268-4b45-8b12-1b510e8db22e', timezone: 'UTC' },
+    userId: 999991, dbQuery, textSql: (value) => value == null ? 'NULL' : `'${String(value).replace(/'/g, "''")}'`,
+    json: (_response, _status, body) => resolve(body), now: () => new Date('2026-10-30T01:00:00Z'),
+    requestOpenCode: async () => { openCodeCalls += 1; throw new Error('OpenCode must not be called'); },
+  }));
+
+  assert.equal(response.state, 'cancelado');
+  assert.equal(openCodeCalls, 0);
+  assert.ok(statements.some((sql) => sql.includes('DELETE FROM registros_comidas')));
+  assert.ok(!statements.some((sql) => sql.includes("SELECT 'records';")));
+});
+
 test('registra leche y whey con cantidades del mensaje tras respuesta inválida inicial', async () => {
   const description = '250 ml de leche Alpura Pro baja en grasa deslactosada y 31 g de proteína Gold Standard Whey chocolate el 2026-10-22';
   const savedItems = [
@@ -187,8 +211,6 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
   const milkWheyCase = process.env.NUTRI_TEST_OPENCODE_CASE === 'milk-whey';
   const bonelessRepro = process.env.NUTRI_TEST_OPENCODE_CASE === 'boneless-repro';
   const bonelessBatch = process.env.NUTRI_TEST_OPENCODE_CASE === 'boneless-batch';
-  const overnightCase = /^overnight(?:-previous)?$/.test(process.env.NUTRI_TEST_OPENCODE_CASE || '');
-  const previousDayCase = process.env.NUTRI_TEST_OPENCODE_CASE === 'overnight-previous';
   const meals = bonelessBatch ? [
     ['Puré, spaghetti con queso y boneless 1', '', ''],
     ['Puré, spaghetti con queso y boneless 2', '', ''],
@@ -199,10 +221,6 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
     ['Puré de papa, spaghetti con queso y boneless', '', ''],
   ] : milkWheyCase ? [
     ['Leche Alpura Pro y proteína ON Gold Nutrition', 'leche Alpura Pro', 'Optimum Nutrition Gold Standard 100% Whey'],
-  ] : overnightCase ? [
-    ['Arroz con huevo a la 1:00 a. m.', 'arroz cocido', 'huevo cocido'],
-    ['Arroz con huevo a las 2:00 a. m.', 'arroz cocido', 'huevo cocido'],
-    ['Arroz con huevo a las 3:00 a. m.', 'arroz cocido', 'huevo cocido'],
   ] : [
     ['Avena con yogur', 'Yogur griego natural de etiqueta', 'avena genérica'],
     ['Tacos de pollo', 'Tortillas de maíz de etiqueta', 'pechuga de pollo genérica'],
@@ -249,33 +267,27 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
       ][index]
       : bonelessRepro
       ? '51g puré de papa, 90g spagetti con queso (no sé cuánto de queso calcula),179g estilo boneless traza'
-      : overnightCase
-      ? `${meal}: 100 g de arroz blanco cocido en casa, no envasado y sin marca; 50 g de huevo cocido en casa, genérico y sin marca.`
       : milkWheyCase
       ? `${meal}: 250 ml de leche Alpura Pro y 31 g de proteína Optimum Nutrition Gold Standard 100% Whey (ON). Fecha 2026-10-22.`
       : `${meal}: 100 g de ${packaged}; etiqueta sintética declarada para esta prueba por 100 g: ${energy} kcal, ${protein} g proteína, ${carbohydrate} g carbohidratos, ${fat} g grasa. Además 100 g de ${generic}, cocido.${index === 5 ? ' Además 50 g de huevo cocido.' : ''} Fecha 2026-10-22.`;
     const clarificationReply = (pendingQuestion) => {
       const question = String(pendingQuestion || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-      if (/confirmas las 11:59:59/.test(question)) return 'Sí, confirmo las 11:59:59 p. m.';
+      if (/confirmas registrar esta comida en el día nutricional seleccionado/.test(question)) return 'Sí';
       if (/(cuantos|cantidad|gramos|mililitros|porcion)/.test(question)) return milkWheyCase
         ? `Confirmo 250 ml de leche Alpura Pro y 31 g de proteína Optimum Nutrition Gold Standard 100% Whey (ON).`
-        : overnightCase ? 'Confirmo 100 g de arroz cocido y 50 g de huevo cocido, preparados cocidos.'
         : `Son 100 g de ${packaged} y 100 g de ${generic}${index === 5 ? ' y 50 g de huevo cocido' : ''}.`;
       if (/(preparacion|coccion|crudo|cocido)/.test(question)) return `${generic} esta cocido; ${packaged} es un producto envasado.`;
       if (/(etiqueta|macro|caloria|fibra|nutriente)/.test(question)) return milkWheyCase
         ? 'No tengo una foto ni datos de etiqueta, ni se indicó variante o sabor. Usa una fuente que coincida con el producto; si no hay una, estima y etiqueta los macros como estimados.'
-        : overnightCase ? 'No hay etiqueta; son arroz blanco y huevo genéricos cocidos en casa. Usa una fuente verificable o macros típicos marcados como estimados.'
         : `La etiqueta de ${packaged} es sintetica para esta prueba: ${energy} kcal, ${protein} g de proteina, ${carbohydrate} g de carbohidratos y ${fat} g de grasa por 100 g.`;
       if (/(marca|variante|producto|identifica|sabor)/.test(question)) return milkWheyCase
         ? 'Solo conozco los nombres Alpura Pro y ON Gold Nutrition; no se indicó variante de leche ni sabor de proteína.'
-        : overnightCase ? 'No son productos envasados y no tienen marca ni etiqueta; son arroz blanco cocido en casa y huevo cocido genérico. Usa una fuente compatible o estima y marca los macros.'
         : `${packaged} es una etiqueta ficticia de prueba, no una marca real; ${generic} es generico y esta cocido.`;
       return milkWheyCase
         ? 'Confirmo únicamente 250 ml de leche Alpura Pro y 31 g de proteína Optimum Nutrition Gold Standard 100% Whey (ON). No tengo variante, sabor ni etiqueta; consulta una fuente coincidente o marca los valores típicos como estimados.'
-        : overnightCase ? `Confirmo 100 g de arroz blanco cocido en casa y 50 g de huevo cocido en casa, ambos genéricos sin marca ni envase. ${previousDayCase ? 'Confirmo el día anterior.' : 'Elijo hoy.'} Si no hay fuente compatible, usa macros típicos marcados como estimados.`
         : `Es ${meal}: 100 g de ${packaged} con la etiqueta sintetica indicada y 100 g de ${generic} cocido${index === 5 ? ' y 50 g de huevo cocido' : ''}. No tengo otros datos; estima solo lo que sea razonable y marca la estimacion.`;
     };
-    const interactions = [], modelContexts = [];
+    const interactions = [];
     let draftExists = false, draftDate = '2026-10-22', question = null, completed = false, storedSession = '', currentSession = '', liveParts = [];
     const textSql = (value) => value == null ? 'NULL' : `CONVERT(0x${Buffer.from(String(value)).toString('hex')} USING utf8mb4)`;
     const dbQuery = async (sql) => {
@@ -328,7 +340,6 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
       if (args[0] === 'POST' && args[1].endsWith('/message')) {
         if (realMessageCalls >= messageLimit) throw new Error(`Se alcanzó el límite autorizado de ${messageLimit} mensajes reales a OpenCode.`);
         realMessageCalls += 1;
-        if (overnightCase) modelContexts.push(JSON.parse(args[2].parts[0].text));
         const result = await openCodeRequest(...args);
         liveParts = result.data?.parts || [];
         return result;
@@ -339,27 +350,8 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
     const userId = 2099980 + index;
     let result, lastQuestion = '';
     try {
-      if (overnightCase) {
-        const callsBeforeDayChoice = realMessageCalls;
-        await saveFoodEntry({ response: {}, data: { fecha: '2026-10-22', descripcion: description, requestId, timezone: 'UTC' },
-          userId, dbQuery, textSql, json: (_response, status, body) => { result = { status, ...body }; }, requestOpenCode });
-        assert.equal(result.status, 200, `${meal}: servidor rechaza la hora temprana`);
-        assert.equal(result.state, 'requiere_aclaracion', `${meal}: debió pedir la elección del día`);
-        assert.match(result.question, /¿A qué día nutricional asigno esta comida/);
-        assert.equal(realMessageCalls, callsBeforeDayChoice, `${meal}: no debe consultar OpenCode antes de elegir el día`);
-        await saveFoodEntry({ response: {}, data: { fecha: '2026-10-22', descripcion: previousDayCase ? 'día anterior' : 'hoy', requestId, timezone: 'UTC' },
-          userId, dbQuery, textSql, json: (_response, status, body) => { result = { status, ...body }; }, requestOpenCode });
-        assert.equal(result.state, 'requiere_aclaracion', `${meal}: la elección del día debe conservar el borrador`);
-        assert.equal(realMessageCalls, callsBeforeDayChoice, `${meal}: OpenCode debe esperar la confirmación de fecha`);
-        if (previousDayCase) {
-          assert.match(result.question, /¿La guardo en el día nutricional anterior .*11:59:59 p\. m\./);
-          await saveFoodEntry({ response: {}, data: { fecha: '2026-10-22', descripcion: 'Sí', requestId, timezone: 'UTC' },
-            userId, dbQuery, textSql, json: (_response, status, body) => { result = { status, ...body }; }, requestOpenCode });
-          assert.equal(draftDate, '2026-10-21', `${meal}: fecha anterior simulada`);
-        }
-      }
       for (let turn = 0; turn < (bonelessRepro || bonelessBatch ? 1 : 5) && realMessageCalls < messageLimit && result?.state !== 'completado'; turn += 1) {
-        const userReply = overnightCase || turn ? clarificationReply(result?.question) : description;
+        const userReply = turn ? clarificationReply(result?.question) : description;
         await saveFoodEntry({ response: {}, data: { fecha: '2026-10-22', descripcion: userReply, requestId, timezone: 'UTC' },
           userId, dbQuery, textSql, json: (_response, status, body) => { result = { status, ...body }; }, requestOpenCode });
         if (bonelessRepro) reproStatus = result?.status;
@@ -374,7 +366,7 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
           break;
         }
         if (result?.state === 'completado') {
-          const expectedIngredients = bonelessRepro ? ['puré de papa', 'spaghetti', 'boneless'] : overnightCase ? ['arroz cocido', 'huevo cocido'] : milkWheyCase ? ['Alpura Pro', 'Gold Standard'] : index === 5 ? [packaged, generic, 'huevo cocido'] : [packaged, generic];
+          const expectedIngredients = bonelessRepro ? ['puré de papa', 'spaghetti', 'boneless'] : milkWheyCase ? ['Alpura Pro', 'Gold Standard'] : index === 5 ? [packaged, generic, 'huevo cocido'] : [packaged, generic];
           assert.ok(result.records[0].items.length >= expectedIngredients.length, `${meal}: devolvió ${result.records[0].items.length} de ${expectedIngredients.length} ingredientes esperados`);
           for (const ingredient of expectedIngredients) {
             const key = ingredient.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().match(/[a-z0-9]{4,}/)?.[0];
@@ -386,17 +378,6 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
             assert.match(milk.quantity, /250\s*ml/i);
             assert.equal(milk.quantityGrams, null);
             assert.equal(whey.quantityGrams, 31);
-          }
-          if (overnightCase) {
-            if (previousDayCase) assert.ok(modelContexts.some(({ description: modelDescription, initialDescription }) => modelDescription === description && initialDescription === description), `${meal}: al confirmar el día anterior, OpenCode debe recibir la descripción original del alimento, no solo la confirmación`);
-            const savedItems = result.records[0].items;
-            const rice = savedItems.find(({ name, sourceText }) => /arroz/i.test(`${name} ${sourceText}`));
-            const egg = savedItems.find(({ name, sourceText }) => /huevo/i.test(`${name} ${sourceText}`));
-            assert.ok(rice, `${meal}: falta arroz; persistidos: ${JSON.stringify(savedItems)}`);
-            assert.ok(egg, `${meal}: falta huevo; persistidos: ${JSON.stringify(savedItems)}`);
-            assert.equal(rice.quantityGrams, 100, `${meal}: cantidad de arroz`);
-            assert.equal(egg.quantityGrams, 50, `${meal}: cantidad de huevo`);
-            assert.equal(result.fecha, previousDayCase ? '2026-10-21' : '2026-10-22', `${meal}: día nutricional elegido`);
           }
           assert.ok(completed, `${meal}: la respuesta no coincide con el estado persistido`);
           savedMeals.push(meal);
@@ -415,7 +396,7 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
         lastQuestion = result.question;
         if (realMessageCalls >= messageLimit) { failures.push(`${meal}: quedó pendiente al alcanzar el límite de ${messageLimit} mensajes reales; última aclaración: ${lastQuestion}`); break; }
       }
-      if (!completed && !bonelessRepro && !bonelessBatch && !failures.some((failure) => failure.startsWith(`${meal}:`))) failures.push(`${meal}: no se guardó tras sus aclaraciones; última: ${lastQuestion}${overnightCase ? `; historial: ${JSON.stringify(interactions.slice(-8))}` : ''}`);
+      if (!completed && !bonelessRepro && !bonelessBatch && !failures.some((failure) => failure.startsWith(`${meal}:`))) failures.push(`${meal}: no se guardó tras sus aclaraciones; última: ${lastQuestion}`);
     } catch (error) {
       failures.push(`${meal}: ${error.message}`);
     } finally {

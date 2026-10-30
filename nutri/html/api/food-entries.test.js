@@ -1,11 +1,25 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitGrams, applyOpenFoodFactsMacros, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, parseDeclaredFoodShortcut, pendingFoodItemSql, repairEstimatedEnergy, reportFoodProgress, usedFoodWebFetch, usedFoodWebTools } = require('./food-entries.js');
+const { applyExplicitGrams, applyOpenFoodFactsMacros, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, needsSelectedNutritionDateConfirmation, parseDeclaredFoodShortcut, pendingFoodItemSql, repairEstimatedEnergy, reportFoodProgress, selectedNutritionDateAnswer, usedFoodWebFetch, usedFoodWebTools } = require('./food-entries.js');
 
 test('accepts confirmed teaspoon and tablespoon quantities without requiring grams', () => {
   for (const quantityText of ['1 cucharadita', 'una cucharadita', '2 cditas.', '1 cucharada', 'dos cucharadas', '2 cdas.', 'una pizca', '1 taza', 'un puñado', '2 piezas']) {
     assert.equal(hasExplicitVolume({ quantityGrams: null, quantityText }), true);
   }
+});
+
+test('confirms a mismatched selected nutrition date only during 00:00-03:59', () => {
+  assert.equal(needsSelectedNutritionDateConfirmation('2026-10-29', '2026-10-30', 0), true);
+  assert.equal(needsSelectedNutritionDateConfirmation('2026-10-29', '2026-10-30', 239), true);
+  assert.equal(needsSelectedNutritionDateConfirmation('2026-10-29', '2026-10-30', 240), false);
+  assert.equal(needsSelectedNutritionDateConfirmation('2026-10-30', '2026-10-30', 60), false);
+});
+
+test('uses the suggested end-of-day time only when the selected-date confirmation is accepted', () => {
+  const question = '¿Confirmas registrar esta comida en el día nutricional seleccionado (2026-10-29)? Sugiero las 11:59:59 p. m.; confirma o indica otra hora.';
+  assert.deepEqual(selectedNutritionDateAnswer(question, 'Sí'), { confirmed: true, time: { hours: [23], minute: 59 }, lastSecond: true });
+  assert.equal(selectedNutritionDateAnswer(question, 'No').declined, true);
+  assert.equal(selectedNutritionDateAnswer(question, 'A las 8:30 p. m.').time.hours[0], 20);
 });
 
 test('draft candidate SQL accepts numeric fiber without treating it as text', () => {

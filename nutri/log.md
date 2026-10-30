@@ -27,6 +27,10 @@
 - 2026-10-20 10:52 CST — Docker Compose: corregido el healthcheck de MySQL para usar `mysqladmin ping` autenticado con `MYSQL_ROOT_PASSWORD`; el `healthcheck.sh` configurado no existe en la imagen y bloqueaba el inicio de la app. No se ejecutaron pruebas.
 # Log de cambios
 
+- 2026-10-30 10:55 CST — Preparación del commit solicitado con `git`: VERSION incrementada de 0.1.50 a 0.1.51; el dashboard continúa leyendo la versión desde ese archivo. Ajustado el contrato para que las fechas mencionadas en el chat no cambien el día seleccionado. No se ejecutaron pruebas.
+- 2026-10-30 10:12 CST — Confirmación de comida de madrugada: mensaje aclara que registrar en el día seleccionado agrega la comida y suma sus macros a ese balance.
+- 2026-10-30 10:12 CST — Comidas de madrugada: confirmación antes de leer comidas o abrir OpenCode; 23:59:59 queda como hora visible sugerida y el selector determina el balance. Cancelar elimina el borrador sin abrir OpenCode. Cubiertos límites 00:00/03:59/04:00 y cancelación en pruebas (sin ejecutar).
+- 2026-10-30 10:12 CST — Comidas de madrugada: reemplazado “hoy/anterior” por confirmación del día seleccionado cuando difiere de la fecha local entre 00:00 y 03:59; si es ayer sugiere 23:59:59, acepta otra hora y cancelar no guarda. Retirados parsers y expectativas del flujo anterior; agregadas pruebas unitarias del nuevo criterio. No se ejecutaron.
 - 2026-10-30 00:33 CST — Preparación del commit solicitado mediante `git`: VERSION incrementada de 0.1.49 a 0.1.50; dashboard sincronizado desde ese archivo. Se incluyen reglas de sesión de comidas y reconocimiento de medidas caseras; no se ejecutaron pruebas.
 - 2026-10-30 00:18 CST — Contrato de comidas: añadidas reglas concisas para desglosar platillos sin inventar ingredientes, porción consumida/sobras, parte comestible y escalado de etiquetas envasadas; aclarado el guardado de medidas caseras sin permiso de conversión.
 - 2026-10-30 00:18 CST — Contrato de comidas: unificadas y acortadas las reglas de cantidad, permisos independientes para macros/peso, escalado y persistencia; eliminadas contradicciones entre prompt y flujo.

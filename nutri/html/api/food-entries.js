@@ -119,6 +119,9 @@ function formatFoodTime(hour, minute) {
 }
 
 function isEarlyNutritionHour(minutes) { return Number.isInteger(minutes) && minutes >= 0 && minutes < 240; }
+function needsSelectedNutritionDateConfirmation(selectedDate, localDate, minutes) {
+  return isEarlyNutritionHour(minutes) && selectedDate !== localDate;
+}
 
 function previousDate(date) {
   const value = new Date(`${date}T00:00:00Z`);
@@ -126,65 +129,35 @@ function previousDate(date) {
   return value.toISOString().slice(0, 10);
 }
 
-function chatFoodDate(text, timezone) {
-  const normalized = String(text).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  const dates = [];
-  const add = (year, month, day) => {
-    const value = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const parsed = new Date(`${value}T00:00:00Z`);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) throw Object.assign(new Error('La fecha indicada en el chat no es válida.'), { status: 400 });
-    dates.push(value);
-  };
-  for (const match of normalized.matchAll(/\b(\d{4})-(\d{1,2})-(\d{1,2})\b/g)) add(+match[1], +match[2], +match[3]);
-  for (const match of normalized.matchAll(/\b(\d{1,2})[/-](\d{1,2})[/-](\d{4})\b/g)) add(+match[3], +match[2], +match[1]);
-  const months = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
-  const currentYear = Number(new Intl.DateTimeFormat('en-US', { timeZone: timezone, year: 'numeric' }).format(new Date()));
-  for (const match of normalized.matchAll(/\b(\d{1,2})\s+de\s+(enero|febrero|marzo|abril|mayo|junio|julio|agosto|septiembre|octubre|noviembre|diciembre)(?:\s+de\s+(\d{4}))?\b/g)) {
-    const year = +(match[3] || currentYear);
-    add(year, months.indexOf(match[2]) + 1, +match[1]);
-  }
-  const todayParts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
-  const today = `${todayParts.year}-${todayParts.month}-${todayParts.day}`;
-  if (/\banteayer\b/.test(normalized)) dates.push(previousDate(previousDate(today)));
-  else if (/\bayer\b/.test(normalized)) dates.push(previousDate(today));
-  else if (/\bhoy\b/.test(normalized)) dates.push(today);
-  const unique = [...new Set(dates)];
-  if (unique.length > 1) throw Object.assign(new Error('Indica una sola fecha para guardar la comida.'), { status: 400 });
-  return unique[0] || null;
+function localNutritionDateTime(timezone, now = new Date()) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit', hourCycle: 'h23', hour: '2-digit', minute: '2-digit',
+  }).formatToParts(now).map(({ type, value }) => [type, value]));
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, minutes: Number(parts.hour) * 60 + Number(parts.minute), now };
 }
 
-function isEarlyFoodDayChoiceQuestion(question) {
-  return /¿(?:Esta comida pertenece al día nutricional seleccionado(?:\s*\([^)]*\))? o al anterior(?:\s*\([^)]*\))?|A qué día nutricional asigno esta comida)\?/i.test(String(question || ''));
+function isSelectedNutritionDateQuestion(question) {
+  return /^¿Confirmas registrar esta comida en el día nutricional seleccionado \(\d{4}-\d{2}-\d{2}\)\?/i.test(String(question || ''));
 }
 
-function earlyFoodDayChoice(question, answer) {
-  if (!isEarlyFoodDayChoiceQuestion(question)) return null;
-  const text = String(answer).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  if (/\b(anterior|dia anterior|ayer)\b/.test(text)) return 'anterior';
-  if (/\b(actual|seleccionado|este dia|hoy)\b/.test(text)) return 'actual';
-  return null;
-}
-
-function previousDaySaveAnswer(question, answer) {
-  if (!/¿La guardo en el día nutricional anterior .*11:59:59 p\. m\./i.test(String(question || ''))) return null;
-  const text = String(answer).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\./g, '');
-  const affirmative = /^\s*(?:si|confirmo|correcto|de acuerdo|asi esta bien|adelante)\b/.test(text);
-  if (/^\s*(?:(?:a\s+las?\s+)?(?:11:59:59\s*p\s*m|23:59:59))\s*$/.test(text)) return { confirmed: true, time: { hours: [23], minute: 59 }, lastSecond: true };
+function selectedNutritionDateAnswer(question, answer) {
+  if (!isSelectedNutritionDateQuestion(question)) return null;
+  const text = String(answer || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\./g, '').trim();
+  const affirmative = /^(?:si|confirmo|correcto|de acuerdo|claro|adelante)(?:\b|$)/.test(text);
+  const negative = /^(?:no|cambiar|cancela|cancelar)(?:\b|$)/.test(text);
   const time = parseFoodTime(answer);
-  const timeOnly = /^\s*(?:(?:a\s+las?\s+)|(?:la\s+hora\s+es\s+))?\d{1,2}(?::\d{2})?(?::\d{2})?\s*(?:am|pm|a\s*m|p\s*m|de la manana|de la tarde|de la noche)?\s*$/.test(text);
-  if (time && !time.invalid && !time.ambiguous && time.hours.length === 1 && (affirmative || timeOnly)) return { confirmed: true, time, lastSecond: false };
-  if (affirmative) return { confirmed: true, time: { hours: [23], minute: 59 }, lastSecond: true };
-  return { confirmed: false };
-}
-
-function confirmedFoodDate(question, answer, timezone, previousSaveAnswer) {
-  const normalizedQuestion = String(question || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  const normalizedAnswer = String(answer || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  const confirmsSaving = /\b(?:guardar|guardo|guardarla|guardemos)\b/.test(normalizedQuestion)
-    && /\b(?:dia|fecha)\b/.test(normalizedQuestion)
-    && (previousSaveAnswer?.confirmed || /^\s*(?:si|confirmo|correcto|de acuerdo|claro|adelante)\b/.test(normalizedAnswer));
-  if (!confirmsSaving) return null;
-  try { return chatFoodDate(question, timezone); } catch { return null; }
+  const timeOnly = /^\s*(?:(?:a\s+las?\s+)|(?:la\s+hora\s+es\s+))?\d{1,2}(?::\d{2})?(?::\d{2})?\s*(?:am|pm|a\s*m|p\s*m|de la manana|de la tarde|de la noche)?\s*$/i.test(text);
+  const mentionsTime = timeOnly || /\b(?:hora|a las?|am|pm|manana|tarde|noche)\b/.test(text);
+  if (negative) return { confirmed: false, declined: true };
+  if (mentionsTime) {
+    if (time && !time.invalid && !time.ambiguous && time.hours.length === 1) {
+      return { confirmed: true, time, lastSecond: /(?:23:59:59|11:59:59\s*(?:p\s*m|pm))/.test(text) };
+    }
+    return { confirmed: false, declined: false };
+  }
+  if (!affirmative) return { confirmed: false, declined: false };
+  const suggestedLastSecond = /sugiero las 11:59:59 p\. m\./i.test(String(question));
+  return { confirmed: true, time: suggestedLastSecond ? { hours: [23], minute: 59 } : null, lastSecond: suggestedLastSecond };
 }
 
 function localDateTimeToUtc(fecha, hour, minute, timezone) {
@@ -288,15 +261,6 @@ function hasGenericEstimateApproval(messages, pendingQuestion, answer) {
     }
   }
   return approved;
-}
-
-async function foodDayChoiceAnswered({ entryId, dbQuery, messages: provided }) {
-  const messages = provided ?? await readFoodConversationMessages({ entryId, dbQuery });
-  return messages.some((message, index) => {
-    if (message.role !== 'assistant' || !isEarlyFoodDayChoiceQuestion(message.content)) return false;
-    const answer = messages.slice(index + 1).find((next) => next.role === 'user');
-    return Boolean(answer && earlyFoodDayChoice(message.content, answer.content));
-  });
 }
 
 async function readDraftFoodItems({ entryId, userId, dbQuery }) {
@@ -620,7 +584,7 @@ function repairEstimatedEnergy(items) {
   });
 }
 
-async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, requestOpenCode }) {
+async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, requestOpenCode, now = () => new Date() }) {
   const suppressNotification = data?.suppressNotification === true;
   if (!/^\d+$/.test(String(userId))) { json(response, 400, { error: 'Cuenta no válida.' }); return; }
   let entry;
@@ -651,14 +615,7 @@ SELECT JSON_OBJECT('entryId',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d'
     if (initial.timezone) entry.timezone = initial.timezone;
     const existingDraftDate = initial.draftDate;
     const appended = initial.prior;
-    const requestedChatDate = chatFoodDate(entry.descripcion, entry.timezone);
-    if (requestedChatDate) {
-      entry.fecha = requestedChatDate;
-      if (existingDraftDate && existingDraftDate !== requestedChatDate) {
-        await dbQuery(`UPDATE registros_comidas SET fecha_consumo=${textSql(requestedChatDate)},registro_comida_destino_id=NULL,pregunta_pendiente=NULL WHERE usuario_id=${userId} AND request_id=${textSql(entry.requestId)} AND estado='borrador_chat';`);
-        entry.targetEntryId = null;
-      }
-    } else if (existingDraftDate) entry.fecha = existingDraftDate;
+    if (existingDraftDate) entry.fecha = existingDraftDate;
     if (appended) {
       const prior = JSON.parse(appended);
       await progressRecorder.flush();
@@ -693,41 +650,58 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
         await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'assistant', content: saved.question });
       }
     }
-    const [pendingFoodItems] = await Promise.all([
-      saved.question ? readDraftFoodItems({ entryId, userId, dbQuery }) : [],
-      saveFoodInteraction({ dbQuery, textSql, entryId, role: 'user', content: entry.descripcion }),
-    ]);
+    await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'user', content: entry.descripcion });
+    const localNow = localNutritionDateTime(entry.timezone, now());
+    const localClockMinutes = localNow.minutes;
+    const asksSelectedDateConfirmation = isSelectedNutritionDateQuestion(saved.question);
+    const selectedDateAnswer = asksSelectedDateConfirmation ? selectedNutritionDateAnswer(saved.question, entry.descripcion) : null;
+    const correctionIntent = /\b(corrige|corregir|actualiza|actualizar|reemplaza|reemplazar|cambia|cambiar)\b/i.test(entry.descripcion)
+      || /\b(?:complet(?:a|ar|en)|recalcul(?:a|ar|en))\b.{0,60}\bmacros?\b|\bmacros?\b.{0,60}\b(?:faltantes?|incompletos?|recalcular)\b/i.test(entry.descripcion);
+    const returnDayClarification = async (question) => {
+      await dbQuery(`UPDATE registros_comidas SET estado='borrador_chat',pregunta_pendiente=${textSql(question)} WHERE id=${entryId} AND usuario_id=${userId} AND estado='borrador_chat';`);
+      await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'assistant', content: question });
+      await dbQuery(`${resolveNotificationsSql({ userId, category: 'comida', textSql })}${suppressNotification ? '' : `;${notificationInsertSql({ userId, category: 'comida', state: 'requiere_respuesta', title: 'Comida: confirma el día seleccionado', message: question, referenceId: entryId, textSql })}`};`);
+      const messages = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`);
+      json(response, 200, { state: 'requiere_aclaracion', entryId, requestId: entry.requestId, targetEntryId: entry.targetEntryId, question, messages: messages ? messages.split(/\r?\n/).map((row) => JSON.parse(row)) : [], message: question });
+    };
+    if (asksSelectedDateConfirmation && !selectedDateAnswer?.confirmed) {
+      if (selectedDateAnswer?.declined) {
+        await dbQuery(`DELETE FROM registros_comidas WHERE id=${entryId} AND usuario_id=${userId} AND estado='borrador_chat';`);
+        await progressRecorder.flush();
+        json(response, 200, { state: 'cancelado', entryId, requestId: entry.requestId, message: 'Registro cancelado; no se guardó la comida.' });
+        return;
+      }
+      await returnDayClarification(saved.question);
+      return;
+    }
+    if (needsSelectedNutritionDateConfirmation(entry.fecha, localNow.date, localClockMinutes)
+      && !entry.targetEntryId && !saved.targetEntryId && !correctionIntent) {
+      const selectedDateLabel = new Intl.DateTimeFormat('es-MX', { timeZone: 'UTC', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(`${entry.fecha}T12:00:00Z`));
+      const currentDateLabel = new Intl.DateTimeFormat('es-MX', { timeZone: entry.timezone, day: 'numeric', month: 'long', year: 'numeric' }).format(localNow.now);
+      const currentTimeLabel = new Intl.DateTimeFormat('es-MX', { timeZone: entry.timezone, hour: 'numeric', minute: '2-digit' }).format(localNow.now);
+      const suggestion = entry.fecha === previousDate(localNow.date)
+        ? ' Para agregarla al balance de ese día, sugiero las 11:59:59 p. m.; confirma o indica otra hora. La fecha seleccionada determina dónde se suman los macros.'
+        : ' Confirma para agregarla y sumar sus macros al balance del día seleccionado; puedes indicar otra hora.';
+      const question = `Ahora son las ${currentTimeLabel} del ${currentDateLabel} y está seleccionado el día ${selectedDateLabel}. ¿Confirmas registrar esta comida en el día nutricional seleccionado (${entry.fecha})?${suggestion}`;
+      await returnDayClarification(question);
+      return;
+    }
+    const pendingFoodItems = saved.question ? await readDraftFoodItems({ entryId, userId, dbQuery }) : [];
     let conversationMessages;
     const readConversation = () => conversationMessages ??= readFoodConversationMessages({ entryId, dbQuery });
     const genericEstimateApproved = hasGenericEstimateApproval(await readConversation(), saved.question, entry.descripcion);
     const asksTimeChoice = /Hay varias comidas a esa hora|¿Te refieres a las .*a\. m\. o p\. m\./i.test(saved.question || '');
-    const asksDayChoice = isEarlyFoodDayChoiceQuestion(saved.question);
-    const asksPreviousDayConfirmation = /¿La guardo en el día nutricional anterior .*11:59:59 p\. m\./i.test(saved.question || '');
-    const priorUserText = asksTimeChoice || asksDayChoice || asksPreviousDayConfirmation ? (await readConversation()).filter((message) => message.role === 'user').map((message) => message.content).join('\n') : '';
+    const priorUserText = asksTimeChoice || asksSelectedDateConfirmation ? (await readConversation()).filter((message) => message.role === 'user').map((message) => message.content).join('\n') : '';
     const parsedFoodReference = parseFoodReferenceTime(entry.descripcion) || parseFoodReferenceTime(saved.description);
     const foodReference = parsedFoodReference?.time && !parsedFoodReference.time.invalid ? parsedFoodReference : null;
     const requestedTime = parseFoodTime(foodReference?.withoutReferenceTime || entry.descripcion) || (priorUserText ? parseFoodTime(priorUserText) : null);
-    const correctionIntent = /\b(corrige|corregir|actualiza|actualizar|reemplaza|reemplazar|cambia|cambiar)\b/i.test(entry.descripcion)
-      || /\b(?:complet(?:a|ar|en)|recalcul(?:a|ar|en))\b.{0,60}\bmacros?\b|\bmacros?\b.{0,60}\b(?:faltantes?|incompletos?|recalcular)\b/i.test(entry.descripcion);
     const asksAddition = /\b(agrega|agregar|añade|añadir|incorpora|incorporar)\b/i.test(entry.descripcion);
     const reuseAsNewMeal = Boolean(foodReference) && !correctionIntent && !asksAddition;
-    const dayChoice = asksDayChoice ? earlyFoodDayChoice(saved.question, entry.descripcion) : null;
-    const previousSaveAnswer = asksPreviousDayConfirmation ? previousDaySaveAnswer(saved.question, entry.descripcion) : null;
-    const confirmedDate = confirmedFoodDate(saved.question, entry.descripcion, entry.timezone, previousSaveAnswer);
-    if (confirmedDate && confirmedDate !== entry.fecha) {
-      await dbQuery(`UPDATE registros_comidas SET fecha_consumo=${textSql(confirmedDate)},registro_comida_destino_id=NULL WHERE id=${entryId} AND usuario_id=${userId} AND estado='borrador_chat';`);
-      entry.fecha = confirmedDate;
-      entry.targetEntryId = null;
-    }
-    let modelDescription = asksPreviousDayConfirmation && previousSaveAnswer?.confirmed ? saved.description : entry.descripcion;
+    let modelDescription = asksSelectedDateConfirmation && selectedDateAnswer?.confirmed ? saved.description : entry.descripcion;
     const conversation = await readFoodConversationText({ entryId, dbQuery, fallback: '', excludeLatestUser: true, messages: await readConversation() });
-    const localClock = Object.fromEntries(new Intl.DateTimeFormat('en-US', {
-      timeZone: entry.timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit',
-    }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
-    const localClockMinutes = Number(localClock.hour) * 60 + Number(localClock.minute);
     const fastPathAllowed = !saved.question && !conversation && !genericEstimateApproved && !reuseAsNewMeal
       && !correctionIntent && !asksAddition && entry.targetEntryId == null && !requestedTime && !foodReference
-      && (requestedChatDate || !isEarlyNutritionHour(localClockMinutes));
+      && !isEarlyNutritionHour(localClockMinutes);
     const directFastPath = fastPathAllowed
       ? parseDeclaredFoodShortcut(modelDescription) || await knownFoodsShortcut({ description: modelDescription, userId, dbQuery, textSql })
       : null;
@@ -758,36 +732,6 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     const mealsForModel = needsFullMeals ? matchedMeals : matchedMeals.map((meal) => ({
       ...meal, items: meal.items.map(({ targetItemId, name, quantity, quantityGrams }) => ({ targetItemId, name, quantity, quantityGrams })),
     }));
-    const statedTimeMinutes = requestedTime && !requestedTime.invalid && requestedTime.hours.length === 1
-      ? requestedTime.hours[0] * 60 + requestedTime.minute : null;
-    const dayChoiceAnswered = !requestedChatDate && (isEarlyNutritionHour(localClockMinutes) || isEarlyNutritionHour(statedTimeMinutes))
-      ? await foodDayChoiceAnswered({ messages: await readConversation() }) : false;
-    const needsNutritionDayChoice = !requestedChatDate && !activeTarget && !correctionIntent && !dayChoiceAnswered
-      && (isEarlyNutritionHour(localClockMinutes) || isEarlyNutritionHour(statedTimeMinutes));
-    const returnDayClarification = async (question) => {
-      await dbQuery(`UPDATE registros_comidas SET estado='borrador_chat',pregunta_pendiente=${textSql(question)} WHERE id=${entryId} AND usuario_id=${userId} AND estado='borrador_chat';`);
-      await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'assistant', content: question });
-      await dbQuery(`${resolveNotificationsSql({ userId, category: 'comida', textSql })}${suppressNotification ? '' : `;${notificationInsertSql({ userId, category: 'comida', state: 'requiere_respuesta', title: 'Comida: elige el día nutricional', message: question, referenceId: entryId, textSql })}`};`);
-      const messages = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`);
-      json(response, 200, { state: 'requiere_aclaracion', entryId, requestId: entry.requestId, targetEntryId: entry.targetEntryId, question, messages: messages ? messages.split(/\r?\n/).map((row) => JSON.parse(row)) : [], message: question });
-    };
-    if (asksDayChoice && dayChoice === 'anterior') {
-      await returnDayClarification(`¿La guardo en el día nutricional anterior (${previousDate(entry.fecha)})? Sus macros se sumarán a esa fecha. Sugiero dejarla a las 11:59:59 p. m. como hora visible. Confirma o indica otra hora.`);
-      return;
-    }
-    if (asksDayChoice && !dayChoice) {
-      await returnDayClarification(saved.question);
-      return;
-    }
-    if (asksPreviousDayConfirmation && !previousSaveAnswer?.confirmed) {
-      await returnDayClarification(saved.question);
-      return;
-    }
-    if (needsNutritionDayChoice && !asksDayChoice && !asksPreviousDayConfirmation) {
-      const question = `¿A qué día nutricional asigno esta comida?\n• Hoy: ${entry.fecha}\n• Día anterior: ${previousDate(entry.fecha)}\n\nElige “hoy” o “día anterior”. Los macros se sumarán a la fecha que selecciones.`;
-      await returnDayClarification(question);
-      return;
-    }
     const parseReply = (responseParts) => {
       try { return normalizeFoodReply(parseFoodReply(responseParts)); }
       catch (error) { if (error.code === 'FOOD_IDENTITY_REFUSAL') throw error; return null; }
@@ -968,8 +912,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     if (answeredPendingQuantity && isQuantityQuestion(clarification) && items.length && items.every((item) => item.quantityGrams != null)) clarification = null;
     const createsNew = result.action === 'new';
     let effectiveTime = requestedTime && !requestedTime.invalid && (!activeTarget || createsNew) ? requestedTime : null;
-    if (asksDayChoice && dayChoice === 'anterior') effectiveTime = requestedTime;
-    if (asksPreviousDayConfirmation && previousSaveAnswer?.confirmed) effectiveTime = previousSaveAnswer.time;
+    if (asksSelectedDateConfirmation && selectedDateAnswer?.confirmed && selectedDateAnswer.time) effectiveTime = selectedDateAnswer.time;
     let timeClarification = requestedTime?.invalid ? 'No pude interpretar la hora. Indícala como 2:02 p. m. o 14:02.' : null;
     if (!activeTarget && requestedTime?.ambiguous && matchedMeals.length !== 1) {
       const label = `${requestedTime.hours[0] % 12 || 12}${requestedTime.precision === 'minute' ? `:${String(requestedTime.minute).padStart(2, '0')}` : ''}`;
@@ -1032,25 +975,18 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     } else if (items.some((item) => item.targetItemId != null)) {
       clarification = 'No pude vincular la corrección a una comida activa. Vuelve a indicar cuál registro quieres ajustar.';
     }
-    if ((asksDayChoice && dayChoice === 'anterior') || (asksPreviousDayConfirmation && previousSaveAnswer?.confirmed)) {
+    if (asksSelectedDateConfirmation && selectedDateAnswer?.confirmed) {
       appendTargetId = null;
       updateTargetId = null;
     }
     traceFoodSession(trace, 'food_destination_resolved', { explicitTime: Boolean(requestedTime && !requestedTime.invalid), resumedTarget: Boolean(activeTarget), candidateCount: matchedMeals.length, appended: Boolean(appendTargetId), updated: Boolean(updateTargetId) });
     let createdAt = null;
     let savedDate = entry.fecha;
-    let savedDescription = asksDayChoice || asksPreviousDayConfirmation ? saved.description : entry.descripcion;
-    if (asksPreviousDayConfirmation && previousSaveAnswer?.confirmed) {
-      savedDate = confirmedDate || previousDate(entry.fecha);
-      savedDescription += ' [Se guardó explícitamente en la fecha calendario anterior.]';
-    }
+    let savedDescription = asksSelectedDateConfirmation && selectedDateAnswer?.confirmed ? saved.description : entry.descripcion;
     if (effectiveTime && appendTargetId == null) {
       const hour = effectiveTime.hours.length === 1 ? effectiveTime.hours[0] : null;
-      const usePreviousDayTime = asksPreviousDayConfirmation && previousSaveAnswer?.confirmed;
-      const calendarDate = usePreviousDayTime ? savedDate : entry.fecha;
-      createdAt = usePreviousDayTime
-        ? localDateTimeToUtc(calendarDate, effectiveTime.hours[0], effectiveTime.minute, entry.timezone)?.replace(/:00$/, previousSaveAnswer.lastSecond ? ':59' : ':00')
-        : hour == null ? null : localDateTimeToUtc(calendarDate, hour, effectiveTime.minute, entry.timezone);
+      const calendarDate = entry.fecha;
+      createdAt = hour == null ? null : localDateTimeToUtc(calendarDate, hour, effectiveTime.minute, entry.timezone)?.replace(/:00$/, selectedDateAnswer?.lastSecond ? ':59' : ':00');
       if (!createdAt) clarification = [clarification, 'Esa hora no existe en la fecha seleccionada por el cambio de horario. Confirma una hora válida.'].filter(Boolean).join(' ');
     }
     const itemIssues = items.map(foodItemIssues);
@@ -1207,4 +1143,4 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
   }
 }
 
-module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, localDateTimeToUtc, normalizeFoodReply, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, usedFoodWebFetch, usedFoodWebTools, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, localDateTimeToUtc, needsSelectedNutritionDateConfirmation, normalizeFoodReply, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, selectedNutritionDateAnswer, usedFoodWebFetch, usedFoodWebTools, validateFoodEntry, validFoodItem };

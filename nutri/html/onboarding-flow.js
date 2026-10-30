@@ -2172,6 +2172,16 @@ async function submitFoodMessage(retry = null) {
       feedback.textContent = '';
       resultNotificationHandled = true;
       await notifyResultIfHidden(foodDialog, 'comida', 'requiere_respuesta', 'Comida: falta una aclaración', result.question || result.message, result.entryId);
+    } else if (result.state === 'cancelado') {
+      const selectedDate = foodDate();
+      await loadFoodEntries(selectedDate);
+      foodSessionReady = foodOpenCodeSessionActive = false;
+      foodDialog.close();
+      foodRequestId = createFoodRequestId();
+      foodEntryDate = '';
+      foodTargetEntryId = null;
+      notifyApp(result.message, 'info');
+      resultNotificationHandled = true;
     } else {
       if (result.appended) { await audioReady; playFoodAddedSound(); }
       if (result.fecha && result.fecha !== foodDate()) {
