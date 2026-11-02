@@ -5,10 +5,24 @@ root="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 before=$(git -C "$root" rev-parse HEAD)
 git -C "$root" pull --ff-only
 after=$(git -C "$root" rev-parse HEAD)
+
+mysql_image_version=9.7
+if [ -r /proc/device-tree/model ]; then
+  device_model=$(tr -d '\000' < /proc/device-tree/model 2>/dev/null || true)
+  case "$device_model" in
+    *"Raspberry Pi"*) mysql_image_version=8.4 ;;
+  esac
+fi
+export MYSQL_IMAGE_VERSION="$mysql_image_version"
+
 # MySQL never needs recreation for migrations; Nutri applies them on startup.
 compose_nutri() {
   docker compose --project-directory "$root/nutri" -f "$root/nutri/docker-compose.yml" "$@"
 }
+
+# Refresh the database image and the Node base image before recreating services.
+compose_nutri pull mysql
+compose_nutri build --pull nutri
 
 nutri_container=$(compose_nutri ps --all -q nutri)
 nutri_health=missing

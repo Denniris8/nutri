@@ -9,7 +9,7 @@ RUN apt-get update \
 
 USER opencode
 ENV HOME=/home/opencode PATH=/home/opencode/.opencode/bin:$PATH
-RUN curl -fsSL https://opencode.ai/v2/install | bash -s -- --version 2.1.3 --no-modify-path
+RUN curl -fsSL https://opencode.ai/v2/install | bash -s -- --version 2.2.5 --no-modify-path
 
 EXPOSE 4096
 CMD ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "4096"]

@@ -694,3 +694,7 @@
 - 2026-10-29 14:49 CST — Incrementada la versión PATCH a `0.1.48` antes del commit con la corrección del restablecimiento y el banner informativo de cookies.
 - 2026-10-29 15:22 CST — En Progreso añadidas tendencias SVG independientes para peso, IMC, grasa corporal, músculo esquelético, metabolismo basal, grasa visceral y edad corporal, usando los cinco registros más recientes del endpoint biométrico. Se omiten métricas faltantes, se muestran fecha/unidad/fuente y se agregó cobertura estructural de prueba; no ejecutada.
 - 2026-10-29 15:25 CST — Incrementada la versión PATCH a `0.1.49` antes del commit de las tendencias biométricas.
+- 2026-11-02 11:42 CST — Contenedores: actualizado MySQL a la serie LTS 9.7 y Node.js a la LTS 26; `./pull` descarga MySQL y reconstruye Nutri actualizando la imagen base. No se levantaron contenedores ni se ejecutaron pruebas.
+- 2026-11-02 11:42 CST — Raspberry Pi: `./pull` detecta el modelo del equipo y conserva MySQL 8.4 allí; Node.js permanece en 26. Compose conserva MySQL 9.7 como valor predeterminado fuera de Raspberry Pi. No se levantaron contenedores.
+- 2026-11-02 12:41 CST — OpenCode: actualizada la versión del instalador y la etiqueta de imagen Docker a 2.2.5. No se reconstruyeron ni levantaron contenedores.
+- 2026-11-02 12:43 CST — Incrementada la versión PATCH a `0.1.54` para registrar y confirmar los cambios de imágenes Docker.
