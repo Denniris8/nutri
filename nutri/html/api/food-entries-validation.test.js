@@ -23,6 +23,27 @@ test('normalizes OpenCode estimated status and decimal-comma macros before valid
   assert.deepEqual(foodItemIssues(normalized), []);
 });
 
+test('stores websearch results as estimated and keeps their exact search citation', () => {
+  const [normalized] = normalizeFoodReply({ items: [{
+    name: 'Cooked rice', sourceText: 'Cooked rice, 100 g', macroBasis: 'per_100g', macroStatus: 'declarado', macroSource: 'websearch',
+    sourceName: 'Search result title', sourceUrl: 'https://example.org/rice', sourceQuote: 'Cooked rice: 130 kcal, 2.7 g protein, 28 g carbs, 0.3 g fat per 100 g.',
+    quantityGrams: 100, macros: { energyKcal: 130, proteinG: 2.7, carbohydrateG: 28, fatG: 0.3, fiberG: 0.4 },
+  }] }).items;
+  assert.equal(normalized.macroStatus, 'estimado');
+  assert.equal(normalized.macroSource, 'websearch');
+  assert.equal(normalized.sourceQuote, 'Cooked rice: 130 kcal, 2.7 g protein, 28 g carbs, 0.3 g fat per 100 g.');
+  assert.deepEqual(foodItemIssues(normalized), []);
+});
+
+test('downgrades websearch values without a retained result citation to an estimate', () => {
+  const [normalized] = normalizeFoodReply({ items: [{
+    ...item(), macroStatus: 'declarado', macroSource: 'websearch',
+  }] }).items;
+  assert.equal(normalized.macroStatus, 'estimado');
+  assert.equal(normalized.macroSource, 'opencode_estimado');
+  assert.equal(normalized.sourceUrl, null);
+});
+
 test('preserves unresolved macros only as an invalid intermediate Open Food Facts candidate', () => {
   const [candidate] = normalizeFoodReply({ items: [{
     name: 'Producto envasado', macroBasis: 'per_100g', macroStatus: 'pendiente', macroSource: 'pendiente',

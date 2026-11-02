@@ -44,13 +44,14 @@ const post = (url, data, headers = {}) => fetch(url, {
 
 test('progress nutrition endpoint returns account-scoped nutrition, body, activity and coverage', async () => {
   const queries = [];
-  const nutrition = { days: 7, current: { loggedDays: 1, completeDays: 1, incompleteDays: 0, kcal: 1800, protein: 100, carbs: 200, fat: 60 }, previous: { loggedDays: 0, completeDays: 0, incompleteDays: 0, kcal: null, protein: null, carbs: null, fat: null }, quality: { currentPending: 0, previousPending: 0, macroSources: { items: 1, usda: 1, declared: 0, web: 0, opencode: 0, estimated: 0 } }, goals: null };
+  const nutrition = { days: 7, current: { loggedDays: 1, completeDays: 1, incompleteDays: 0, kcal: 1800, protein: 100, carbs: 200, fat: 60 }, previous: { loggedDays: 0, completeDays: 0, incompleteDays: 0, kcal: null, protein: null, carbs: null, fat: null }, quality: { currentPending: 0, previousPending: 0, macroSources: { items: 1, usda: 1, openfoodfacts: 0, declared: 0, web: 0, websearch: 0, opencode: 0, estimated: 0 } }, goals: null };
   const body = { current: { measurements: 2, firstKg: 80, lastKg: 79 }, previous: { measurements: 0, firstKg: null, lastKg: null } };
   const activity = { current: { stepDays: 1, avgSteps: 8000, trainingSessions: 1, manualSessions: 1, deviceSessions: 0, manualMinutes: 45, deviceMinutes: null, manualKcal: 300, deviceKcal: null }, previous: { stepDays: 0, avgSteps: null, trainingSessions: 0, manualSessions: 0, deviceSessions: 0, manualMinutes: null, deviceMinutes: null, manualKcal: null, deviceKcal: null } };
   await withServer(async (sql) => {
     queries.push(sql);
     if (sql.includes('SELECT s.usuario_id')) return '27';
     if (sql.includes('WITH daily AS')) return [nutrition, body, activity, { current: 1, previous: 0 }].map(JSON.stringify).join('\n');
+    if (sql.includes("JSON_OBJECT('openfoodfacts'")) return JSON.stringify({ openfoodfacts: 0, websearch: 0 });
     throw new Error('unexpected_query');
   }, async (base) => {
     const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
@@ -58,7 +59,7 @@ test('progress nutrition endpoint returns account-scoped nutrition, body, activi
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { nutrition, body, activity, plicometric: { current: 1, previous: 0 } });
   });
-  assert.equal(queries.filter((sql) => !sql.includes('SELECT s.usuario_id') && sql.includes('usuario_id=27')).length, 1);
+  assert.equal(queries.filter((sql) => !sql.includes('SELECT s.usuario_id') && sql.includes('usuario_id=27')).length, 2);
   assert.match(queries.find((sql) => sql.includes('WITH daily AS')), /estado='completado'.{0,120}fecha_consumo/);
 });
 
@@ -195,7 +196,7 @@ test('food save rejects an invalid OpenCode response without exposing it to the 
     assert.equal(result.trace, undefined);
     assert.equal(storedSession, 'ses_private_food');
     assert.equal(sent.route, '/session/ses_private_food/message');
-    assert.deepEqual(sent.body.tools, { websearch: true, webfetch: true });
+    assert.deepEqual(sent.body.tools, { websearch: true });
     assert.equal(typeof firstSent.body.system, 'string');
     assert.match(firstSent.body.system, /Si se excede `\d+`/);
     assert.equal(sent.body.system, undefined);
@@ -580,8 +581,15 @@ test('OpenCode HTTP waits for delayed headers without Undici headers timeout', a
 test('OpenCode message submission, wait, and history share one timeout budget', async (t) => {
   let waitRequests = 0;
   let historyRequests = 0;
+  let sessionPermissions;
   const server = http.createServer((request, response) => {
     if (request.url === '/global/health') { response.writeHead(200).end('{"healthy":true}'); return; }
+    if (request.method === 'PATCH' && request.url === '/api/session/ses_deadline') {
+      let body = '';
+      request.on('data', (chunk) => { body += chunk; });
+      request.on('end', () => { sessionPermissions = JSON.parse(body).permissions; response.writeHead(200).end('{"ok":true}'); });
+      return;
+    }
     if (request.url.endsWith('/prompt')) { setTimeout(() => response.writeHead(200).end('{"id":"user-message"}'), 50); return; }
     if (request.url.endsWith('/wait')) { waitRequests += 1; setTimeout(() => response.writeHead(200).end('{"ok":true}'), 600); return; }
     if (request.url.includes('/message?')) { historyRequests += 1; response.writeHead(200).end('{"data":[]}'); return; }
@@ -598,7 +606,8 @@ test('OpenCode message submission, wait, and history share one timeout budget', 
   delete process.env.OPENCODE_PASSWORD;
   delete process.env.OPENCODE_SERVER_PASSWORD;
   try {
-    await assert.rejects(openCodeRequest('POST', '/session/ses_deadline/message', { parts: [] }, 500));
+    await assert.rejects(openCodeRequest('POST', '/session/ses_deadline/message', { parts: [], tools: { websearch: true } }, 500));
+    assert.deepEqual(sessionPermissions, [{ action: '*', resource: '*', effect: 'deny' }, { action: 'websearch', resource: '*', effect: 'allow' }]);
     assert.equal(waitRequests, 1);
     assert.equal(historyRequests, 0);
   } finally {
@@ -647,11 +656,11 @@ test('OpenCode food sessions are private per authenticated user and reused on re
   const requestOpenCode = async (method, route, body) => {
     const id = route.split('/').at(-1);
     if (method === 'GET') return { status: 200, data: openCodeSessions.get(id) };
-      if (method === 'PATCH') { assert.deepEqual(body.permission, [{ permission: '*', pattern: '*', action: 'deny' }, { permission: 'webfetch', pattern: '*', action: 'allow' }, { permission: 'websearch', pattern: '*', action: 'allow' }]); return { status: 200, data: true }; }
+    if (method === 'PATCH') { assert.deepEqual(body.permission, [{ permission: '*', pattern: '*', action: 'deny' }, { permission: 'websearch', pattern: '*', action: 'allow' }]); return { status: 200, data: true }; }
     if (method === 'DELETE') { openCodeSessions.delete(id); return { status: 200, data: true }; }
     created += 1;
     assert.equal(body.title, 'Registro de comidas');
-    assert.deepEqual(body.permission, [{ permission: '*', pattern: '*', action: 'deny' }, { permission: 'webfetch', pattern: '*', action: 'allow' }, { permission: 'websearch', pattern: '*', action: 'allow' }]);
+    assert.deepEqual(body.permission, [{ permission: '*', pattern: '*', action: 'deny' }, { permission: 'websearch', pattern: '*', action: 'allow' }]);
     const sessionId = `ses_private${created}`;
     openCodeSessions.set(sessionId, { id: sessionId, metadata: body.metadata });
     return { status: 201, data: { id: sessionId } };
@@ -730,6 +739,7 @@ test('food sessions use OpenCode global model defaults instead of Nutri override
   });
   assert.equal(sent[0].body.model, undefined);
   assert.equal(sent[0].body.agent, undefined);
+  assert.deepEqual(sent[0].body.tools, { websearch: true });
   assert.equal(sent[0].timeout, 600000);
 });
 
@@ -767,7 +777,7 @@ test('opening food chat does not create OpenCode sessions before the first messa
     openCodeSessions.set(sessionId, { id: sessionId, metadata: body.metadata });
     return { status: 201, data: { id: sessionId } };
   } });
-  assert.ok(requests.filter((request) => ['POST', 'PATCH'].includes(request.method)).every(({ body }) => ['webfetch', 'websearch'].every((permission) => body.permission.some((rule) => rule.permission === permission && rule.action === 'allow'))));
+  assert.ok(requests.filter((request) => ['POST', 'PATCH'].includes(request.method)).every(({ body }) => body.permission.some((rule) => rule.permission === 'websearch' && rule.action === 'allow') && !body.permission.some((rule) => rule.permission === 'webfetch' && rule.action === 'allow')));
 });
 
 test('food description remains saved when OpenCode is unavailable', async () => {

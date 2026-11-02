@@ -120,7 +120,7 @@ async function lookupOpenFoodFactsProduct(name, options = {}) {
       name: name.trim(), sourceName: 'Open Food Facts (dato colaborativo)',
       sourceUrl: `https://world.openfoodfacts.org/product/${product.code}`,
       sourceQuote: `Valores por 100 g: ${macros.energyKcal} kcal, proteína ${macros.proteinG} g, carbohidratos ${macros.carbohydrateG} g, grasa ${macros.fatG} g${macros.fiberG == null ? '' : `, fibra ${macros.fiberG} g`}.`,
-      macroBasis: 'per_100g', macroStatus: 'declarado', macroSource: 'webfetch', macros,
+      macroBasis: 'per_100g', macroStatus: 'declarado', macroSource: 'openfoodfacts', macros,
     };
     openFoodFactsCache.set(cacheKey, { product: result, expiresAt: Date.now() + 900000 });
     if (openFoodFactsCache.size > 300) openFoodFactsCache.delete(openFoodFactsCache.keys().next().value);
@@ -183,14 +183,13 @@ async function findUsdaFood(name, options = {}) {
       name: name.trim(), sourceName: 'USDA FoodData Central',
       sourceUrl: `https://fdc.nal.usda.gov/food/${encodeURIComponent(food.fdcId)}`,
       sourceQuote: `Valores por 100 g: ${macros.energyKcal} kcal, proteína ${macros.proteinG} g, carbohidratos ${macros.carbohydrateG} g, grasa ${macros.fatG} g${macros.fiberG == null ? '' : `, fibra ${macros.fiberG} g`}.`,
-      macroBasis: 'per_100g', macroStatus: 'declarado', macroSource: 'webfetch', macros,
+      macroBasis: 'per_100g', macroStatus: 'declarado', macroSource: 'usda_fdc', macros,
     }, 900000);
   } catch { if (guarded) breakerRecord('usda', false); return null; }
 }
 
 const foodSessionPermissions = [
   { permission: '*', pattern: '*', action: 'deny' },
-  { permission: 'webfetch', pattern: '*', action: 'allow' },
   { permission: 'websearch', pattern: '*', action: 'allow' },
 ];
 const openCodeErrorCodes = new Set([
@@ -230,6 +229,15 @@ async function requestOpenCodePrompt(service, sessionId, body, timeoutMs) {
   const waitPath = `/api/experimental/session/${encodeURIComponent(sessionId)}/wait`;
   const text = [body.system, ...(body.parts || []).filter((part) => part.type === 'text').map((part) => part.text)]
     .filter(Boolean).join('\n\n');
+  const allowedTools = Object.keys(body.tools || {}).filter((tool) => tool === 'websearch');
+  const permissions = [
+    { action: '*', resource: '*', effect: 'deny' },
+    ...allowedTools.map((tool) => ({ action: tool, resource: '*', effect: 'allow' })),
+  ];
+  const permissionUpdate = await requestBeforeDeadline('PATCH', `/api/session/${encodeURIComponent(sessionId)}`, { permissions });
+  if (permissionUpdate.status < 200 || permissionUpdate.status >= 300) {
+    throw openCodeHttpError(permissionUpdate.status, 'PATCH /api/session/{id}', 'No se pudieron actualizar las herramientas de la sesión de comidas.');
+  }
   const submitted = await requestBeforeDeadline('POST', promptPath, { text });
   if (submitted.status < 200 || submitted.status >= 300) throw openCodeHttpError(submitted.status, `POST ${promptPath}`, 'OpenCode no pudo aceptar el mensaje.');
   const userMessageId = submitted.data?.id;
@@ -245,10 +253,15 @@ async function requestOpenCodePrompt(service, sessionId, body, timeoutMs) {
     userIndex = messages.findIndex((message) => message.id === userMessageId);
     if (userIndex !== -1 || messages.length < limit) break;
   }
-  const reply = userIndex > 0 ? messages.slice(0, userIndex).find((message) => message.type === 'assistant') : null;
+  const turnMessages = userIndex > 0 ? messages.slice(0, userIndex) : [];
+  const reply = turnMessages.find((message) => message.type === 'assistant');
   if (!reply || reply.time?.completed == null) throw Object.assign(new Error('OpenCode no devolvió una respuesta completa.'), { code: 'OPEN_CODE_ERROR' });
   if (reply.error) throw Object.assign(new Error('OpenCode no pudo completar el mensaje.'), { code: 'OPEN_CODE_ERROR' });
-  return { status: 200, data: { info: { id: reply.id }, parts: reply.content || [] } };
+  const parts = reply.content || [];
+  const searchResults = turnMessages.flatMap((message) => message.content || []).filter((part) => part.type === 'tool'
+    && /web[\s_-]?search|search the web/i.test(`${part.tool || ''} ${part.state?.title || ''}`)
+    && !parts.includes(part));
+  return { status: 200, data: { info: { id: reply.id }, parts: [...parts, ...searchResults] } };
 }
 
 async function recordFoodError({ dbQuery, textSql, userId, trace, stage, error, httpStatus = null, action = 'POST /api/food-entries', route = '/api/food-entries', method = 'POST' }) {
@@ -498,7 +511,7 @@ async function requestFoodDescription({ sessionId, description, initialDescripti
   const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
   const startedAt = Date.now();
   const requestContext = { description, ...(initialDescription ? { initialDescription } : {}), ...(conversation ? { conversation } : {}), ...(diaNutricional ? { diaNutricional } : {}), ...(genericEstimateApproved ? { genericEstimateApproved: true } : {}), ...(referenciaComidaSolicitada ? { referenciaComidaSolicitada: true } : {}), ...(openFoodFactsFirstPass ? { openFoodFactsFirstPass: true } : {}), ...(retryFeedback ? { correccionFormato: retryFeedback } : {}), ...(comidasDisponibles.length ? { comidasDisponibles } : {}), ...(comidasReferencia.length ? { comidasReferencia } : {}), ...(openFoodFactsCandidates.length ? { candidatosOpenFoodFacts: openFoodFactsCandidates } : {}), ...(alimentosPendientes.length ? { alimentosPendientes } : {}), ...(continuacionRegistro ? { continuacionRegistro: true } : {}) };
-  const tools = genericEstimateApproved || referenciaComidaSolicitada || !allowWebSearch ? {} : { websearch: true, webfetch: true };
+  const tools = genericEstimateApproved || referenciaComidaSolicitada || !allowWebSearch ? {} : { websearch: true };
   const remaining = deadline == null ? config.requestTimeoutMs : Math.min(config.requestTimeoutMs, deadline - Date.now());
   if (remaining <= 0) throw Object.assign(new Error('OpenCode no respondió dentro del tiempo límite.'), { code: 'TIMEOUT' });
   traceFoodSession(trace, 'message_sent', { stage: 'separar_alimentos', session: shortSessionId(sessionId), enabledTools: Object.keys(tools) });

@@ -18,7 +18,7 @@ function reportFoodProgress(userId, requestId, event, details = {}, recordEvent)
     session_resolution_started: 'Preparando sesión de análisis…', session_ready: 'Separando alimentos y cantidades…',
     message_sent: 'Analizando los alimentos…', message_received: 'Respuesta recibida; revisando alimentos…',
     openfoodfacts_lookup_started: 'Consultando Open Food Facts…', usda_lookup_started: 'Consultando USDA…',
-    known_foods_reused: 'Reutilizando alimentos ya registrados…', web_resolution_started: 'Buscando y verificando una fuente…', reply_validation_retry: 'Validando macros; reintentando análisis…',
+    known_foods_reused: 'Reutilizando alimentos ya registrados…', web_resolution_started: 'Buscando resultados web…', reply_validation_retry: 'Validando macros; reintentando análisis…',
     reply_validated: 'Macros validados; guardando comida…', items_saved: 'Alimentos guardados; verificando registro…',
     persistence_verified: 'Registro verificado.', save_failed: 'El análisis se detuvo; se conserva el borrador.',
   };
@@ -119,8 +119,8 @@ function formatFoodTime(hour, minute) {
 }
 
 function isEarlyNutritionHour(minutes) { return Number.isInteger(minutes) && minutes >= 0 && minutes < 240; }
-function needsSelectedNutritionDateConfirmation(selectedDate, localDate, minutes) {
-  return isEarlyNutritionHour(minutes) && selectedDate !== localDate;
+function needsSelectedNutritionDateConfirmation(selectedDate, localDate, minutes, confirmed = false) {
+  return !confirmed && isEarlyNutritionHour(minutes) && selectedDate !== localDate;
 }
 function numberVisibleFoodMeals(records) {
   return records.map((record, index) => ({ ...record, numeroComida: index + 1 }));
@@ -140,7 +140,7 @@ function localNutritionDateTime(timezone, now = new Date()) {
 }
 
 function isSelectedNutritionDateQuestion(question) {
-  return /^¿Confirmas registrar esta comida en el día nutricional seleccionado \(\d{4}-\d{2}-\d{2}\)\?/i.test(String(question || ''));
+  return /(?:^|\s)¿Confirmas registrar esta comida en el día nutricional seleccionado \(\d{4}-\d{2}-\d{2}\)\?/i.test(String(question || ''));
 }
 
 function selectedNutritionDateAnswer(question, answer) {
@@ -321,7 +321,7 @@ function normalizeFoodReply(reply) {
   if (!reply || typeof reply !== 'object' || !Array.isArray(reply.items)) return reply;
   const bases = { per_portion: 'per_portion', portion: 'per_portion', porcion: 'per_portion', per_100g: 'per_100g', per100g: 'per_100g', '100g': 'per_100g' };
   const statuses = { pendiente: 'pendiente', pending: 'pendiente', estimado: 'estimado', estimated: 'estimado', opencode_estimado: 'estimado', opencode_estimated: 'estimado', declared: 'declarado', declarado: 'declarado', declarado_usuario: 'declarado', verified: 'declarado', verificado: 'declarado' };
-  const sources = { pendiente: 'pendiente', pending: 'pendiente', webfetch: 'webfetch', web: 'webfetch', internet: 'webfetch', usda: 'webfetch', declarado_usuario: 'declarado_usuario', declared: 'declarado_usuario', user: 'declarado_usuario', opencode_estimado: 'opencode_estimado', estimated: 'opencode_estimado' };
+  const sources = { pendiente: 'pendiente', pending: 'pendiente', usda_fdc: 'usda_fdc', usda: 'usda_fdc', openfoodfacts: 'openfoodfacts', websearch: 'websearch', webfetch: 'websearch', web: 'websearch', internet: 'websearch', declarado_usuario: 'declarado_usuario', declared: 'declarado_usuario', user: 'declarado_usuario', opencode_estimado: 'opencode_estimado', estimated: 'opencode_estimado' };
   const actions = { new: 'new', nueva: 'new', append: 'append', agregar: 'append', anexar: 'append', append_to_existing: 'append', add_to_existing: 'append', update: 'update', actualizar: 'update', corregir: 'update', correction: 'update' };
   const action = actions[String(reply.action || '').toLowerCase()] || null;
   const target = reply.targetEntryId ?? reply.target_entry_id;
@@ -339,19 +339,19 @@ function normalizeFoodReply(reply) {
     const requestedSource = sources[String(item?.macroSource || item?.source || '').toLowerCase()];
     const webSourceValid = typeof sourceName === 'string' && sourceName.trim() && typeof sourceQuote === 'string' && sourceQuote.trim()
       && typeof sourceUrl === 'string' && sourceUrl.length <= 1000 && (() => { try { const url = new URL(sourceUrl); return url.protocol === 'https:' && !url.username && !url.password; } catch { return false; } })();
-    const macroSource = requestedSource === 'webfetch' && !webSourceValid ? 'opencode_estimado'
-      : requestedSource || (sourceUrl && webSourceValid ? 'webfetch' : macroStatus === 'declarado' ? 'declarado_usuario' : 'opencode_estimado');
+    const macroSource = ['usda_fdc', 'openfoodfacts', 'webfetch', 'websearch'].includes(requestedSource) && !webSourceValid ? 'opencode_estimado'
+      : requestedSource || (sourceUrl && webSourceValid ? 'websearch' : macroStatus === 'declarado' ? 'declarado_usuario' : 'opencode_estimado');
     return {
       ...item,
       ...((item?.targetItemId ?? item?.target_item_id) == null ? {} : { targetItemId: String(item.targetItemId ?? item.target_item_id) }),
       sourceText: item?.sourceText || item?.name,
       quantityGrams,
       macroBasis: bases[String(item?.macroBasis || '').toLowerCase()] || 'per_portion',
-      macroStatus: macroSource === 'opencode_estimado' ? 'estimado' : macroStatus,
+      macroStatus: ['opencode_estimado', 'websearch'].includes(macroSource) ? 'estimado' : macroStatus,
       macroSource,
-      sourceName: macroSource === 'webfetch' ? sourceName : null,
-      sourceUrl: macroSource === 'webfetch' ? sourceUrl : null,
-      sourceQuote: macroSource === 'webfetch' ? sourceQuote : null,
+      sourceName: ['usda_fdc', 'openfoodfacts', 'webfetch', 'websearch'].includes(macroSource) ? sourceName : null,
+      sourceUrl: ['usda_fdc', 'openfoodfacts', 'webfetch', 'websearch'].includes(macroSource) ? sourceUrl : null,
+      sourceQuote: ['usda_fdc', 'openfoodfacts', 'webfetch', 'websearch'].includes(macroSource) ? sourceQuote : null,
       macros: item?.macros && Object.fromEntries(['energyKcal', 'proteinG', 'carbohydrateG', 'fatG', 'fiberG'].map((key) => [key, number(item.macros[key])])),
     };
   }), action, targetEntryId: target == null ? null : String(target) };
@@ -363,7 +363,7 @@ function foodItemIssues(item) {
   if (typeof item?.sourceText !== 'string' || !item.sourceText.trim() || item.sourceText.length > 500) issues.push('sourceText');
   if (!['per_100g', 'per_portion'].includes(item?.macroBasis)) issues.push('macroBasis');
   if (!['estimado', 'declarado'].includes(item?.macroStatus)) issues.push('macroStatus');
-  if (!['declarado_usuario', 'webfetch', 'opencode_estimado'].includes(item?.macroSource)) issues.push('macroSource');
+  if (!['declarado_usuario', 'usda_fdc', 'openfoodfacts', 'webfetch', 'websearch', 'opencode_estimado'].includes(item?.macroSource)) issues.push('macroSource');
   const macros = item?.macros;
   if (!macros || !['energyKcal', 'proteinG', 'carbohydrateG', 'fatG'].every((key) => Number.isFinite(macros[key]) && macros[key] >= 0 && macros[key] <= 99999999.99)
       || macros.fiberG != null && (!Number.isFinite(macros.fiberG) || macros.fiberG < 0 || macros.fiberG > 99999999.99)) issues.push('macros');
@@ -383,7 +383,7 @@ function foodItemIssues(item) {
     if (Math.abs(energy - expected) > Math.max(25, energy * 0.25, macros.fiberG * factor * 2)) issues.push('energy_4_4_9_mismatch');
   }
   if (item?.targetItemId != null && !/^[1-9]\d*$/.test(String(item.targetItemId))) issues.push('targetItemId');
-  if (item?.macroSource === 'webfetch') {
+  if (['usda_fdc', 'openfoodfacts', 'webfetch', 'websearch'].includes(item?.macroSource)) {
     if (typeof item.sourceName !== 'string' || !item.sourceName.trim() || item.sourceName.length > 255) issues.push('sourceName');
     if (typeof item.sourceQuote !== 'string' || !item.sourceQuote.trim() || item.sourceQuote.length > 1200) issues.push('sourceQuote');
     try { const url = new URL(item.sourceUrl); if (url.protocol !== 'https:' || url.username || url.password || item.sourceUrl.length > 1000) issues.push('sourceUrl'); }
@@ -429,14 +429,9 @@ function parseDeclaredFoodShortcut(description) {
   return items.every(Boolean) ? { action: 'new', targetEntryId: null, items, clarificationQuestion: null } : null;
 }
 
-function usedFoodWebTools(parts) {
+function usedFoodWebSearch(parts) {
   return Array.isArray(parts) && parts.some((part) => part?.type === 'tool'
-    && /web[\s_-]?(?:search|fetch)|search the web|fetch webpage/i.test(`${part.tool || ''} ${part.state?.title || ''}`));
-}
-
-function usedFoodWebFetch(parts) {
-  return Array.isArray(parts) && parts.some((part) => part?.type === 'tool'
-    && /web[\s_-]?fetch|fetch webpage/i.test(`${part.tool || ''} ${part.state?.title || ''}`));
+    && /web[\s_-]?search|search the web/i.test(`${part.tool || ''} ${part.state?.title || ''}`));
 }
 
 function explicitFoodMasses(description) {
@@ -515,7 +510,7 @@ function pendingFoodItemSql(entryId, item, textSql) {
   const macros = item.macros;
   const value = (field) => field == null ? 'NULL' : textSql(field);
   const energy449 = 4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG;
-  const method = item.macroSource === 'webfetch' ? 'webfetch' : item.macroSource === 'opencode_estimado' ? 'opencode_estimado' : 'declarado_usuario';
+  const method = item.macroSource === 'usda_fdc' ? 'usda' : ['openfoodfacts', 'webfetch', 'websearch'].includes(item.macroSource) ? item.macroSource : item.macroSource === 'opencode_estimado' ? 'opencode_estimado' : 'declarado_usuario';
   const fields = [entryId, textSql(item.sourceText), textSql(item.name.trim()), value(item.sourceName), value(item.sourceUrl), value(item.sourceQuote), value(item.quantityText), item.quantityGrams == null ? 'NULL' : item.quantityGrams, textSql(item.macroSource), textSql(method), textSql(item.macroBasis), textSql(item.macroStatus), macros.energyKcal, energy449, macros.proteinG, macros.carbohydrateG, macros.fatG, macros.fiberG == null ? 'NULL' : macros.fiberG];
   return `INSERT INTO registros_comida_items(registro_comida_id,fragmento_original,nombre_alimento,nombre_fuente_web,url_fuente_web,cita_fuente,cantidad_texto,cantidad_g,fuente_macros,metodo_energia,base_macros,estado_macros,energia_kcal,energia_449_kcal,proteina_g,carbohidratos_g,grasa_g,fibra_g) VALUES (${fields.join(',')})`;
 }
@@ -532,7 +527,7 @@ async function readKnownFoods({ userId, names, dbQuery, textSql }) {
     try { food = JSON.parse(row); } catch { continue; }
     const key = foodKey(food.name);
     const grams = Number(food.grams);
-    if (known.has(key) || !['declarado_usuario', 'webfetch', 'opencode_estimado'].includes(food.macroSource) || !Number.isFinite(grams) || grams <= 0) continue;
+    if (known.has(key) || !['declarado_usuario', 'usda_fdc', 'openfoodfacts', 'webfetch', 'websearch', 'opencode_estimado'].includes(food.macroSource) || !Number.isFinite(grams) || grams <= 0) continue;
     const value = (field) => field == null ? null : Number(field);
     known.set(key, {
       name: food.name, grams, macroStatus: food.macroStatus, macroSource: food.macroSource,
@@ -677,7 +672,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       await returnDayClarification(saved.question);
       return;
     }
-    if (needsSelectedNutritionDateConfirmation(entry.fecha, localNow.date, localClockMinutes)
+    if (needsSelectedNutritionDateConfirmation(entry.fecha, localNow.date, localClockMinutes, asksSelectedDateConfirmation && selectedDateAnswer?.confirmed)
       && !entry.targetEntryId && !saved.targetEntryId && !correctionIntent) {
       const selectedDateLabel = new Intl.DateTimeFormat('es-MX', { timeZone: 'UTC', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(`${entry.fecha}T12:00:00Z`));
       const currentDateLabel = new Intl.DateTimeFormat('es-MX', { timeZone: entry.timezone, day: 'numeric', month: 'long', year: 'numeric' }).format(localNow.now);
@@ -750,7 +745,6 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     let analysisDeadline;
     let result = directReply;
     let webSearchUsed = false;
-    let webFetchUsed = false;
     const requestFoodWithSessionRecovery = async (args) => {
       const send = (options = {}) => withFoodSessionLock(userId, () => requestFoodDescription({
         ...args, ...options, sessionId, deadline: analysisDeadline, trace, requestOpenCode,
@@ -793,8 +787,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       analysisDeadline = Date.now() + maxFoodResponseWaitMs;
       requestArgs = { sessionId, description: modelDescription, initialDescription: saved.description, genericEstimateApproved, allowWebSearch: Boolean(saved.question || correctionIntent || activeTarget), openFoodFactsFirstPass, ...(reuseAsNewMeal ? { referenciaComidaSolicitada: true } : {}), ...(!session.reused && conversation ? { conversation } : {}), comidasDisponibles: mealsForModel, ...(reuseAsNewMeal && referenceMeals.length ? { comidasReferencia: referenceMeals } : {}), alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
       let parts = await requestFoodWithSessionRecovery(requestArgs);
-      webSearchUsed = usedFoodWebTools(parts);
-      webFetchUsed = usedFoodWebFetch(parts);
+      webSearchUsed = usedFoodWebSearch(parts);
       stage = 'parse';
       try { result = parseReply(parts); }
       catch (error) {
@@ -807,8 +800,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
         sessionId = renewed.sessionId;
         if (conversation) requestArgs.conversation = conversation;
         parts = await requestFoodWithSessionRecovery({ ...requestArgs, description: modelDescription });
-        webSearchUsed ||= usedFoodWebTools(parts);
-        webFetchUsed ||= usedFoodWebFetch(parts);
+        webSearchUsed ||= usedFoodWebSearch(parts);
         result = parseReply(parts);
       }
     }
@@ -851,10 +843,9 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
         requestArgs.openFoodFactsCandidates = openFoodFactsProducts;
         traceFoodSession(trace, 'web_resolution_started', { unresolvedCount: result.items.filter(needsSource).length });
         parts = await requestFoodWithSessionRecovery({
-          ...requestArgs, retryFeedback: 'Primero se consultó Open Food Facts. Usa sus candidatos solo si el producto coincide exactamente; conserva esos macros y su procedencia sin sustituirlos. Usa websearch/webfetch únicamente para los alimentos que no tengan candidato coincidente. No inventes ni cambies productos.',
+          ...requestArgs, retryFeedback: 'Primero se consultaron Open Food Facts y USDA. Usa sus candidatos solo si el producto/alimento coincide exactamente; conserva esos macros y su procedencia sin sustituirlos. Usa únicamente websearch para los alimentos que no tengan candidato coincidente. Si el snippet no contiene todos los macros, solicita permiso para estimarlos; no simules haber abierto la página ni inventes citas.',
         });
-        webSearchUsed ||= usedFoodWebTools(parts);
-        webFetchUsed ||= usedFoodWebFetch(parts);
+        webSearchUsed ||= usedFoodWebSearch(parts);
         stage = 'parse';
         result = parseReply(parts);
       }
@@ -877,13 +868,12 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     const retryLimit = macroIssues() ? 3 : 1;
     for (let attempt = 1; attempt <= retryLimit && (replyIssues.length || (!items.length && !result?.clarificationQuestion)); attempt++) {
       traceFoodSession(trace, 'reply_validation_retry', { issueCount: replyIssues.length || 1, attempt });
-      const retryAllowsWebSearch = Boolean(requestArgs.allowWebSearch && !webFetchUsed && (!webSearchUsed || attempt === 1));
+      const retryAllowsWebSearch = Boolean(requestArgs.allowWebSearch && (!webSearchUsed || attempt === 1));
       parts = await requestFoodWithSessionRecovery({
         ...requestArgs, description: modelDescription, allowWebSearch: retryAllowsWebSearch,
         retryFeedback: `CORRECCIÓN ${attempt}/${retryLimit}: corrige la respuesta completa en JSON. Problemas: ${replyIssues.length ? replyIssues.join(', ') : 'JSON ausente o ilegible'}. Conserva alimentos, cantidades y aclaraciones confirmados en la sesión y el contexto; no repitas preguntas contestadas. Devuelve todos los campos requeridos. ${macroIssues() ? 'Debes resolver los macros obligatorios de todos los alimentos solicitados: si no hay fuente exacta utilizable, usa valores típicos razonables y marca macroSource:"opencode_estimado" y macroStatus:"estimado"; no dejes macros obligatorios nulos.' : 'No inventes información y pregunta solo si falta un dato necesario.'} Nunca inventes cantidades. Para masa usa quantityGrams; para volumen conserva quantityText y quantityGrams:null, sin convertir volumen a masa por suposición.`,
       });
-      if (retryAllowsWebSearch) webSearchUsed ||= usedFoodWebTools(parts);
-      if (retryAllowsWebSearch) webFetchUsed ||= usedFoodWebFetch(parts);
+      if (retryAllowsWebSearch) webSearchUsed ||= usedFoodWebSearch(parts);
       stage = 'parse';
       result = parseReply(parts);
       if (reuseAsNewMeal && result) { result.action = 'new'; result.targetEntryId = null; }
@@ -1065,11 +1055,12 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       const quantity = String(item.quantityGrams);
       const energy449 = 4 * m.proteinG + 4 * m.carbohydrateG + 9 * m.fatG;
       const source = item.macroSource;
-      const method = item.macroSource === 'webfetch' ? 'webfetch' : item.macroSource === 'opencode_estimado' ? 'opencode_estimado' : 'declarado_usuario';
+      const method = item.macroSource === 'usda_fdc' ? 'usda' : ['openfoodfacts', 'webfetch', 'websearch'].includes(item.macroSource) ? item.macroSource : item.macroSource === 'opencode_estimado' ? 'opencode_estimado' : 'declarado_usuario';
       const quantityText = item.quantityText || `${item.quantityGrams} g`;
-      const webName = item.macroSource === 'webfetch' ? textSql(item.sourceName) : 'NULL';
-      const webUrl = item.macroSource === 'webfetch' ? textSql(item.sourceUrl) : 'NULL';
-      const webQuote = item.macroSource === 'webfetch' ? textSql(item.sourceQuote) : 'NULL';
+      const hasSource = ['usda_fdc', 'openfoodfacts', 'webfetch', 'websearch'].includes(item.macroSource);
+      const webName = hasSource ? textSql(item.sourceName) : 'NULL';
+      const webUrl = hasSource ? textSql(item.sourceUrl) : 'NULL';
+      const webQuote = hasSource ? textSql(item.sourceQuote) : 'NULL';
       const values = `${textSql(item.sourceText)},${textSql(item.name.trim())},${webName},${webUrl},${webQuote},${textSql(quantityText)},${quantity},${textSql(source)},${textSql(method)},'per_portion',${textSql(item.macroStatus)},${m.energyKcal},${energy449},${m.proteinG},${m.carbohydrateG},${m.fatG},${m.fiberG}`;
       if (updating && item.targetItemId != null) statements.push(`UPDATE registros_comida_items SET fragmento_original=${textSql(item.sourceText)},nombre_alimento=${textSql(item.name.trim())},nombre_fuente_web=${webName},url_fuente_web=${webUrl},cita_fuente=${webQuote},cantidad_texto=${textSql(quantityText)},cantidad_g=${quantity},fuente_macros=${textSql(source)},metodo_energia=${textSql(method)},base_macros='per_portion',estado_macros=${textSql(item.macroStatus)},energia_kcal=${m.energyKcal},energia_449_kcal=${energy449},proteina_g=${m.proteinG},carbohidratos_g=${m.carbohydrateG},grasa_g=${m.fatG},fibra_g=${m.fiberG} WHERE id=${item.targetItemId} AND registro_comida_id=${destinationId}`);
       else statements.push(`INSERT INTO registros_comida_items(registro_comida_id,fragmento_original,nombre_alimento,nombre_fuente_web,url_fuente_web,cita_fuente,cantidad_texto,cantidad_g,fuente_macros,metodo_energia,base_macros,estado_macros,energia_kcal,energia_449_kcal,proteina_g,carbohidratos_g,grasa_g,fibra_g) VALUES (${destinationId},${values})`);
@@ -1146,4 +1137,4 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
   }
 }
 
-module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, localDateTimeToUtc, needsSelectedNutritionDateConfirmation, normalizeFoodReply, numberVisibleFoodMeals, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, selectedNutritionDateAnswer, usedFoodWebFetch, usedFoodWebTools, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, localDateTimeToUtc, needsSelectedNutritionDateConfirmation, normalizeFoodReply, numberVisibleFoodMeals, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, selectedNutritionDateAnswer, usedFoodWebSearch, validateFoodEntry, validFoodItem };

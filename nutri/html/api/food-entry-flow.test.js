@@ -152,6 +152,7 @@ test('usa Open Food Facts solo para producto exacto con macros por 100 g complet
   assert.equal(JSON.parse(requested.options.body).q, '"Yogur Griego Natural"');
   assert.equal(requested.options.headers['user-agent'], 'NutriApp/1.0 (food nutrition lookup)');
   assert.equal(product.sourceName, 'Open Food Facts (dato colaborativo)');
+  assert.equal(product.macroSource, 'openfoodfacts');
   assert.equal(product.macroBasis, 'per_100g');
   assert.deepEqual(product.macros, { energyKcal: 89, proteinG: 9, carbohydrateG: 4, fatG: 3, fiberG: null });
   assert.equal(await findOpenFoodFactsProduct('Kefir Natural', {
@@ -200,6 +201,7 @@ test('usa USDA para una coincidencia genérica exacta y rechaza variantes ambigu
   assert.equal(requestedUrl.hostname, 'api.nal.usda.gov');
   assert.equal(requestedUrl.searchParams.get('api_key'), 'test-only');
   assert.equal(found.sourceName, 'USDA FoodData Central');
+  assert.equal(found.macroSource, 'usda_fdc');
   assert.equal(found.macroBasis, 'per_100g');
   assert.deepEqual(found.macros, { energyKcal: 130, proteinG: 2.7, carbohydrateG: 28, fatG: 0.3, fiberG: 0.4 });
   assert.equal(await findUsdaFood('Cooked rice', {

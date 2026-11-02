@@ -2550,11 +2550,11 @@ async function loadProgressNutrition() {
       }
     }
     const sources = nutrition.quality.macroSources;
-    const otherSources = Math.max(0, sources.items - sources.usda - sources.declared - sources.web - sources.opencode);
+    const otherSources = Math.max(0, sources.items - sources.usda - sources.openfoodfacts - sources.declared - sources.web - sources.websearch - sources.opencode);
     quality.replaceChildren(
       metric('Días con comidas completadas', `${current.loggedDays} / ${days}`, `Días completos en macros: ${current.completeDays} · incompletos: ${current.incompleteDays}.`),
       metric('Días sin comida completada', String(Math.max(0, days - current.loggedDays)), 'No equivalen a consumo cero; los registros pendientes se muestran por separado.'),
-      metric('Alimentos por origen de macros', `${sources.items} alimentos`, `USDA ${sources.usda} · usuario ${sources.declared} · web ${sources.web} · OpenCode ${sources.opencode} · otros/sin origen ${otherSources}. Marcados estimados: ${sources.estimated} (pueden solaparse con el origen).`),
+      metric('Alimentos por origen de macros', `${sources.items} alimentos`, `USDA ${sources.usda} · Open Food Facts ${sources.openfoodfacts} · usuario ${sources.declared} · websearch no verificado ${sources.websearch} · webfetch heredado ${sources.web} · OpenCode ${sources.opencode} · otros/sin origen ${otherSources}. Marcados estimados: ${sources.estimated} (pueden solaparse con el origen).`),
       metric('Mediciones de peso', String(body.current.measurements), `Periodo anterior: ${body.previous.measurements}`),
       metric('Registros de plicómetro', String(plicometric.current), `Periodo anterior: ${plicometric.previous}`),
       metric('Días con pasos', `${activity.current.stepDays} / ${days}`, `Periodo anterior: ${activity.previous.stepDays} días`),
@@ -2861,11 +2861,14 @@ function renderFoodEntries(records) {
       macros.className = 'meal-macros';
       macros.textContent = `Macros${item.macroStatus === 'estimado' ? ' estimados' : ''}: ${item.energyKcal} kcal · proteína ${item.proteinG} g · carbohidratos ${item.carbohydrateG} g · grasa ${item.fatG} g · fibra ${item.fiberG ?? '—'} g`;
       food.append(name, macros);
-      if (item.macroSource === 'webfetch' && item.sourceName) {
+      if (['usda_fdc', 'openfoodfacts', 'webfetch', 'websearch'].includes(item.macroSource) && item.sourceName) {
         const source = document.createElement('details');
         source.className = 'meal-source';
         const summary = document.createElement('summary');
-        summary.textContent = `Fuente consultada: ${item.sourceName}`;
+        const label = item.macroSource === 'websearch' ? 'Resultado websearch (no verificado)'
+          : item.macroSource === 'openfoodfacts' ? 'Open Food Facts'
+            : item.macroSource === 'usda_fdc' ? 'USDA FoodData Central' : 'Procedencia heredada (webfetch)';
+        summary.textContent = `${label}: ${item.sourceName}`;
         source.append(summary);
         if (item.sourceQuote) {
           const quote = document.createElement('p');

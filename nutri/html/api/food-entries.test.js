@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitGrams, applyOpenFoodFactsMacros, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, needsSelectedNutritionDateConfirmation, numberVisibleFoodMeals, parseDeclaredFoodShortcut, pendingFoodItemSql, repairEstimatedEnergy, reportFoodProgress, selectedNutritionDateAnswer, usedFoodWebFetch, usedFoodWebTools } = require('./food-entries.js');
+const { applyExplicitGrams, applyOpenFoodFactsMacros, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, needsSelectedNutritionDateConfirmation, numberVisibleFoodMeals, parseDeclaredFoodShortcut, pendingFoodItemSql, repairEstimatedEnergy, reportFoodProgress, selectedNutritionDateAnswer, usedFoodWebSearch } = require('./food-entries.js');
 
 test('accepts confirmed teaspoon and tablespoon quantities without requiring grams', () => {
   for (const quantityText of ['1 cucharadita', 'una cucharadita', '2 cditas.', '1 cucharada', 'dos cucharadas', '2 cdas.', 'una pizca', '1 taza', 'un puñado', '2 piezas']) {
@@ -11,12 +11,13 @@ test('accepts confirmed teaspoon and tablespoon quantities without requiring gra
 test('confirms a mismatched selected nutrition date only during 00:00-03:59', () => {
   assert.equal(needsSelectedNutritionDateConfirmation('2026-10-29', '2026-10-30', 0), true);
   assert.equal(needsSelectedNutritionDateConfirmation('2026-10-29', '2026-10-30', 239), true);
+  assert.equal(needsSelectedNutritionDateConfirmation('2026-10-29', '2026-10-30', 0, true), false);
   assert.equal(needsSelectedNutritionDateConfirmation('2026-10-29', '2026-10-30', 240), false);
   assert.equal(needsSelectedNutritionDateConfirmation('2026-10-30', '2026-10-30', 60), false);
 });
 
 test('uses the suggested end-of-day time only when the selected-date confirmation is accepted', () => {
-  const question = '¿Confirmas registrar esta comida en el día nutricional seleccionado (2026-10-29)? Sugiero las 11:59:59 p. m.; confirma o indica otra hora.';
+  const question = 'Ahora son las 1:00 a. m. del 30 de octubre y está seleccionado el día 29 de octubre de 2026. ¿Confirmas registrar esta comida en el día nutricional seleccionado (2026-10-29)? Para agregarla al balance de ese día, sugiero las 11:59:59 p. m.; confirma o indica otra hora. La fecha seleccionada determina dónde se suman los macros.';
   assert.deepEqual(selectedNutritionDateAnswer(question, 'Sí'), { confirmed: true, time: { hours: [23], minute: 59 }, lastSecond: true });
   assert.equal(selectedNutritionDateAnswer(question, 'No').declined, true);
   assert.equal(selectedNutritionDateAnswer(question, 'A las 8:30 p. m.').time.hours[0], 20);
@@ -45,15 +46,11 @@ test('parses only a complete, validated user-declared single-food shortcut', () 
   assert.equal(noFiber.items[0].macros.fiberG, null);
 });
 
-test('detects actual web tool calls rather than merely enabled tools', () => {
-  assert.equal(usedFoodWebTools([{ type: 'text', text: 'respuesta' }]), false);
-  assert.equal(usedFoodWebTools([{ type: 'tool', tool: 'websearch' }]), true);
-  assert.equal(usedFoodWebTools([{ type: 'tool', state: { title: 'Web Fetch' } }]), true);
-});
-
-test('distinguishes web search from opening a source', () => {
-  assert.equal(usedFoodWebFetch([{ type: 'tool', tool: 'websearch' }]), false);
-  assert.equal(usedFoodWebFetch([{ type: 'tool', state: { title: 'Web Fetch' } }]), true);
+test('detects actual websearch calls and ignores webfetch', () => {
+  assert.equal(usedFoodWebSearch([{ type: 'text', text: 'respuesta' }]), false);
+  assert.equal(usedFoodWebSearch([{ type: 'tool', tool: 'websearch' }]), true);
+  assert.equal(usedFoodWebSearch([{ type: 'tool', state: { title: 'Web Search' } }]), true);
+  assert.equal(usedFoodWebSearch([{ type: 'tool', state: { title: 'Web Fetch' } }]), false);
 });
 
 test('reports safe food-analysis progress scoped to the authenticated user and request', () => {
