@@ -698,3 +698,7 @@
 - 2026-11-02 11:42 CST — Raspberry Pi: `./pull` detecta el modelo del equipo y conserva MySQL 8.4 allí; Node.js permanece en 26. Compose conserva MySQL 9.7 como valor predeterminado fuera de Raspberry Pi. No se levantaron contenedores.
 - 2026-11-02 12:41 CST — OpenCode: actualizada la versión del instalador y la etiqueta de imagen Docker a 2.2.5. No se reconstruyeron ni levantaron contenedores.
 - 2026-11-02 12:43 CST — Incrementada la versión PATCH a `0.1.54` para registrar y confirmar los cambios de imágenes Docker.
+
+- 2026-11-02 19:12 UTC — Añadido Nginx al Compose: puerto 80 ligado solo a la IP de Tailscale y redirección permanente a HTTPS; Tailscale Serve terminará TLS y Nginx proxyará a Nutri:8080 por la red interna. No se inició el contenedor ni se configuró Tailscale Serve porque `pc` no tiene acceso administrativo al daemon Docker ni a Serve.
+
+- 2026-11-02 19:29 UTC — Incrementada la versión PATCH a `0.1.55` para el proxy Nginx de Nutri en el tailnet.

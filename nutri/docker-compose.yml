@@ -51,6 +51,18 @@ services:
       opencode:
         condition: service_healthy
 
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "100.97.84.121:80:80"
+      - "127.0.0.1:8081:8081"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      nutri:
+        condition: service_healthy
+
   opencode:
     build: ./docker/opencode
     image: nutri-opencode:2.2.5
