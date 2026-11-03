@@ -727,3 +727,5 @@
 - 2026-11-03 12:18 CST — Incrementada la versión PATCH a `0.1.62` para preparar la migración de reconciliación de macros.
 - 2026-11-03 12:27 CST — Añadida reconciliación previa a 0006: registra su checksum solo si la tabla de límites de login coincide en columnas, tipos, índices y motor.
 - 2026-11-03 12:28 CST — Incrementada la versión PATCH a `0.1.63` para preparar la reparación de registro de migración 0006.
+- 2026-11-03 12:34 CST — Añadida reconciliación correctiva previa a 0006; compara `DATETIME(3)` mediante `DATA_TYPE` y precisión, evitando el falso negativo de la primera reparación.
+- 2026-11-03 12:34 CST — Incrementada la versión PATCH a `0.1.64` para preparar la reconciliación correctiva de 0006.
