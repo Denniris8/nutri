@@ -725,3 +725,5 @@
 - 2026-11-03 12:04 CST — Incrementada la versión PATCH a `0.1.61` para preparar el cambio del montaje de datos de MySQL.
 - 2026-11-03 12:17 CST — Añadida migración de reconciliación previa a 0003: registra su checksum solo cuando detecta las cuatro columnas y los cuatro CHECK existentes.
 - 2026-11-03 12:18 CST — Incrementada la versión PATCH a `0.1.62` para preparar la migración de reconciliación de macros.
+- 2026-11-03 12:27 CST — Añadida reconciliación previa a 0006: registra su checksum solo si la tabla de límites de login coincide en columnas, tipos, índices y motor.
+- 2026-11-03 12:28 CST — Incrementada la versión PATCH a `0.1.63` para preparar la reparación de registro de migración 0006.
