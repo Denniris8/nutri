@@ -723,3 +723,5 @@
 - 2026-11-03 11:41 CST — Incrementada la versión PATCH a `0.1.60` para preparar el cambio de límites de memoria de OpenCode.
 - 2026-11-03 12:02 CST — Compose: MySQL pasa del volumen nombrado `mysql_data` al directorio del host `/home/mysql`.
 - 2026-11-03 12:04 CST — Incrementada la versión PATCH a `0.1.61` para preparar el cambio del montaje de datos de MySQL.
+- 2026-11-03 12:17 CST — Añadida migración de reconciliación previa a 0003: registra su checksum solo cuando detecta las cuatro columnas y los cuatro CHECK existentes.
+- 2026-11-03 12:18 CST — Incrementada la versión PATCH a `0.1.62` para preparar la migración de reconciliación de macros.
