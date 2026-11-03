@@ -377,6 +377,12 @@ function foodItemIssues(item) {
   const factor = item?.macroBasis === 'per_100g' && Number.isFinite(item.quantityGrams) ? item.quantityGrams / 100 : 1;
   const energy = macros?.energyKcal * factor;
   if (referenceGrams != null && Number.isFinite(energy) && energy > referenceGrams * 9.5) issues.push('energy_unit_bounds');
+  const storedMacros = macros && ['energyKcal', 'proteinG', 'carbohydrateG', 'fatG', 'fiberG']
+    .map((key) => macros[key] == null ? null : macros[key] * factor);
+  if (storedMacros?.some((value) => value != null && roundFoodDecimal(value) > 99999999.99)
+      || macros && roundFoodDecimal((4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG) * factor) > 99999999.99) {
+    issues.push('stored_macro_bounds');
+  }
   if (macros && Number.isFinite(macros.energyKcal)
       && ['proteinG', 'carbohydrateG', 'fatG'].every((key) => Number.isFinite(macros[key]))) {
     const expected = (4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG) * factor;
@@ -506,12 +512,14 @@ function isQuantityQuestion(text) {
   return /(?:cu[aá]ntos?\s+(?:gramos?|mililitros?)|cantidad\s+en\s+(?:gramos?|mililitros?)|qu[eé]\s+cantidad|peso aproximado)/i.test(String(text || ''));
 }
 
+const roundFoodDecimal = (value, scale = 2) => value == null ? null : Number(Number(value).toFixed(scale));
+
 function pendingFoodItemSql(entryId, item, textSql) {
-  const macros = item.macros;
+  const macros = Object.fromEntries(Object.entries(item.macros).map(([key, value]) => [key, roundFoodDecimal(value)]));
   const value = (field) => field == null ? 'NULL' : textSql(field);
-  const energy449 = 4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG;
+  const energy449 = roundFoodDecimal(4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG);
   const method = item.macroSource === 'usda_fdc' ? 'usda' : ['openfoodfacts', 'webfetch', 'websearch'].includes(item.macroSource) ? item.macroSource : item.macroSource === 'opencode_estimado' ? 'opencode_estimado' : 'declarado_usuario';
-  const fields = [entryId, textSql(item.sourceText), textSql(item.name.trim()), value(item.sourceName), value(item.sourceUrl), value(item.sourceQuote), value(item.quantityText), item.quantityGrams == null ? 'NULL' : item.quantityGrams, textSql(item.macroSource), textSql(method), textSql(item.macroBasis), textSql(item.macroStatus), macros.energyKcal, energy449, macros.proteinG, macros.carbohydrateG, macros.fatG, macros.fiberG == null ? 'NULL' : macros.fiberG];
+  const fields = [entryId, textSql(item.sourceText), textSql(item.name.trim()), value(item.sourceName), value(item.sourceUrl), value(item.sourceQuote), value(item.quantityText), item.quantityGrams == null ? 'NULL' : roundFoodDecimal(item.quantityGrams, 3), textSql(item.macroSource), textSql(method), textSql(item.macroBasis), textSql(item.macroStatus), macros.energyKcal, energy449, macros.proteinG, macros.carbohydrateG, macros.fatG, macros.fiberG];
   return `INSERT INTO registros_comida_items(registro_comida_id,fragmento_original,nombre_alimento,nombre_fuente_web,url_fuente_web,cita_fuente,cantidad_texto,cantidad_g,fuente_macros,metodo_energia,base_macros,estado_macros,energia_kcal,energia_449_kcal,proteina_g,carbohidratos_g,grasa_g,fibra_g) VALUES (${fields.join(',')})`;
 }
 
@@ -1051,9 +1059,9 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     const statements = ["SET time_zone='+00:00'", 'START TRANSACTION', `DELETE FROM registros_comida_items WHERE registro_comida_id=${entryId}`];
     for (const item of items) {
       const factor = item.macroBasis === 'per_100g' ? item.quantityGrams / 100 : 1;
-      const m = Object.fromEntries(Object.entries(item.macros).map(([key, value]) => [key, value == null ? null : value * factor]));
-      const quantity = String(item.quantityGrams);
-      const energy449 = 4 * m.proteinG + 4 * m.carbohydrateG + 9 * m.fatG;
+      const m = Object.fromEntries(Object.entries(item.macros).map(([key, value]) => [key, value == null ? null : roundFoodDecimal(value * factor)]));
+      const quantity = String(roundFoodDecimal(item.quantityGrams, 3));
+      const energy449 = roundFoodDecimal(4 * m.proteinG + 4 * m.carbohydrateG + 9 * m.fatG);
       const source = item.macroSource;
       const method = item.macroSource === 'usda_fdc' ? 'usda' : ['openfoodfacts', 'webfetch', 'websearch'].includes(item.macroSource) ? item.macroSource : item.macroSource === 'opencode_estimado' ? 'opencode_estimado' : 'declarado_usuario';
       const quantityText = item.quantityText || `${item.quantityGrams} g`;

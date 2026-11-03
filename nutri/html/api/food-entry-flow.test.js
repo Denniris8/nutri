@@ -1,7 +1,27 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitQuantities, applyFoodMacroReferences, normalizeFoodReply, parseFoodReferenceTime, parseFoodReply, saveFoodEntry } = require('./food-entries.js');
+const { applyExplicitQuantities, applyFoodMacroReferences, foodItemIssues, normalizeFoodReply, parseFoodReferenceTime, parseFoodReply, pendingFoodItemSql, saveFoodEntry } = require('./food-entries.js');
 const { deleteFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, openCodeRequest } = require('./opencode-food.js');
+
+test('rechaza energía 4-4-9 que excede DECIMAL(10,2) aunque cada macro quepa', () => {
+  const item = {
+    name: 'Alimento', sourceText: 'Alimento', quantityGrams: null, quantityText: null,
+    macroBasis: 'per_portion', macroStatus: 'declarado', macroSource: 'declarado_usuario',
+    macros: { energyKcal: 1, proteinG: 30000000, carbohydrateG: 30000000, fatG: 30000000, fiberG: 0 },
+  };
+
+  assert.ok(foodItemIssues(item).includes('stored_macro_bounds'));
+});
+
+test('redondea valores al guardar según la precisión decimal de MySQL', () => {
+  const sql = pendingFoodItemSql(1, {
+    sourceText: 'Alimento', name: 'Alimento', quantityText: '10.1239 g', quantityGrams: 10.1239,
+    macroBasis: 'per_portion', macroStatus: 'declarado', macroSource: 'declarado_usuario',
+    macros: { energyKcal: 1.235, proteinG: 1.235, carbohydrateG: 0.116, fatG: 0.05, fiberG: 0.014 },
+  }, (value) => value == null ? 'NULL' : `'${String(value)}'`);
+
+  assert.match(sql, /,10\.124,'declarado_usuario','declarado_usuario','per_portion','declarado',1\.24,5\.89,1\.24,0\.12,0\.05,0\.01\)$/);
+});
 
 test('cancela la confirmación de fecha sin consultar comidas ni abrir OpenCode', async () => {
   const statements = [];
