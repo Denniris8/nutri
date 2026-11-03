@@ -55,6 +55,17 @@ test('Chef context calculates remaining targets with registered training adjustm
   });
 });
 
+test('Chef includes estimated manual step energy in calories and carbohydrate targets', () => {
+  const context = buildChefNutritionContext({
+    date: '2026-10-28', foodRecords: [], trainingRecords: [],
+    exercise: { hasActivityData: true, stepsCount: 10000, stepEnergyKcal: 254.2, adjustmentKcal: 254.2 },
+    activePlan: { macros: { calorias_kcal: 2000, proteinas_g: 120, carbohidratos_g: 200, grasas_g: 60 } },
+  });
+  assert.equal(context.nutrients.caloriesKcal.target, 2254.2);
+  assert.equal(context.nutrients.carbohydrateG.target, 263.55);
+  assert.equal(context.stepEnergyKcal, 254.2);
+});
+
 test('Chef context does not treat days without completed meals as zero consumption', () => {
   const context = buildChefNutritionContext({
     date: '2026-10-28', foodRecords: [], trainingRecords: [], exercise: { adjustmentKcal: 0 },

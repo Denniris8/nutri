@@ -19,7 +19,7 @@ const { recordApplicationError } = require('./api/application-errors.js');
 const { sendPasswordRecoveryEmail: defaultSendPasswordRecoveryEmail, sendVerificationEmail: defaultSendVerificationEmail } = require('./api/email.js');
 const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, getTrainingProgress, readTrainingPlanPrompt, reportTrainingProgress } = require('./api/training-analysis.js');
 const { createAnalysisProgressRecorder } = require('./api/analysis-progress.js');
-const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
+const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailyStepData, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
 const { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
 const { addNotification, markNotificationRead, notificationInsertSql, readNotifications, resolveNotificationsSql } = require('./api/notifications.js');
 
@@ -955,14 +955,16 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
       }
       let stage = 'nutrition_context';
       try {
-        const [foodRecords, allTrainingRecords, preferences, activePlan] = await Promise.all([
+        const [foodRecords, allTrainingRecords, preferences, activePlan, dailyActivity] = await Promise.all([
           readFoodEntries({ userId: claims.sub, fecha: date, dbQuery, textSql }),
           readTrainingEntries({ userId: claims.sub, dbQuery, date, timezone }),
           readPreferences({ userId: claims.sub, dbQuery }),
           readTrainingPlanForDate({ userId: claims.sub, date, dbQuery, textSql }),
+          readDailyStepData({ userId: claims.sub, date, dbQuery, textSql }),
         ]);
         const trainingRecords = visibleTrainingEntries(allTrainingRecords, preferences);
-        const nutritionContext = buildChefNutritionContext({ date, foodRecords, trainingRecords, exercise: calculateTrainingEnergy(trainingRecords), activePlan });
+        const energyRecords = dailyActivity?.energyMethod === 'garmin_active' ? allTrainingRecords : trainingRecords;
+        const nutritionContext = buildChefNutritionContext({ date, foodRecords, trainingRecords, exercise: calculateTrainingEnergy(energyRecords, dailyActivity), activePlan });
         stage = 'open_code_response';
         const answer = await sendChefMessage({ userId: claims.sub, message: data.message, nutritionContext, requestOpenCode: openCodeRequest });
         json(response, 200, { answer });
@@ -1051,7 +1053,8 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
           stage = 'steps';
           analysis.stepsSaved = await saveDailySteps({
             userId: claims.sub, date: analysis.stepsDate || localDate, localDate,
-            stepsCount: analysis.stepsCount, source: 'manual', dbQuery, textSql,
+            stepsCount: analysis.stepsCount, source: 'manual', weightKg: Number.isFinite(analysis.weightKg) ? analysis.weightKg : latestWeightStale ? null : latest?.weightKg,
+            heightCm: biometricData.registeredHeightCm, dbQuery, textSql,
           });
           reportTrainingProgress(claims.sub, data.progressId, 'analysis_steps_saved', progressRecorder.record);
         }
@@ -1299,7 +1302,8 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
       if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
       try {
         const date = new URL(request.url, 'http://localhost').searchParams.get('fecha');
-        json(response, 200, { date, stepsCount: await readDailySteps({ userId: claims.sub, date, dbQuery, textSql }) });
+        const dailyActivity = await readDailyStepData({ userId: claims.sub, date, dbQuery, textSql });
+        json(response, 200, { date, ...(dailyActivity || { stepsCount: null, source: null, caloriesKcal: null, energyMethod: null }) });
       } catch (error) { authError(response, error.status || 503, error.status ? error.message : 'No se pudieron cargar los pasos.'); }
       return;
     }
@@ -1315,12 +1319,16 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
         const url = new URL(request.url, 'http://localhost');
         const date = url.searchParams.get('fecha');
         try {
-          const records = await readTrainingEntries({ userId: claims.sub, dbQuery, ...(date ? { date, timezone: request.headers['x-client-timezone'] } : {}) });
+          const [records, dailyActivity] = await Promise.all([
+            readTrainingEntries({ userId: claims.sub, dbQuery, ...(date ? { date, timezone: request.headers['x-client-timezone'] } : {}) }),
+            date ? readDailyStepData({ userId: claims.sub, date, dbQuery, textSql }) : Promise.resolve(null),
+          ]);
           let preferences = null;
           try { preferences = await readPreferences({ userId: claims.sub, dbQuery }); } catch {}
           const garminEnabled = preferences?.deviceMode === 'garmin' && preferences.garminConnected === true;
           const visibleRecords = visibleTrainingEntries(records, preferences);
-          json(response, 200, { records: visibleRecords, garminEnabled, ...(date ? { exercise: calculateTrainingEnergy(visibleRecords), activePlan: await readTrainingPlanForDate({ userId: claims.sub, date, dbQuery, textSql }) } : {}) });
+          const energyRecords = dailyActivity?.energyMethod === 'garmin_active' ? records : visibleRecords;
+          json(response, 200, { records: visibleRecords, garminEnabled, ...(date ? { dailyActivity, exercise: calculateTrainingEnergy(energyRecords, dailyActivity), activePlan: await readTrainingPlanForDate({ userId: claims.sub, date, dbQuery, textSql }) } : {}) });
         }
         catch (error) { authError(response, error.status || 503, error.status ? error.message : 'No se pudieron cargar los entrenamientos.'); }
         return;
@@ -1329,7 +1337,11 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
       let data;
       try { data = await bodyJson(request); }
       catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
-      await saveTrainingEntry({ response, data, userId: claims.sub, dbQuery, textSql, json, timezone: request.headers['x-client-timezone'] });
+      let preferences;
+      try { preferences = await readPreferences({ userId: claims.sub, dbQuery }); }
+      catch { authError(response, 503, 'No se pudo validar la configuración de entrenamiento.'); return; }
+      const garminEnabled = preferences?.garminConnected === true;
+      await saveTrainingEntry({ response, data, userId: claims.sub, dbQuery, textSql, json, timezone: request.headers['x-client-timezone'], garminEnabled });
       if (response.statusCode === 201) {
         try { await deleteTrainingSession({ userId: claims.sub, requestOpenCode: openCodeRequest }); }
         catch {

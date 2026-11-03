@@ -1515,6 +1515,7 @@ let trainingOpenCodeSessionActive = false;
 let trainingPending = false;
 let trainingSaving = false;
 let trainingSavedAt = null;
+let garminInclusionPending = false;
 const pendingTrainingSaveKey = 'nutriPendingTrainingSaveId';
 let pendingTrainingSave = (() => {
   try {
@@ -1536,7 +1537,7 @@ function updateTrainingMode() {
   const prompt = document.querySelector('#trainingInitialPrompt');
   if (prompt) prompt.textContent = useGarmin
     ? 'Cuéntame qué entrenamiento hiciste. Por ejemplo: actividad, tiempo, distancia e intensidad.'
-    : 'Cuéntame qué entrenamiento hiciste. Por ejemplo: actividad, tiempo, distancia e intensidad. También puedes agregar los pasos totales dados hoy; se guardarán aparte.';
+    : 'Cuéntame qué entrenamiento hiciste. Por ejemplo: actividad, tiempo, distancia e intensidad. También puedes agregar los pasos totales dados hoy; si hay peso y estatura recientes, estimaré su gasto.';
 }
 async function showGarminTrainingSync(generation) {
   syncGarminTrainingButton.hidden = true;
@@ -1602,11 +1603,14 @@ syncGarminTrainingButton?.addEventListener('click', async () => {
       result.unchanged ? `${plural(result.unchanged, 'sin cambios', 'sin cambios')}` : '',
       result.skipped ? `${plural(result.skipped, 'no se pudo importar', 'no se pudieron importar')}` : '',
     ].filter(Boolean);
-    const activityMessage = !result.activities ? `Garmin no tiene actividades para el ${date}.`
-      : activityParts.length ? `Actividades Garmin del ${date}: ${activityParts.join('; ')}.` : `Garmin no devolvió actividades importables para el ${date}.`;
+    const activityMessage = result.activitiesUnavailable ? `No se pudieron consultar las actividades Garmin del ${date}; se conservaron los registros existentes.`
+      : !result.activities ? `Garmin no tiene actividades para el ${date}.`
+        : activityParts.length ? `Actividades Garmin del ${date}: ${activityParts.join('; ')}.` : `Garmin no devolvió actividades importables para el ${date}.`;
     const stepsMessages = [
       result.stepsUpdated ? `Pasos Garmin guardados o actualizados para ${result.stepsUpdated} fecha${result.stepsUpdated === 1 ? '' : 's'}.` : '',
       result.stepsUnavailable ? `Garmin no devolvió pasos para ${result.stepsUnavailable} fecha${result.stepsUnavailable === 1 ? '' : 's'}.` : '',
+      result.activeCaloriesUpdated ? `ActiveKilocalories Garmin guardadas para ${result.activeCaloriesUpdated} fecha${result.activeCaloriesUpdated === 1 ? '' : 's'}.` : '',
+      result.activeCaloriesUnavailable ? `Sin activeKilocalories Garmin para ${result.activeCaloriesUnavailable} fecha${result.activeCaloriesUnavailable === 1 ? '' : 's'}.` : '',
     ].filter(Boolean);
     const message = `${activityMessage}${stepsMessages.length ? ` ${stepsMessages.join(' ')}` : ''}`;
     appendTrainingMessage('assistant', message);
@@ -1636,6 +1640,11 @@ async function cancelTrainingDialog() {
     trainingOpenCodeSessionActive = false;
     trainingPending = false;
     trainingSavedAt = null;
+    if (garminInclusionPending) {
+      pendingTrainingSave = null;
+      garminInclusionPending = false;
+      try { sessionStorage.removeItem(pendingTrainingSaveKey); } catch {}
+    }
     trainingDialog?.close();
     notifyApp('Sesión e historial del entrenamiento eliminados.', 'success');
   } catch (error) {
@@ -1667,6 +1676,38 @@ function appendTrainingMessage(role, content) {
   scrollChatToLatest(trainingChatMessages);
   return bubble;
 }
+function askGarminSessionInclusion(question) {
+  return new Promise((resolve) => {
+    const message = appendTrainingMessage('assistant', question);
+    const choices = document.createElement('div');
+    choices.className = 'training-garmin-confirmation';
+    const yes = document.createElement('button');
+    yes.type = 'button';
+    yes.className = 'button-primary';
+    yes.textContent = 'Sí, Garmin la registró';
+    const no = document.createElement('button');
+    no.type = 'button';
+    no.className = 'button-muted';
+    no.textContent = 'No, Garmin no la registró';
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      trainingDialog.removeEventListener('close', closed);
+      yes.disabled = no.disabled = true;
+      choices.remove();
+      if (value !== null) message.querySelector('.food-chat-text').textContent = `${question}\nRespuesta registrada: ${value ? 'Garmin ya la contó.' : 'Garmin no la contó.'}`;
+      resolve(value);
+    };
+    const closed = () => finish(null);
+    yes.addEventListener('click', () => finish(true));
+    no.addEventListener('click', () => finish(false));
+    choices.append(yes, no);
+    message.append(choices);
+    trainingDialog.addEventListener('close', closed, { once: true });
+    yes.focus();
+  });
+}
 trainingAnalyzeButton?.addEventListener('click', async () => {
   const generation = trainingOpenGeneration;
   const description = trainingInput.value.trim();
@@ -1696,13 +1737,16 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     trainingOpenCodeSessionActive = true;
     const analysis = result.analysis;
     if (analysis.stepsSaved) {
-      const stepsMessage = `${new Intl.NumberFormat('es-MX').format(analysis.stepsSaved.stepsCount)} pasos guardados para ${analysis.stepsSaved.date}.`;
+      const stepEnergyMessage = analysis.stepsSaved.caloriesKcal == null ? ' No se pudo estimar el gasto de pasos porque falta peso biométrico reciente o estatura.'
+        : analysis.stepsSaved.energyMethod === 'garmin_active' ? ` Garmin reporta ${new Intl.NumberFormat('es-MX').format(analysis.stepsSaved.caloriesKcal)} kcal activas para ese día.`
+          : ` Gasto por pasos estimado: ~${new Intl.NumberFormat('es-MX').format(analysis.stepsSaved.caloriesKcal)} kcal.`;
+      const stepsMessage = `${new Intl.NumberFormat('es-MX').format(analysis.stepsSaved.stepsCount)} pasos guardados para ${analysis.stepsSaved.date}.${stepEnergyMessage}`;
       appendTrainingMessage('assistant', stepsMessage);
       notifyApp(stepsMessage, 'success');
       void loadDailySteps(analysis.stepsSaved.date);
     }
     if (!analysis.trainingSession) {
-      trainingFeedback.textContent = analysis.stepsSaved ? 'Pasos guardados; no se registró una sesión ni se estimaron calorías.' : 'No se registró una sesión de entrenamiento.';
+      trainingFeedback.textContent = analysis.stepsSaved ? 'Pasos guardados; no se registró una sesión de entrenamiento.' : 'No se registró una sesión de entrenamiento.';
       appendTrainingMessage('assistant', analysis.stepsSaved
         ? 'Guardé tus pasos, pero no identifiqué una sesión de entrenamiento, así que no se guardó ninguna. Si hiciste ejercicio, descríbelo con actividad y duración, por ejemplo: «Corrí 30 minutos a ritmo moderado».'
         : 'No identifiqué una sesión de entrenamiento en tu mensaje, así que no se guardó nada. Describe qué actividad hiciste y cuánto duró, por ejemplo: «Corrí 30 minutos a ritmo moderado».');
@@ -1743,13 +1787,35 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     if (!pendingTrainingSave) pendingTrainingSave = { description: descriptionToSave, requestId: createFoodRequestId() };
     pendingTrainingSave.description = descriptionToSave;
     try { sessionStorage.setItem(pendingTrainingSaveKey, pendingTrainingSave.requestId); } catch {}
-    const saveResponse = await fetch('/api/training-entries', {
+    const saveBody = { requestId: pendingTrainingSave.requestId, description: descriptionToSave, analysis, savedAt: trainingSavedAt, date: nutritionDate, suppressNotification: true,
+      ...(typeof pendingTrainingSave.garminIncluded === 'boolean' ? { garminIncluded: pendingTrainingSave.garminIncluded } : {}) };
+    const sendTrainingSave = () => fetch('/api/training-entries', {
       method: 'POST', credentials: 'same-origin', headers: {
         'Content-Type': 'application/json', 'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
-      body: JSON.stringify({ requestId: pendingTrainingSave.requestId, description: descriptionToSave, analysis, savedAt: trainingSavedAt, date: nutritionDate, suppressNotification: true }),
+      body: JSON.stringify(saveBody),
     });
-    const saved = await saveResponse.json();
+    let saveResponse = await sendTrainingSave();
+    let saved = await saveResponse.json();
+    if (saveResponse.ok && saved.requiresGarminConfirmation) {
+      garminInclusionPending = true;
+      trainingSaving = false;
+      trainingLoading.hidden = true;
+      trainingFeedback.textContent = saved.question;
+      notifyApp(saved.question, 'info');
+      const garminIncluded = await askGarminSessionInclusion(saved.question);
+      garminInclusionPending = false;
+      if (garminIncluded == null || generation !== trainingOpenGeneration) return;
+      pendingTrainingSave.garminIncluded = garminIncluded;
+      saveBody.garminIncluded = garminIncluded;
+      trainingSaving = true;
+      trainingLoading.hidden = false;
+      trainingLoadingText.textContent = 'Guardando el entrenamiento…';
+      trainingFeedback.textContent = 'Guardando el entrenamiento…';
+      saveResponse = await sendTrainingSave();
+      saved = await saveResponse.json();
+      if (saveResponse.ok && saved.requiresGarminConfirmation) throw new Error('No se pudo confirmar si Garmin ya cuenta esta sesión.');
+    }
     if (!saveResponse.ok) {
       if (saveResponse.status === 409) {
         pendingTrainingSave = null;
@@ -2664,7 +2730,12 @@ if (dayInput) {
 
 let currentFoodEntries = [];
 let trainingManualNetCaloriesKcal = null;
+let trainingManualSupplementCaloriesKcal = null;
 let trainingGarminReportedCaloriesKcal = null;
+let trainingStepEnergyKcal = null;
+let trainingGarminActiveCaloriesKcal = null;
+let trainingGarminActiveUnavailable = false;
+let trainingStepEnergyUnavailable = false;
 let trainingAdjustmentCaloriesKcal = null;
 let trainingGarminEnabled = false;
 let trainingDaySelected = null;
@@ -2687,9 +2758,14 @@ function renderTrainingEnergySummary(consumedCaloriesKcal) {
   const rows = [
     { label: 'Consumo registrado', amount: consumedCaloriesKcal },
     { term: 'tmb', amount: restingCaloriesKcal, source: restingCaloriesSource },
-    { label: `Ejercicio manual neto estimado (${validManualTrainingRecords} sesiones)`, amount: trainingManualNetCaloriesKcal },
-    ...(trainingGarminEnabled ? [{ label: `Garmin reportado, sin normalizar (${validDeviceTrainingRecords} sesiones)`, amount: trainingGarminReportedCaloriesKcal }] : []),
-    { label: trainingGarminEnabled ? 'Ajuste aplicado: suma manual neto + Garmin reportado' : 'Ajuste aplicado: ejercicio manual neto', amount: trainingAdjustmentCaloriesKcal },
+    ...(trainingGarminActiveCaloriesKcal == null ? [{ label: `Ejercicio manual neto estimado (${validManualTrainingRecords} sesiones)`, amount: trainingManualNetCaloriesKcal }] : []),
+    ...(trainingStepEnergyKcal != null ? [{ label: 'Pasos: gasto estimado', amount: trainingStepEnergyKcal }] : []),
+    ...(trainingStepEnergyUnavailable ? [{ label: 'Gasto de pasos: no disponible por falta de peso o estatura', amount: null }] : []),
+    ...(trainingGarminActiveCaloriesKcal != null ? [{ label: 'Garmin: activeKilocalories (pasos y actividad)', amount: trainingGarminActiveCaloriesKcal }] : []),
+    ...(trainingGarminActiveUnavailable ? [{ label: 'Falta sincronizar activeKilocalories Garmin para completar el gasto diario', amount: null }] : []),
+    ...(trainingGarminActiveCaloriesKcal != null && trainingManualSupplementCaloriesKcal > 0 ? [{ label: 'Sesiones manuales confirmadas fuera de Garmin', amount: trainingManualSupplementCaloriesKcal }] : []),
+    ...(trainingGarminActiveCaloriesKcal == null && trainingGarminEnabled ? [{ label: `Garmin por sesión (fallback, ${validDeviceTrainingRecords} sesiones)`, amount: trainingGarminReportedCaloriesKcal }] : []),
+    { label: 'Ajuste de actividad aplicado al balance', amount: trainingAdjustmentCaloriesKcal },
     { label: 'Gasto parcial total', amount: totalExpense },
     { label: balanceLabel, amount: balance, isBalance: true },
   ];
@@ -2785,7 +2861,9 @@ function renderMacroCards(records) {
       const targetLabel = exerciseAware
         ? `Meta ajustada ${format.format(targetValue)} ${unit} (base ${format.format(Number(baseTarget))} ${unit} + ${format.format(trainingAdjustmentCaloriesKcal)} kcal${key === 'carbohydrateG' ? ' / 4' : ''})`
         : `Meta ${format.format(targetValue)} ${unit}`;
-      planTarget.textContent = `${targetLabel} · ${comparison}`;
+      const incompleteActivity = trainingStepEnergyUnavailable ? ' · ajuste parcial: faltan kcal estimadas de pasos'
+        : trainingGarminActiveUnavailable ? ' · ajuste parcial: falta activeKilocalories Garmin' : '';
+      planTarget.textContent = `${targetLabel} · ${comparison}${incompleteActivity}`;
     }
     reading.append(value, measure);
     card.append(title, reading, detail, planTarget);
@@ -2945,6 +3023,7 @@ if (document.querySelector('#foodEntriesList')) calendarDayReady.then(() => load
 
 async function loadDailySteps(date = dayInput?.value || localDate()) {
   const count = document.querySelector('#dailyStepsCount');
+  const energy = document.querySelector('#dailyStepsEnergy');
   if (!count) return;
   const dateLabel = document.querySelector('#dailyStepsDate');
   if (dateLabel) {
@@ -2957,8 +3036,13 @@ async function loadDailySteps(date = dayInput?.value || localDate()) {
     if (!response.ok) throw new Error();
     const result = await response.json();
     count.textContent = result.stepsCount == null ? '—' : new Intl.NumberFormat('es-MX').format(result.stepsCount);
+    if (energy) energy.textContent = result.caloriesKcal == null
+      ? result.stepsCount == null ? '' : result.source === 'garmin' ? '· activeKilocalories Garmin no disponibles' : '· kcal no disponibles (falta peso reciente o estatura)'
+      : result.energyMethod === 'garmin_active' ? `· ${new Intl.NumberFormat('es-MX').format(result.caloriesKcal)} kcal activas Garmin`
+        : `· ~${new Intl.NumberFormat('es-MX').format(result.caloriesKcal)} kcal estimadas`;
   } catch {
     count.textContent = '—';
+    if (energy) energy.textContent = '';
     notifyApp('No se pudieron cargar los pasos del día.', 'error');
   } finally { count.removeAttribute('aria-busy'); }
 }
@@ -2981,16 +3065,24 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
     const { records, exercise, garminEnabled, activePlan } = await response.json();
     if (loadId !== trainingEntriesLoadId) return;
     if (!Array.isArray(records) || !exercise || typeof exercise !== 'object') throw new Error();
-    if (['manualNetKcal', 'deviceReportedKcal', 'adjustmentKcal'].some((key) => exercise[key] == null || !Number.isFinite(exercise[key]) || exercise[key] < 0)
+    if (['manualNetKcal', 'manualSupplementKcal', 'deviceReportedKcal'].some((key) => !Number.isFinite(exercise[key]) || exercise[key] < 0)
+      || exercise.adjustmentKcal != null && (!Number.isFinite(exercise.adjustmentKcal) || exercise.adjustmentKcal < 0)
+      || exercise.adjustmentKcal == null && exercise.stepEnergyUnavailable !== true && exercise.garminActiveUnavailable !== true
+      || ['stepEnergyKcal', 'garminActiveKcal'].some((key) => exercise[key] != null && (!Number.isFinite(exercise[key]) || exercise[key] < 0))
       || ['manualSessionCount', 'deviceSessionCount', 'uncalculableManualCount', 'uncalculableDeviceCount', 'unresolvedPossibleDuplicates'].some((key) => !Number.isSafeInteger(exercise[key]) || exercise[key] < 0)) throw new Error();
     trainingDayStatus = 'ready';
     selectedActiveTrainingPlan = activePlan || null;
     setTrainingPlanTargets(selectedActiveTrainingPlan?.macros || null);
     trainingGarminEnabled = garminEnabled === true;
-    trainingDaySelected = records.length > 0;
+    trainingDaySelected = exercise.hasActivityData === true || records.length > 0;
     trainingManualNetCaloriesKcal = Number(exercise?.manualNetKcal);
+    trainingManualSupplementCaloriesKcal = Number(exercise?.manualSupplementKcal) || 0;
     trainingGarminReportedCaloriesKcal = Number(exercise?.deviceReportedKcal);
-    trainingAdjustmentCaloriesKcal = Number(exercise?.adjustmentKcal);
+    trainingStepEnergyKcal = exercise.stepEnergyKcal == null ? null : Number(exercise.stepEnergyKcal);
+    trainingGarminActiveCaloriesKcal = exercise.garminActiveKcal == null ? null : Number(exercise.garminActiveKcal);
+    trainingGarminActiveUnavailable = exercise.garminActiveUnavailable === true;
+    trainingStepEnergyUnavailable = exercise.stepEnergyUnavailable === true;
+    trainingAdjustmentCaloriesKcal = exercise.adjustmentKcal == null ? null : Number(exercise.adjustmentKcal);
     unresolvedTrainingDuplicates = Number(exercise?.unresolvedPossibleDuplicates) || 0;
     uncalculableManualTrainingRecords = Number(exercise?.uncalculableManualCount) || 0;
     uncalculableDeviceTrainingRecords = Number(exercise?.uncalculableDeviceCount) || 0;
@@ -3087,7 +3179,12 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
     trainingDaySelected = null;
     trainingGarminEnabled = false;
     trainingManualNetCaloriesKcal = null;
+    trainingManualSupplementCaloriesKcal = null;
     trainingGarminReportedCaloriesKcal = null;
+    trainingStepEnergyKcal = null;
+    trainingGarminActiveCaloriesKcal = null;
+    trainingGarminActiveUnavailable = false;
+    trainingStepEnergyUnavailable = false;
     trainingAdjustmentCaloriesKcal = null;
     unresolvedTrainingDuplicates = 0;
     uncalculableManualTrainingRecords = 0;

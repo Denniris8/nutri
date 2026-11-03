@@ -39,27 +39,41 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
         const localDate = localCalendarDate(calendarTimezone);
         const stepDates = [date].filter((stepDate) => stepDate <= localDate);
         const [result, stepResults] = await Promise.all([
-          client.callTool({ name: 'get_activities_by_date', arguments: { startDate: date, endDate: date } }, undefined, { timeout: 40000 }),
+          client.callTool({ name: 'get_activities_by_date', arguments: { startDate: date, endDate: date } }, undefined, { timeout: 40000 }).catch(() => ({ isError: true, content: [] })),
           Promise.all(stepDates.map(async (stepDate) => {
             try {
-              const response = await client.callTool({ name: 'get_steps', arguments: { date: stepDate } }, undefined, { timeout: 40000 });
+              const response = await client.callTool({ name: 'get_daily_summary', arguments: { date: stepDate } }, undefined, { timeout: 40000 });
               if (response.isError) return [stepDate, null];
               const payload = (response.content || []).filter((part) => part.type === 'text').map((part) => part.text || '').join('\n');
-              const totalSteps = Number(JSON.parse(payload)?.totalSteps);
-              return [stepDate, Number.isSafeInteger(totalSteps) && totalSteps >= 0 && totalSteps <= 250000 ? totalSteps : null];
+              const summary = JSON.parse(payload);
+              const rawSteps = summary?.totalSteps == null ? NaN : Number(summary.totalSteps);
+              const rawActiveKcal = summary?.activeKilocalories == null ? NaN : Number(summary.activeKilocalories);
+              const stepsCount = Number.isSafeInteger(rawSteps) && rawSteps >= 0 && rawSteps <= 250000 ? rawSteps : null;
+              const activeKcal = Number.isFinite(rawActiveKcal) && rawActiveKcal >= 0 && rawActiveKcal <= 100000 ? rawActiveKcal : null;
+              return [stepDate, { stepsCount, activeKcal }];
             } catch { return [stepDate, null]; }
           })),
         ]);
-        if (result.isError) throw new Error('Garmin no pudo consultar las actividades.');
-        const text = (result.content || []).filter((part) => part.type === 'text').map((part) => part.text || '').join('\n');
-        const activities = JSON.parse(text);
-        if (!Array.isArray(activities)) throw new Error('Garmin devolvió una lista de actividades no válida.');
+        let activitiesUnavailable = result.isError === true;
+        let activities = [];
+        if (!activitiesUnavailable) {
+          try {
+            const text = (result.content || []).filter((part) => part.type === 'text').map((part) => part.text || '').join('\n');
+            activities = JSON.parse(text);
+            if (!Array.isArray(activities)) { activities = []; activitiesUnavailable = true; }
+          } catch { activitiesUnavailable = true; }
+        }
         let stepsUpdated = 0;
         let stepsUnavailable = 0;
-        for (const [stepDate, stepsCount] of stepResults) {
+        let activeCaloriesUpdated = 0;
+        let activeCaloriesUnavailable = 0;
+        for (const [stepDate, summary] of stepResults) {
+          const stepsCount = summary?.stepsCount ?? null;
+          if (summary?.activeKcal == null) activeCaloriesUnavailable += 1;
           if (stepsCount == null) { stepsUnavailable += 1; continue; }
-          await saveDailySteps({ userId, date: stepDate, localDate, stepsCount, source: 'garmin', dbQuery, textSql });
+          await saveDailySteps({ userId, date: stepDate, localDate, stepsCount, source: 'garmin', activeKcal: summary.activeKcal, dbQuery, textSql });
           stepsUpdated += 1;
+          if (summary.activeKcal != null) activeCaloriesUpdated += 1;
         }
         const rows = new Map(activities.map((activity) => {
           const activityId = Number(activity.activityId);
@@ -90,7 +104,7 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
             createdAt,
           }];
         }).filter(([id]) => id !== null));
-        if (!rows.size) return { activities: activities.length, saved: 0, updated: 0, unchanged: 0, skipped: activities.length, stepsUpdated, stepsUnavailable };
+        if (!rows.size) return { activities: activities.length, activitiesUnavailable, saved: 0, updated: 0, unchanged: 0, skipped: activities.length, stepsUpdated, stepsUnavailable, activeCaloriesUpdated, activeCaloriesUnavailable };
         const vigencySql = `(SELECT id FROM vigencias_planes_entrenamiento WHERE usuario_id=${userId} AND fecha_inicio<=${textSql(date)} AND (fecha_fin IS NULL OR fecha_fin>=${textSql(date)}) ORDER BY fecha_inicio DESC,id DESC LIMIT 1)`;
         const statements = `START TRANSACTION;
 SELECT id INTO @locked_user FROM usuarios WHERE id=${userId} FOR UPDATE;
@@ -100,7 +114,7 @@ COMMIT;`;
         const saved = counts.filter((count) => count === 1).length;
         const updated = counts.filter((count) => count === 2).length;
         const unchanged = counts.filter((count) => count === 0).length;
-        return { activities: activities.length, saved, updated, unchanged, skipped: activities.length - rows.size, stepsUpdated, stepsUnavailable };
+        return { activities: activities.length, activitiesUnavailable, saved, updated, unchanged, skipped: activities.length - rows.size, stepsUpdated, stepsUnavailable, activeCaloriesUpdated, activeCaloriesUnavailable };
       })(),
       new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Se agotó el tiempo de sincronización Garmin.')), 45000); }),
     ]);

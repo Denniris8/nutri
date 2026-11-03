@@ -36,18 +36,20 @@ function validateTrainingEntry(data) {
   const activity = typeof analysis.activity === 'string' ? analysis.activity.trim() : '';
   const { durationMinutes, weightKg, met } = analysis;
   const savedAt = data.savedAt == null ? null : data.savedAt;
+  const garminIncluded = data.garminIncluded == null ? null : data.garminIncluded;
   const requestId = typeof data.requestId === 'string' ? data.requestId : '';
   if (!activity || activity.length > 120 || /[\u0000-\u001f]/.test(activity)
     || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestId)
     || !Number.isFinite(durationMinutes) || durationMinutes <= 0 || durationMinutes > 1440
     || !Number.isFinite(weightKg) || weightKg < 20 || weightKg > 400
     || !Number.isFinite(met) || met <= 0 || met > 30
+    || garminIncluded !== null && typeof garminIncluded !== 'boolean'
     || savedAt !== null && (typeof savedAt !== 'string' || !/^\d{2}:\d{2}$/.test(savedAt) || Number(savedAt.slice(0, 2)) > 23 || Number(savedAt.slice(3)) > 59)) throw Object.assign(new Error('El cálculo del entrenamiento está incompleto o la hora no es válida.'), { status: 400 });
   const duration = Number(durationMinutes.toFixed(2));
   const weight = Number(weightKg.toFixed(2));
   const intensity = Number(met.toFixed(2));
   return {
-    description, activity, durationMinutes: duration, weightKg: weight, met: intensity, savedAt, requestId,
+    description, activity, durationMinutes: duration, weightKg: weight, met: intensity, savedAt, requestId, garminIncluded,
     caloriesKcal: Math.round(intensity * 3.5 * weight / 200 * duration * 10) / 10,
   };
 }
@@ -75,7 +77,18 @@ function localCalendarDate(timezone, now = new Date()) {
   return `${parts.year}-${parts.month}-${parts.day}`;
 }
 
-async function saveDailySteps({ userId, date, localDate, stepsCount, source, dbQuery, textSql }) {
+function estimateStepEnergyKcal(stepsCount, weightKg, heightCm) {
+  if (!Number.isSafeInteger(stepsCount) || stepsCount < 0 || stepsCount > 250000) return null;
+  if (stepsCount === 0) return 0;
+  if (!Number.isFinite(Number(weightKg)) || Number(weightKg) < 20 || Number(weightKg) > 400
+    || !Number.isFinite(Number(heightCm)) || Number(heightCm) < 80 || Number(heightCm) > 250) return null;
+  const distanceKm = stepsCount * (Number(heightCm) * 0.00415) / 1000;
+  return Math.round(distanceKm * Number(weightKg) * 0.5 * 10) / 10;
+}
+
+function nullableSql(value, textSql) { return value == null ? 'NULL' : textSql(value); }
+
+async function saveDailySteps({ userId, date, localDate, stepsCount, source, weightKg = null, heightCm = null, activeKcal = null, dbQuery, textSql }) {
   const parsedDate = typeof date === 'string' ? new Date(`${date}T00:00:00Z`) : null;
   if (!/^\d+$/.test(String(userId)) || typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)
     || !parsedDate || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date
@@ -83,23 +96,43 @@ async function saveDailySteps({ userId, date, localDate, stepsCount, source, dbQ
     || !['manual', 'garmin'].includes(source)) {
     throw Object.assign(new Error('Los pasos diarios o su fecha no son válidos.'), { status: 400 });
   }
-  await dbQuery(`INSERT INTO registros_pasos_diarios(usuario_id,fecha,pasos,fuente,creado_en,actualizado_en) VALUES (${userId},${textSql(date)},${stepsCount},${textSql(source)},UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE pasos=VALUES(pasos),fuente=VALUES(fuente),actualizado_en=UTC_TIMESTAMP(3);`);
-  return { date, stepsCount, source };
+  const existing = await readDailyStepData({ userId, date, dbQuery, textSql });
+  const validActiveKcal = source === 'garmin' && activeKcal != null && Number.isFinite(Number(activeKcal)) && Number(activeKcal) >= 0 && Number(activeKcal) <= 100000
+    ? Number(Number(activeKcal).toFixed(1)) : null;
+  let caloriesKcal = source === 'garmin' ? validActiveKcal : estimateStepEnergyKcal(stepsCount, weightKg, heightCm);
+  let energyMethod = caloriesKcal == null ? null : source === 'garmin' ? 'garmin_active' : 'pasos_estimados';
+  let usedWeight = energyMethod === 'pasos_estimados' && stepsCount > 0 ? Number(Number(weightKg).toFixed(2)) : null;
+  let usedHeight = energyMethod === 'pasos_estimados' && stepsCount > 0 ? Number(Number(heightCm).toFixed(2)) : null;
+  if (source === 'manual' && existing?.energyMethod === 'garmin_active' && existing.caloriesKcal != null) {
+    caloriesKcal = Number(existing.caloriesKcal);
+    energyMethod = 'garmin_active';
+    usedWeight = usedHeight = null;
+  } else if (source === 'garmin' && validActiveKcal == null && existing?.energyMethod === 'garmin_active' && existing.caloriesKcal != null) {
+    caloriesKcal = Number(existing.caloriesKcal);
+    energyMethod = 'garmin_active';
+  }
+  await dbQuery(`INSERT INTO registros_pasos_diarios(usuario_id,fecha,pasos,fuente,energia_actividad_kcal,metodo_energia,peso_calculo_kg,estatura_calculo_cm,creado_en,actualizado_en) VALUES (${userId},${textSql(date)},${stepsCount},${textSql(source)},${caloriesKcal ?? 'NULL'},${nullableSql(energyMethod, textSql)},${usedWeight ?? 'NULL'},${usedHeight ?? 'NULL'},UTC_TIMESTAMP(3),UTC_TIMESTAMP(3)) ON DUPLICATE KEY UPDATE pasos=VALUES(pasos),fuente=VALUES(fuente),energia_actividad_kcal=VALUES(energia_actividad_kcal),metodo_energia=VALUES(metodo_energia),peso_calculo_kg=VALUES(peso_calculo_kg),estatura_calculo_cm=VALUES(estatura_calculo_cm),actualizado_en=UTC_TIMESTAMP(3);`);
+  return { date, stepsCount, source, caloriesKcal, energyMethod, weightKg: usedWeight, heightCm: usedHeight };
 }
 
-async function readDailySteps({ userId, date, dbQuery, textSql }) {
+async function readDailyStepData({ userId, date, dbQuery, textSql }) {
   const parsedDate = typeof date === 'string' ? new Date(`${date}T00:00:00Z`) : null;
   if (!/^\d+$/.test(String(userId)) || typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)
     || !parsedDate || Number.isNaN(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) {
     throw Object.assign(new Error('La fecha de pasos no es válida.'), { status: 400 });
   }
-  const result = await dbQuery(`SELECT pasos FROM registros_pasos_diarios WHERE usuario_id=${userId} AND fecha=${textSql(date)} LIMIT 1;`);
-  return result == null || result === '' ? null : Number(result);
+  const row = await dbQuery(`SELECT JSON_OBJECT('stepsCount',pasos,'source',fuente,'caloriesKcal',energia_actividad_kcal,'energyMethod',metodo_energia,'weightKg',peso_calculo_kg,'heightCm',estatura_calculo_cm) FROM registros_pasos_diarios WHERE usuario_id=${userId} AND fecha=${textSql(date)} LIMIT 1;`);
+  return row ? JSON.parse(row) : null;
+}
+
+async function readDailySteps({ userId, date, dbQuery, textSql }) {
+  const row = await readDailyStepData({ userId, date, dbQuery, textSql });
+  return row?.stepsCount == null ? null : Number(row.stepsCount);
 }
 
 const activityAliases = new Map([
   ['run', 'running'], ['correr', 'running'], ['carrera', 'running'], ['runningindoors', 'running'],
-  ['walk', 'walking'], ['caminar', 'walking'], ['walkingoutdoors', 'walking'],
+  ['walk', 'walking'], ['caminar', 'walking'], ['caminata', 'walking'], ['walkingoutdoors', 'walking'],
   ['cycling', 'cycling'], ['biking', 'cycling'], ['bicicleta', 'cycling'], ['ciclismo', 'cycling'],
   ['swim', 'swimming'], ['natacion', 'swimming'],
   ['strength', 'strengthtraining'], ['weighttraining', 'strengthtraining'], ['weightlifting', 'strengthtraining'], ['entrenamientodepesas', 'strengthtraining'], ['entrenamientodefuerza', 'strengthtraining'], ['pesas', 'strengthtraining'],
@@ -127,7 +160,7 @@ function sameTrainingSession(manual, device) {
   return Math.min(Math.abs(manualTime - deviceStart), Math.abs(manualTime - deviceEnd), Math.abs(inferredManualStart - deviceStart)) <= tolerance;
 }
 
-function calculateTrainingEnergy(records) {
+function calculateTrainingEnergy(records, dailyActivity = null) {
   const manual = records.filter((record) => record.origin === 'manual');
   const device = records.filter((record) => record.energyType === 'reportada_dispositivo' && record.origin !== 'manual');
   const manualMatches = new Map(manual.map((record) => [record, []]));
@@ -150,8 +183,9 @@ function calculateTrainingEnergy(records) {
     }
   }
   let uncalculableManualCount = 0;
+  const manualEnergy = new Map();
   const manualNetKcal = manual.reduce((sum, record) => {
-    if (duplicateManual.has(record) || ambiguousManual.has(record)) return sum;
+    if (duplicateManual.has(record) || record.garminIncludedInActive === true || Number(record.garminIncludedInActive) === 1) return sum;
     const { met, weightKg, durationMinutes } = record;
     if (met == null || weightKg == null || durationMinutes == null
       || !Number.isFinite(Number(met)) || Number(met) <= 0 || Number(met) > 30
@@ -160,7 +194,9 @@ function calculateTrainingEnergy(records) {
       uncalculableManualCount += 1;
       return sum;
     }
-    return sum + Math.max(0, (Number(met) - 1) * 3.5 * Number(weightKg) / 200 * Number(durationMinutes));
+    const calories = Math.max(0, (Number(met) - 1) * 3.5 * Number(weightKg) / 200 * Number(durationMinutes));
+    manualEnergy.set(record, calories);
+    return sum + calories;
   }, 0);
   let uncalculableDeviceCount = 0;
   const deviceReportedKcal = device.reduce((sum, record) => {
@@ -171,12 +207,40 @@ function calculateTrainingEnergy(records) {
     }
     return sum + Number(record.caloriesKcal);
   }, 0);
+  const garminActiveKcal = dailyActivity?.energyMethod === 'garmin_active' && dailyActivity.caloriesKcal != null && Number.isFinite(Number(dailyActivity.caloriesKcal))
+    ? Number(dailyActivity.caloriesKcal) : null;
+  const stepEnergyKcal = dailyActivity?.energyMethod === 'pasos_estimados' && dailyActivity.caloriesKcal != null && Number.isFinite(Number(dailyActivity.caloriesKcal))
+    ? Number(dailyActivity.caloriesKcal) : 0;
+  const manualSupplementKcal = manual.reduce((sum, record) => {
+    if (duplicateManual.has(record) || record.garminIncludedInActive === true || Number(record.garminIncludedInActive) === 1) return sum;
+    return sum + (manualEnergy.get(record) || 0);
+  }, 0);
+  const stepEnergyUnavailable = dailyActivity?.source === 'manual' && dailyActivity.stepsCount != null && dailyActivity.caloriesKcal == null;
+  const garminActiveUnavailable = dailyActivity?.source === 'garmin' && dailyActivity.stepsCount != null && garminActiveKcal == null;
+  const garminIncludedUnresolved = garminActiveKcal == null && manual.some((record) => !duplicateManual.has(record)
+    && (record.garminIncludedInActive === true || Number(record.garminIncludedInActive) === 1));
+  const hasActivityData = records.length > 0 || dailyActivity?.stepsCount != null;
+  const knownAdjustmentKcal = garminActiveKcal != null
+    ? garminActiveKcal + manualSupplementKcal
+    : manualNetKcal + deviceReportedKcal + stepEnergyKcal;
+  const manualSessionCount = manual.length - duplicateManual.size - uncalculableManualCount;
+  const deviceSessionCount = device.length - ambiguousDevice.size - uncalculableDeviceCount;
+  const adjustmentKcal = garminIncludedUnresolved || (garminActiveUnavailable || stepEnergyUnavailable) && manualSessionCount === 0 && deviceSessionCount === 0
+    ? null : knownAdjustmentKcal;
   return {
     manualNetKcal: Math.round(manualNetKcal * 10) / 10,
+    manualSupplementKcal: Math.round(manualSupplementKcal * 10) / 10,
     deviceReportedKcal: Math.round(deviceReportedKcal * 10) / 10,
-    adjustmentKcal: Math.round((manualNetKcal + deviceReportedKcal) * 10) / 10,
-    manualSessionCount: manual.length - duplicateManual.size - ambiguousManual.size - uncalculableManualCount,
-    deviceSessionCount: device.length - ambiguousDevice.size - uncalculableDeviceCount,
+    stepEnergyKcal: dailyActivity?.energyMethod === 'pasos_estimados' ? stepEnergyKcal : null,
+    garminActiveKcal,
+    garminActiveUnavailable,
+    garminIncludedUnresolved,
+    stepsCount: dailyActivity?.stepsCount ?? null,
+    stepEnergyUnavailable,
+    hasActivityData,
+    adjustmentKcal: adjustmentKcal == null ? null : Math.round(adjustmentKcal * 10) / 10,
+    manualSessionCount,
+    deviceSessionCount,
     matchedManualDuplicates: duplicateManual.size,
     unresolvedPossibleDuplicates: ambiguousManual.size + ambiguousDevice.size,
     uncalculableManualCount,
@@ -189,7 +253,7 @@ function visibleTrainingEntries(records, preferences) {
     ? records : records.filter((record) => record.origin !== 'garmin');
 }
 
-async function saveTrainingEntry({ response, data, userId, dbQuery, textSql, json, timezone }) {
+async function saveTrainingEntry({ response, data, userId, dbQuery, textSql, json, timezone, garminEnabled = false }) {
   const suppressNotification = data?.suppressNotification === true;
   if (!/^\d+$/.test(String(userId))) { json(response, 400, { error: 'Cuenta no válida.' }); return; }
   const nutritionDate = data.date == null ? null : data.date;
@@ -212,23 +276,46 @@ async function saveTrainingEntry({ response, data, userId, dbQuery, textSql, jso
   catch (error) { json(response, error.status || 400, { error: error.message }); return; }
   const traceId = randomUUID();
   let stage = 'persistence';
+  let garminIncluded = false;
   try {
+    const existingChoice = await dbQuery(`SELECT garmin_incluido_en_active FROM registros_entrenamientos WHERE usuario_id=${userId} AND request_id=${textSql(entry.requestId)} LIMIT 1;`);
+    const hasExistingChoice = existingChoice != null && existingChoice !== '';
+    if (entry.garminIncluded == null && hasExistingChoice) entry.garminIncluded = Number(existingChoice) === 1;
+    if (garminEnabled && !hasExistingChoice) {
+      const records = await readTrainingEntries({ userId, dbQuery, date: occurredDate, timezone: calendarTimezone });
+      const candidate = {
+        origin: 'manual', activity: entry.activity, durationMinutes: entry.durationMinutes,
+        createdAt: createdAt ? `${createdAt.replace(' ', 'T')}Z` : new Date().toISOString(),
+      };
+      const matches = records.filter((record) => record.origin === 'garmin' && sameTrainingSession(candidate, record));
+      const duplicateGarminSession = matches.length === 1 && !records.some((record) => record.origin === 'manual' && sameTrainingSession(record, matches[0]));
+      if (duplicateGarminSession) entry.garminIncluded = true;
+      else if (entry.garminIncluded == null) {
+        json(response, 200, {
+          requiresGarminConfirmation: true,
+          requestId: entry.requestId,
+          question: 'No encontré esta sesión en las actividades sincronizadas de Garmin. ¿Garmin ya contó sus calorías en el gasto activo del día? Si sí, no las sumaré otra vez; si no, las añadiré.',
+        });
+        return;
+      }
+    }
+    garminIncluded = hasExistingChoice ? Number(existingChoice) === 1 : garminEnabled && entry.garminIncluded === true;
     const vigencySql = `(SELECT id FROM vigencias_planes_entrenamiento WHERE usuario_id=${userId} AND fecha_inicio<=${textSql(occurredDate)} AND (fecha_fin IS NULL OR fecha_fin>=${textSql(occurredDate)}) ORDER BY fecha_inicio DESC,id DESC LIMIT 1)`;
     const inserted = await dbQuery(`START TRANSACTION;
 SELECT id INTO @locked_user FROM usuarios WHERE id=${userId} FOR UPDATE;
-INSERT INTO registros_entrenamientos(usuario_id,plan_vigencia_id,origen,external_activity_id,request_id,descripcion,actividad,duracion_minutos,peso_kg,met,energia_kcal,creado_en) VALUES (${userId},${vigencySql},'manual',NULL,${textSql(entry.requestId)},${textSql(entry.description)},${textSql(entry.activity)},${entry.durationMinutes},${entry.weightKg},${entry.met},${entry.caloriesKcal},${createdAt ? textSql(createdAt) : 'UTC_TIMESTAMP(3)'}) AS incoming ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id);
+INSERT INTO registros_entrenamientos(usuario_id,plan_vigencia_id,origen,external_activity_id,request_id,descripcion,actividad,duracion_minutos,peso_kg,met,energia_kcal,garmin_incluido_en_active,creado_en) VALUES (${userId},${vigencySql},'manual',NULL,${textSql(entry.requestId)},${textSql(entry.description)},${textSql(entry.activity)},${entry.durationMinutes},${entry.weightKg},${entry.met},${entry.caloriesKcal},${garminIncluded ? 1 : 0},${createdAt ? textSql(createdAt) : 'UTC_TIMESTAMP(3)'}) AS incoming ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id);
 SELECT LAST_INSERT_ID();
 COMMIT;`);
     const entryId = inserted.split(/\s+/).at(-1);
     if (!/^\d+$/.test(entryId || '')) throw new Error('training_insert_failed');
     stage = 'verification';
-    const saved = await dbQuery(`SELECT JSON_OBJECT('id',id,'requestId',request_id,'description',descripcion,'activity',actividad,'durationMinutes',duracion_minutos,'weightKg',peso_kg,'met',met,'caloriesKcal',energia_kcal,'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ')) FROM registros_entrenamientos WHERE id=${entryId} AND usuario_id=${userId} LIMIT 1;`);
+    const saved = await dbQuery(`SELECT JSON_OBJECT('id',id,'requestId',request_id,'description',descripcion,'activity',actividad,'durationMinutes',duracion_minutos,'weightKg',peso_kg,'met',met,'caloriesKcal',energia_kcal,'garminIncluded',garmin_incluido_en_active,'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ')) FROM registros_entrenamientos WHERE id=${entryId} AND usuario_id=${userId} LIMIT 1;`);
     if (!saved) throw Object.assign(new Error('training_readback_missing'), { code: 'TRAINING_PERSISTENCE_VERIFY_FAILED' });
     const persisted = JSON.parse(saved);
     if (persisted.requestId !== entry.requestId || persisted.description !== entry.description
       || persisted.activity !== entry.activity || Number(persisted.durationMinutes) !== entry.durationMinutes
       || Number(persisted.weightKg) !== entry.weightKg || Number(persisted.met) !== entry.met
-      || Number(persisted.caloriesKcal) !== entry.caloriesKcal) {
+      || Number(persisted.caloriesKcal) !== entry.caloriesKcal || Boolean(Number(persisted.garminIncluded)) !== garminIncluded) {
       json(response, 409, { error: 'La clave de reintento ya corresponde a otro registro.' });
       return;
     }
@@ -263,8 +350,8 @@ async function readTrainingEntries({ userId, dbQuery, date, timezone }) {
     } catch { throw Object.assign(new Error('La fecha o zona horaria no es válida.'), { status: 400 }); }
     dateFilter = ` AND e.creado_en>='${start}' AND e.creado_en<'${end}'`;
   }
-  const rows = await dbQuery(`SET time_zone='+00:00'; SELECT JSON_OBJECT('id',e.id,'createdAt',DATE_FORMAT(e.creado_en,'%Y-%m-%dT%H:%i:%sZ'),'description',e.descripcion,'activity',e.actividad,'durationMinutes',e.duracion_minutos,'weightKg',e.peso_kg,'met',e.met,'caloriesKcal',e.energia_kcal,'distanceMeters',e.distancia_metros,'energyType',e.tipo_energia,'origin',e.origen,'externalActivityId',e.external_activity_id,'plan',IF(p.id IS NULL,NULL,JSON_OBJECT('id',p.id,'goals',p.objetivos,'startDate',DATE_FORMAT(v.fecha_inicio,'%Y-%m-%d'),'endDate',DATE_FORMAT(v.fecha_fin,'%Y-%m-%d')))) FROM registros_entrenamientos e LEFT JOIN vigencias_planes_entrenamiento v ON v.id=e.plan_vigencia_id LEFT JOIN planes_entrenamiento p ON p.id=v.plan_id AND p.usuario_id=e.usuario_id WHERE e.usuario_id=${id}${dateFilter} ORDER BY e.creado_en DESC,e.id DESC LIMIT 100;`);
+  const rows = await dbQuery(`SET time_zone='+00:00'; SELECT JSON_OBJECT('id',e.id,'createdAt',DATE_FORMAT(e.creado_en,'%Y-%m-%dT%H:%i:%sZ'),'description',e.descripcion,'activity',e.actividad,'durationMinutes',e.duracion_minutos,'weightKg',e.peso_kg,'met',e.met,'caloriesKcal',e.energia_kcal,'distanceMeters',e.distancia_metros,'energyType',e.tipo_energia,'origin',e.origen,'externalActivityId',e.external_activity_id,'garminIncludedInActive',e.garmin_incluido_en_active,'plan',IF(p.id IS NULL,NULL,JSON_OBJECT('id',p.id,'goals',p.objetivos,'startDate',DATE_FORMAT(v.fecha_inicio,'%Y-%m-%d'),'endDate',DATE_FORMAT(v.fecha_fin,'%Y-%m-%d')))) FROM registros_entrenamientos e LEFT JOIN vigencias_planes_entrenamiento v ON v.id=e.plan_vigencia_id LEFT JOIN planes_entrenamiento p ON p.id=v.plan_id AND p.usuario_id=e.usuario_id WHERE e.usuario_id=${id}${dateFilter} ORDER BY e.creado_en DESC,e.id DESC LIMIT 100;`);
   return rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [];
 }
 
-module.exports = { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, parseTrainingSavedTime, readDailySteps, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, validateTrainingEntry, visibleTrainingEntries };
+module.exports = { calculateTrainingEnergy, deleteTrainingEntry, estimateStepEnergyKcal, localCalendarDate, parseTrainingSavedTime, readDailyStepData, readDailySteps, readTrainingEntries, recordTrainingError, sameTrainingSession, saveDailySteps, saveTrainingEntry, validateTrainingEntry, visibleTrainingEntries };

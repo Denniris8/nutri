@@ -13,7 +13,7 @@ Usa `latestWeightKg` solo si está vigente. Si el peso falta o `latestWeightStal
 
 ## Pasos
 
-No incluyas pasos ni fechas en el JSON. El servidor guarda pasos únicamente si puede extraer un único total numérico explícito de la descripción actual; ante cero o varios totales, no guarda ninguno. El servidor resuelve “hoy/ayer/anteayer” y fechas completas `YYYY-MM-DD` o `DD/MM/YYYY` respecto de `stepContext.localDate`, y rechaza fechas futuras o inválidas. La fecha de los pasos es independiente de la fecha seleccionada para guardar el entrenamiento. Nunca uses valores de turnos previos ni conviertas pasos en entrenamiento.
+No incluyas pasos ni fechas en el JSON. El servidor guarda pasos únicamente si puede extraer un único total numérico explícito de la descripción actual; ante cero o varios totales, no guarda ninguno. El servidor resuelve “hoy/ayer/anteayer” y fechas completas `YYYY-MM-DD` o `DD/MM/YYYY` respecto de `stepContext.localDate`, y rechaza fechas futuras o inválidas. La fecha de los pasos es independiente de la fecha seleccionada para guardar el entrenamiento. Nunca uses valores de turnos previos ni conviertas pasos en entrenamiento. El servidor estima el gasto de pasos manuales con estatura y peso biométrico vigente; si falta cualquiera, conserva el conteo y deja las kcal no disponibles.
 
 ## Contrato de respuesta
 
@@ -32,7 +32,8 @@ Los cinco campos son obligatorios. `trainingSession` es booleano; `question` es 
 - Durante análisis y generación de planes, el chat muestra las etapas reales y su duración observada mediante `/api/training-progress`. El progreso temporal se vincula al usuario autenticado y a un identificador efímero de operación; no contiene la descripción ni se persiste.
 - Cada sesión manual y actividad Garmin queda relacionada con la vigencia del plan que cubre su fecha calendario local. Las vigencias se activan explícitamente desde la lista de planes; un cambio cierra el periodo anterior el día previo. No se vinculan retrospectivamente sesiones sin relación demostrable.
 - Un plan con cualquier vigencia (días asociados) no se puede eliminar, aunque no tenga sesiones vinculadas. La interfaz deshabilita la acción y la API vuelve a validar de forma atómica para conservar la trazabilidad.
-- Tras insertar, el servidor relee la sesión por usuario y verifica `requestId` y descripción. El dashboard vuelve a cargar el día y calcula el balance desde sesiones manuales y actividades del dispositivo.
-- Las coincidencias manual/Garmin inequívocas cuentan una sola vez. Si hay varias coincidencias posibles, se marcan como ambiguas y no se acreditan automáticamente; el dashboard indica que deben revisarse.
+- Tras insertar, el servidor relee la sesión por usuario y verifica `requestId` y descripción. El dashboard vuelve a cargar el día y calcula el balance con sesiones, pasos manuales estimados o `activeKilocalories` diario Garmin.
+- En días sin Garmin, se suman el gasto neto de sesiones manuales y el gasto estimado de pasos manuales. Si hay Garmin activo, `activeKilocalories` sustituye el gasto por pasos y las calorías de sesiones Garmin; una sesión manual no duplicada solo se añade tras confirmar que Garmin no la incluyó.
+- Las coincidencias manual/Garmin inequívocas cuentan una sola vez. Si hay varias coincidencias, la confirmación manual decide si sumar la sesión; las kcal de pasos nunca se suman encima de `activeKilocalories`.
 - Los pasos se derivan y fechan en el servidor desde un único total explícito de la descripción actual; no se aceptan cantidades ni fechas devueltas por el modelo.
 - Los fallos de análisis, guardado y verificación se registran en `errores_aplicacion` con hora UTC y `trace_id`; no se persisten descripciones ni excepciones crudas.

@@ -511,6 +511,7 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
 #trainingDescription, #trainingPlanGoals { box-sizing: border-box; height: 56px; min-height: 56px; border-radius: 0; line-height: 1.25; }
 .food-session-error { color: var(--bad); font-weight: 600; }
 .food-chat-message[data-role="assistant"] { justify-self: start; }
+.training-garmin-confirmation { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .training-ui-body { display: grid; gap: 8px; }
 #trainingFeedback[aria-busy="true"] { display: flex; align-items: center; gap: 8px; }
 #trainingFeedback[aria-busy="true"]::after { width: 15px; height: 15px; flex: 0 0 15px; border: 2px solid var(--line); border-top-color: var(--md-sys-color-primary); border-radius: 50%; animation: assistant-spin .8s linear infinite; content: ""; }

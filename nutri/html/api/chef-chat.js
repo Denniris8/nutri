@@ -17,9 +17,10 @@ const nutrientFields = [
 function buildChefNutritionContext({ date, foodRecords, trainingRecords, exercise, activePlan }) {
   const completed = foodRecords.filter((record) => record.state === 'completado');
   const items = completed.flatMap((record) => record.items || []);
-  const hasTraining = trainingRecords.length > 0;
+  const hasActivity = trainingRecords.length > 0 || exercise?.hasActivityData === true;
   const base = activePlan?.macros || {};
-  const adjustment = exercise?.adjustmentKcal != null && Number.isFinite(Number(exercise.adjustmentKcal))
+  const activityEnergyIncomplete = exercise?.stepEnergyUnavailable === true || exercise?.garminActiveUnavailable === true;
+  const adjustment = !activityEnergyIncomplete && exercise?.adjustmentKcal != null && Number.isFinite(Number(exercise.adjustmentKcal))
     ? Number(exercise.adjustmentKcal) : null;
   const consumptionComplete = items.length > 0;
   const macroSources = { estimated: 0, declared: 0, sourced: 0 };
@@ -31,7 +32,7 @@ function buildChefNutritionContext({ date, foodRecords, trainingRecords, exercis
   const nutrients = Object.fromEntries(nutrientFields.map(([key, itemKey, targetKey]) => {
     const rawTarget = base[targetKey];
     const baseTarget = rawTarget == null ? null : Number(rawTarget);
-    const exerciseAware = hasTraining && (key === 'caloriesKcal' || key === 'carbohydrateG');
+    const exerciseAware = hasActivity && (key === 'caloriesKcal' || key === 'carbohydrateG');
     const extra = key === 'carbohydrateG' && adjustment != null ? adjustment / 4 : adjustment;
     const target = baseTarget == null || !Number.isFinite(baseTarget) || baseTarget < 0 || exerciseAware && extra == null
       ? null : baseTarget + (exerciseAware ? extra : 0);
@@ -49,7 +50,12 @@ function buildChefNutritionContext({ date, foodRecords, trainingRecords, exercis
     completedMealCount: completed.length,
     pendingMealCount: foodRecords.filter((record) => record.state !== 'completado').length,
     trainingSessionCount: trainingRecords.length,
-    exerciseAdjustmentKcal: hasTraining ? adjustment : null,
+    stepsCount: exercise?.stepsCount ?? null,
+    stepEnergyKcal: exercise?.stepEnergyKcal ?? null,
+    stepEnergyUnavailable: exercise?.stepEnergyUnavailable === true,
+    garminActiveKcal: exercise?.garminActiveKcal ?? null,
+    garminActiveUnavailable: exercise?.garminActiveUnavailable === true,
+    exerciseAdjustmentKcal: hasActivity ? adjustment : null,
     macroSources,
     nutrients,
   };
