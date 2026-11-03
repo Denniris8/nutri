@@ -1,5 +1,5 @@
 const { randomUUID } = require('node:crypto');
-const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, maxFoodResponseWaitMs, recordFoodError, requestFoodDescription, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock } = require('./opencode-food.js');
+const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, maxFoodResponseWaitMs, recordFoodError, requestFoodDescription, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock } = require('./opencode-food.js');
 const { notificationInsertSql, resolveNotificationsSql } = require('./notifications.js');
 const { createAnalysisProgressRecorder } = require('./analysis-progress.js');
 const foodProgress = new Map();
@@ -17,13 +17,11 @@ function reportFoodProgress(userId, requestId, event, details = {}, recordEvent)
     save_received: 'Validando solicitud…', entry_saved: 'Borrador guardado; preparando análisis…',
     session_resolution_started: 'Preparando sesión de análisis…', session_ready: 'Separando alimentos y cantidades…',
     message_sent: 'Analizando los alimentos…', message_received: 'Respuesta recibida; revisando alimentos…',
-    openfoodfacts_lookup_started: 'Consultando Open Food Facts…', usda_lookup_started: 'Consultando USDA…',
     known_foods_reused: 'Reutilizando alimentos ya registrados…', web_resolution_started: 'Buscando resultados web…', reply_validation_retry: 'Validando macros; reintentando análisis…',
     reply_validated: 'Macros validados; guardando comida…', items_saved: 'Alimentos guardados; verificando registro…',
     persistence_verified: 'Registro verificado.', save_failed: 'El análisis se detuvo; se conserva el borrador.',
   };
   let label = labels[event];
-  if (event === 'food_sources_lookup') label = `Consultas terminadas: Open Food Facts ${details.openFoodFactsMatched}/${details.queried}; USDA ${details.usdaMatched}/${details.usdaQueried}.`;
   if (!label) return;
   const key = `${userId}:${requestId}`;
   foodProgress.set(key, { label, updatedAt: Date.now() });
@@ -747,7 +745,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     const pendingMasses = [...new Set(quantityContext.flatMap(explicitFoodMasses))];
     const answeredPendingQuantity = isQuantityQuestion(saved.question) && pendingMasses.length === 1;
     const directReply = directFastPath;
-    const openFoodFactsFirstPass = !directReply && !saved.question && !genericEstimateApproved && !reuseAsNewMeal && !correctionIntent && !activeTarget;
+    const foodIdentificationFirstPass = !directReply && !saved.question && !genericEstimateApproved && !reuseAsNewMeal && !correctionIntent && !activeTarget;
     let requestArgs;
     let sessionId;
     let analysisDeadline;
@@ -793,7 +791,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       sessionId = session.sessionId;
       stage = 'analysis';
       analysisDeadline = Date.now() + maxFoodResponseWaitMs;
-      requestArgs = { sessionId, description: modelDescription, initialDescription: saved.description, genericEstimateApproved, allowWebSearch: Boolean(saved.question || correctionIntent || activeTarget), openFoodFactsFirstPass, ...(reuseAsNewMeal ? { referenciaComidaSolicitada: true } : {}), ...(!session.reused && conversation ? { conversation } : {}), comidasDisponibles: mealsForModel, ...(reuseAsNewMeal && referenceMeals.length ? { comidasReferencia: referenceMeals } : {}), alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
+      requestArgs = { sessionId, description: modelDescription, initialDescription: saved.description, genericEstimateApproved, allowWebSearch: Boolean(saved.question || correctionIntent || activeTarget), foodIdentificationFirstPass, ...(reuseAsNewMeal ? { referenciaComidaSolicitada: true } : {}), ...(!session.reused && conversation ? { conversation } : {}), comidasDisponibles: mealsForModel, ...(reuseAsNewMeal && referenceMeals.length ? { comidasReferencia: referenceMeals } : {}), alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
       let parts = await requestFoodWithSessionRecovery(requestArgs);
       webSearchUsed = usedFoodWebSearch(parts);
       stage = 'parse';
@@ -813,7 +811,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       }
     }
     if (result?.items?.length) result.items = applyExplicitQuantities(result.items, quantityContext, answeredPendingQuantity);
-    if (result?.items?.length && openFoodFactsFirstPass) {
+    if (result?.items?.length && foodIdentificationFirstPass) {
       const names = [...new Set(result.items.filter((item) => item.targetItemId == null && item.macroSource !== 'declarado_usuario' && !hasExplicitVolume(item)).map((item) => item.name).filter(Boolean))];
       const known = await readKnownFoods({ userId, names, dbQuery, textSql });
       const knownNames = names.filter((name) => known.has(foodKey(name)));
@@ -821,45 +819,23 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
         traceFoodSession(trace, 'known_foods_reused', { itemCount: knownNames.length });
         openFoodFactsProducts.push(...knownNames.map((name) => knownFoodProduct(known.get(foodKey(name)), name)));
       }
-      const lookupNames = names.filter((name) => !known.has(foodKey(name)));
-      const usdaProducts = [];
-      const offProducts = [];
-      let usdaQueried = 0;
-      if (lookupNames.length) {
-        traceFoodSession(trace, 'openfoodfacts_lookup_started', { itemCount: lookupNames.length });
-        const queue = [...lookupNames];
-        await Promise.all(Array.from({ length: Math.min(3, queue.length) }, async () => {
-          for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
-            const product = await findOpenFoodFactsProduct(name);
-            if (product) { offProducts.push(product); continue; }
-            if (!usdaQueried++) traceFoodSession(trace, 'usda_lookup_started');
-            const usda = await findUsdaFood(name);
-            if (usda) usdaProducts.push(usda);
-          }
-        }));
-        openFoodFactsProducts.push(...offProducts, ...usdaProducts);
-        traceFoodSession(trace, 'food_sources_lookup', {
-          queried: lookupNames.length, openFoodFactsMatched: offProducts.length,
-          usdaQueried, usdaMatched: usdaProducts.length,
-        });
-      }
-      const needsSource = (item) => item.targetItemId == null && item.macroSource !== 'declarado_usuario' && (hasExplicitVolume(item) || !openFoodFactsProducts.some((product) => product.name === item.name));
+      const needsSource = (item) => item.targetItemId == null && item.macroSource !== 'declarado_usuario' && (hasExplicitVolume(item) || !known.has(foodKey(item.name)));
       const unresolved = result.items.some(needsSource);
       if (unresolved) {
         requestArgs.allowWebSearch = true;
-        requestArgs.openFoodFactsFirstPass = false;
-        requestArgs.openFoodFactsCandidates = openFoodFactsProducts;
+        requestArgs.foodIdentificationFirstPass = false;
+        requestArgs.knownFoodCandidates = openFoodFactsProducts;
         traceFoodSession(trace, 'web_resolution_started', { unresolvedCount: result.items.filter(needsSource).length });
         parts = await requestFoodWithSessionRecovery({
-          ...requestArgs, retryFeedback: 'Primero se consultaron Open Food Facts y USDA. Usa sus candidatos solo si el producto/alimento coincide exactamente; conserva esos macros y su procedencia sin sustituirlos. Usa únicamente websearch para los alimentos que no tengan candidato coincidente. Si el snippet no contiene todos los macros, solicita permiso para estimarlos; no simules haber abierto la página ni inventes citas.',
+          ...requestArgs, retryFeedback: 'No consultes Open Food Facts ni USDA. Conserva macros y procedencia de los candidatos de historial solo si el alimento coincide exactamente. Usa únicamente websearch para los alimentos sin candidato local. Si el snippet no identifica exactamente el alimento o no contiene todos los macros, solicita permiso para estimarlos; no simules haber abierto la página ni inventes citas.',
         });
         webSearchUsed ||= usedFoodWebSearch(parts);
         stage = 'parse';
         result = parseReply(parts);
       }
-    } else if (openFoodFactsFirstPass && !result?.clarificationQuestion) {
+    } else if (foodIdentificationFirstPass && !result?.clarificationQuestion) {
       requestArgs.allowWebSearch = true;
-      requestArgs.openFoodFactsFirstPass = false;
+      requestArgs.foodIdentificationFirstPass = false;
     }
     if (reuseAsNewMeal && result) { result.action = 'new'; result.targetEntryId = null; }
     let items = repairEstimatedEnergy(applyOpenFoodFactsMacros(applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems), openFoodFactsProducts));

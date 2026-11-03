@@ -54,8 +54,8 @@ test('detects actual websearch calls and ignores webfetch', () => {
 });
 
 test('reports safe food-analysis progress scoped to the authenticated user and request', () => {
-  reportFoodProgress('27', 'req-progress-test', 'usda_lookup_started', { description: 'private food text' });
-  assert.equal(getFoodEntryProgress('27', 'req-progress-test').label, 'Consultando USDA…');
+  reportFoodProgress('27', 'req-progress-test', 'web_resolution_started', { description: 'private food text' });
+  assert.equal(getFoodEntryProgress('27', 'req-progress-test').label, 'Buscando resultados web…');
   assert.equal(getFoodEntryProgress('28', 'req-progress-test'), null);
 });
 

@@ -729,3 +729,5 @@
 - 2026-11-03 12:28 CST — Incrementada la versión PATCH a `0.1.63` para preparar la reparación de registro de migración 0006.
 - 2026-11-03 12:34 CST — Añadida reconciliación correctiva previa a 0006; compara `DATETIME(3)` mediante `DATA_TYPE` y precisión, evitando el falso negativo de la primera reparación.
 - 2026-11-03 12:34 CST — Incrementada la versión PATCH a `0.1.64` para preparar la reconciliación correctiva de 0006.
+- 2026-11-03 15:07 CST — Registro de comidas: desactivadas temporalmente las búsquedas externas de Open Food Facts y USDA; alimentos no resueltos pasan a websearch y se conserva reutilización del historial local.
+- 2026-11-03 17:41 CST — Incrementada la versión PATCH a `0.1.65` para preparar la desactivación temporal de búsquedas USDA y Open Food Facts.
