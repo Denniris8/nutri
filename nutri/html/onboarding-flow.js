@@ -864,11 +864,7 @@ registerForm?.addEventListener('submit', async (event) => {
     if (!response.ok) {
       throw new Error(result.error || 'No se pudo crear la cuenta.');
     }
-    if (result.pendingVerification) {
-      navigateWithNotice(result.message || 'La cuenta quedó pendiente de verificar el correo.', '/login.html');
-      return;
-    }
-    navigateWithNotice('Cuenta creada.', '/');
+    navigateWithNotice('Cuenta creada. Sesión iniciada.', '/');
   } catch (error) {
     errorMessage.textContent = error.message === 'Datos no válidos.'
       ? 'No se pudo crear la cuenta. Revisa los datos o inicia sesión si ya tienes una cuenta.'
@@ -888,7 +884,7 @@ if (verificationToken) {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || 'El enlace de verificación no es válido o ya venció.');
       if (typeof result.email === 'string') document.querySelector('#loginEmail').value = result.email;
-      notifyApp('Correo verificado. Ya puedes iniciar sesión.');
+      notifyApp('Correo verificado.');
     } catch (error) {
       notifyApp(error.message || 'No se pudo verificar el correo.', 'error');
     } finally {

@@ -346,8 +346,6 @@ SELECT attempts,GREATEST(1,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(3),DATE_ADD(window
             const isTestAccount = allowTestAccountSeeding && input.e164 === testAccountPhone;
             const salt = randomBytes(16);
             const passwordHash = await derivePassword(input.password, salt);
-            const verificationToken = randomBytes(32).toString('base64url');
-            const verificationHash = createHash('sha256').update(verificationToken).digest('hex');
             const testRows = isTestAccount ? `INSERT INTO registros_biometricos(usuario_id,fuente,peso_kg,notas) VALUES (@new_user_id,'manual',75,${textSql('Datos ficticios de demostración; reemplázalos por datos personales reales.')});
 INSERT INTO registros_plicometro(usuario_id,fecha,triceps_mm,biceps_mm,subescapular_mm,suprailiaco_mm,abdominal_mm,muslo_anterior_mm,pantorrilla_mm) VALUES (@new_user_id,UTC_DATE(),10,5,12,9,14,15,8);
 INSERT INTO registros_comidas(usuario_id,request_id,fecha_consumo,descripcion_original,estado,creado_en) VALUES (@new_user_id,UUID(),UTC_DATE(),${textSql('DATO SINTÉTICO DE PRUEBA: desayuno de ejemplo; alimentos y cantidades no son consumo real.')},'pendiente',UTC_TIMESTAMP(3));
@@ -358,22 +356,13 @@ INSERT INTO vigencias_planes_entrenamiento(usuario_id,plan_id,fecha_inicio,cread
 INSERT INTO usuarios(nombre,edad,sexo,estatura_cm,pais_iso,celular_e164,correo_electronico,password_salt,password_hash,es_prueba) VALUES (${textSql(input.name)},${input.age},${textSql(input.sex)},${input.height ?? 'NULL'},${textSql(input.country)},${input.e164 ? textSql(input.e164) : 'NULL'},${textSql(input.email)},UNHEX('${salt.toString('hex')}'),UNHEX('${passwordHash.toString('hex')}'),${isTestAccount ? 1 : 0});
 SET @new_user_id=LAST_INSERT_ID();
 ${testRows}
-INSERT INTO tokens_cuenta_email(usuario_id,proposito,token_hash,vence_en) VALUES (@new_user_id,'verificacion',UNHEX('${verificationHash}'),UTC_TIMESTAMP(3)+INTERVAL 24 HOUR);
 COMMIT;
 SELECT @new_user_id;`;
             const output = await dbQuery(sql);
             const userId = output.split(/\s+/).at(-1);
             if (!/^\d+$/.test(userId || '')) throw new Error('registration_result');
-            try {
-              await sendVerificationEmail(input.email, verificationToken);
-            } catch (error) {
-              const traceId = randomUUID();
-              try { await recordApplicationError({ dbQuery, textSql, traceId, area: 'auth', event: 'verification_email_failed', stage: 'send', action: 'POST /api/auth/register', method: 'POST', route: '/api/auth/register', httpStatus: 503, upstreamHttpStatus: error.upstreamHttpStatus, error, description: 'No se pudo enviar el correo de verificación.' }); }
-              catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: traceId })); }
-              json(response, 202, { ok: true, pendingVerification: true, message: 'La cuenta quedó pendiente de verificación. No se pudo enviar el correo; contacta soporte para solicitar otro enlace.' });
-              return;
-            }
-            json(response, 202, { ok: true, pendingVerification: true, message: 'La cuenta quedó pendiente de verificación. Revisa tu correo para activar el acceso.' });
+            await startSession(userId, response, request);
+            json(response, 201, { ok: true });
             return;
           }
 
@@ -393,15 +382,15 @@ SELECT @new_user_id;`;
           let result;
           let passwordValid;
           try {
-            result = await dbQuery(`SELECT id,HEX(password_salt),HEX(password_hash),activo,correo_verificado_en IS NOT NULL FROM usuarios WHERE correo_electronico=${textSql(email)} AND correo_verificado_en IS NOT NULL LIMIT 1;`);
+            result = await dbQuery(`SELECT id,HEX(password_salt),HEX(password_hash),activo FROM usuarios WHERE correo_electronico=${textSql(email)} LIMIT 1;`);
             const [, saltHex, hashHex] = result.split('\t');
             passwordValid = await passwordMatches(password, saltHex, hashHex);
           } catch (error) {
             await releaseLoginAttempt(reservation.keys);
             throw error;
           }
-          const [id, , , active, emailVerified] = result.split('\t');
-          if (!id || active !== '1' || emailVerified !== '1' || !passwordValid) {
+          const [id, , , active] = result.split('\t');
+          if (!id || active !== '1' || !passwordValid) {
             const traceId = randomUUID();
             try {
               await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('auth')},${textSql(traceId)},${textSql('login_failed')},${textSql('credentials')},${textSql('POST /api/auth/login')},${textSql('POST')},${textSql('/api/auth/login')},${textSql('AUTH_INVALID_CREDENTIALS')},${textSql('AuthenticationError')},401,${textSql('Inicio de sesión rechazado.')});`);
@@ -523,7 +512,7 @@ COMMIT;`);
           const salt = randomBytes(16);
           const passwordHash = await derivePassword(password, salt);
           const result = await dbQuery(`START TRANSACTION;
-UPDATE tokens_cuenta_email t JOIN usuarios u ON u.id=t.usuario_id SET t.consumido_en=UTC_TIMESTAMP(3),u.password_salt=UNHEX('${salt.toString('hex')}'),u.password_hash=UNHEX('${passwordHash.toString('hex')}'),u.correo_verificado_en=COALESCE(u.correo_verificado_en,UTC_TIMESTAMP(3)) WHERE t.proposito='recuperacion' AND t.token_hash=UNHEX('${tokenHash}') AND t.consumido_en IS NULL AND t.vence_en>UTC_TIMESTAMP(3) AND u.activo=1 AND u.correo_electronico IS NOT NULL;
+UPDATE tokens_cuenta_email t JOIN usuarios u ON u.id=t.usuario_id SET t.consumido_en=UTC_TIMESTAMP(3),u.password_salt=UNHEX('${salt.toString('hex')}'),u.password_hash=UNHEX('${passwordHash.toString('hex')}') WHERE t.proposito='recuperacion' AND t.token_hash=UNHEX('${tokenHash}') AND t.consumido_en IS NULL AND t.vence_en>UTC_TIMESTAMP(3) AND u.activo=1 AND u.correo_electronico IS NOT NULL;
 SET @password_reset_changed=(ROW_COUNT()>0);
 UPDATE dashboard_sessions s JOIN tokens_cuenta_email t ON t.usuario_id=s.usuario_id SET s.revoked_at=UTC_TIMESTAMP() WHERE @password_reset_changed=1 AND t.proposito='recuperacion' AND t.token_hash=UNHEX('${tokenHash}') AND t.consumido_en IS NOT NULL AND s.revoked_at IS NULL;
 SELECT @password_reset_changed;

@@ -83,9 +83,10 @@ test('only versioned CSS and JavaScript assets receive immutable caching', async
 
 test('dummy registration creates synthetic measurement rows without completing onboarding', async () => {
   let registrationSql = '';
-  await withServer(async (sql) => { registrationSql = sql; return '27'; }, async (base) => {
+  await withServer(async (sql) => { registrationSql += sql; return sql.includes('INSERT INTO usuarios') ? '27' : ''; }, async (base) => {
     const response = await post(base + '/api/auth/register', demo);
-    assert.equal(response.status, 202);
+    assert.equal(response.status, 201);
+    assert.match(response.headers.get('set-cookie') || '', /HttpOnly/);
   }, { testAccountPhone: '+520000000000', allowTestAccountSeeding: true });
   for (const table of ['registros_biometricos', 'registros_plicometro', 'registros_comidas', 'planes_entrenamiento', 'vigencias_planes_entrenamiento']) {
     assert.match(registrationSql, new RegExp(`INSERT INTO ${table}`));
@@ -97,22 +98,24 @@ test('dummy registration creates synthetic measurement rows without completing o
   assert.doesNotMatch(registrationSql, /INSERT INTO (registros_comida_items|alimentos_referencia)/);
   assert.ok(registrationSql.includes(Buffer.from('Datos ficticios de demostración; reemplázalos por datos personales reales.').toString('hex')));
   assert.doesNotMatch(registrationSql, /dashboard_terms_decisions/);
+  assert.doesNotMatch(registrationSql, /tokens_cuenta_email/);
+  assert.match(registrationSql, /INSERT INTO dashboard_sessions/);
 });
 
 test('client cannot mark an arbitrary registration as a test account', async () => {
   let registrationSql = '';
-  await withServer(async (sql) => { registrationSql = sql; return '27'; }, async (base) => {
+  await withServer(async (sql) => { registrationSql += sql; return sql.includes('INSERT INTO usuarios') ? '27' : ''; }, async (base) => {
     const response = await post(base + '/api/auth/register', { ...demo, phone: '4155550123', countryIso: 'US', isTestAccount: true });
-    assert.equal(response.status, 202);
+    assert.equal(response.status, 201);
   }, { testAccountPhone: '+520000000000', allowTestAccountSeeding: true });
   assert.doesNotMatch(registrationSql, /INSERT INTO (preferencias_usuario|perfil_salud_usuario|registros_biometricos|registros_plicometro|registros_comidas|planes_entrenamiento|vigencias_planes_entrenamiento)/);
 });
 
 test('test account seed requires server-side authorization even for the reserved phone', async () => {
   let registrationSql = '';
-  await withServer(async (sql) => { registrationSql = sql; return '27'; }, async (base) => {
+  await withServer(async (sql) => { registrationSql += sql; return sql.includes('INSERT INTO usuarios') ? '27' : ''; }, async (base) => {
     const response = await post(base + '/api/auth/register', demo);
-    assert.equal(response.status, 202);
+    assert.equal(response.status, 201);
   }, { testAccountPhone: '+520000000000', allowTestAccountSeeding: false });
   assert.doesNotMatch(registrationSql, /INSERT INTO (registros_biometricos|registros_plicometro|registros_comidas|planes_entrenamiento|vigencias_planes_entrenamiento)/);
   assert.match(registrationSql, /,0\);/);
@@ -841,23 +844,27 @@ test.skip('retired clarification flow: editing the same food description resolve
   assert.equal(queries.some((sql) => /UPDATE registros_comidas SET descripcion_original/.test(sql)), false);
 });
 
-test('registration stores email and waits for one-time verification', async () => {
+test('registration stores email and creates an authenticated session without verification', async () => {
   let registrationSql = '';
   let sent;
-  await withServer(async (sql) => { registrationSql = sql; return '27'; }, async (base) => {
+  let sessionSql = '';
+  await withServer(async (sql) => {
+    if (sql.includes('INSERT INTO usuarios')) { registrationSql = sql; return '27'; }
+    if (sql.includes('INSERT INTO dashboard_sessions')) sessionSql = sql;
+    return '';
+  }, async (base) => {
     const response = await post(base + '/api/auth/register', { ...demo, phone: '' });
-    assert.equal(response.status, 202);
-    assert.equal((await response.json()).pendingVerification, true);
-    assert.equal(response.headers.get('set-cookie'), null);
+    assert.equal(response.status, 201);
+    assert.deepEqual(await response.json(), { ok: true });
+    assert.match(response.headers.get('set-cookie') || '', /HttpOnly/);
   }, { sendVerificationEmail: async (...args) => { sent = args; } });
   assert.match(registrationSql, /correo_electronico/);
   assert.ok(registrationSql.includes(Buffer.from('user@example.com').toString('hex')));
   assert.match(registrationSql, /celular_e164,[^;]*NULL/);
-  assert.match(registrationSql, /tokens_cuenta_email/);
-  assert.doesNotMatch(registrationSql, /INSERT INTO dashboard_sessions/);
+  assert.doesNotMatch(registrationSql, /tokens_cuenta_email/);
+  assert.match(sessionSql, /INSERT INTO dashboard_sessions/);
   assert.doesNotMatch(registrationSql, /Demo-Prueba-2026!/);
-  assert.equal(sent?.[0], 'user@example.com');
-  assert.match(sent?.[1] || '', /^[A-Za-z0-9_-]{43}$/);
+  assert.equal(sent, undefined);
 });
 
 test('email verification consumes the one-time token and marks the account verified', async () => {
@@ -913,7 +920,7 @@ test('password reset consumes its token, updates the password hash, and revokes 
   assert.match(resetSql, /t\.vence_en>UTC_TIMESTAMP\(3\)/);
   assert.match(resetSql, /password_salt=UNHEX/);
   assert.match(resetSql, /password_hash=UNHEX/);
-  assert.match(resetSql, /correo_verificado_en=COALESCE/);
+  assert.doesNotMatch(resetSql, /correo_verificado_en/);
   assert.match(resetSql, /SET @password_reset_changed=\(ROW_COUNT\(\)>0\)/);
   assert.match(resetSql, /UPDATE dashboard_sessions/);
   assert.doesNotMatch(resetSql, /new-safe-password-123/);
@@ -928,7 +935,7 @@ test('biometric validation requires weight and keeps optional BIA fields source-
   assert.equal(validateBiometric({ source: 'bia', weightKg: '70', bodyAge: '30' }).bodyAge, '30');
 });
 
-test('login accepts the stored password and logout revokes the session', async () => {
+test('login accepts accounts without email verification and logout revokes the session', async () => {
   const salt = randomBytes(16);
   const hash = scryptSync(demo.password, salt, 64);
   const queries = [];
@@ -940,7 +947,7 @@ test('login accepts the stored password and logout revokes the session', async (
       queries.push(sql);
       if (sql.includes('INSERT INTO auth_login_rate_limits')) return '1\t900';
       if (sql.includes('UPDATE auth_login_rate_limits')) return '';
-      if (sql.includes('FROM usuarios WHERE correo_electronico')) return `27\t${salt.toString('hex')}\t${hash.toString('hex')}\t1\t1`;
+      if (sql.includes('FROM usuarios WHERE correo_electronico')) return `27\t${salt.toString('hex')}\t${hash.toString('hex')}\t1`;
       if (sql.includes('SELECT s.usuario_id')) return sessionActive ? '27' : '';
       if (sql.includes('UPDATE dashboard_sessions')) sessionActive = false;
       return '';
@@ -966,6 +973,8 @@ test('login accepts the stored password and logout revokes the session', async (
     if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previousNodeEnv;
   }
+  const lookup = queries.find((sql) => sql.includes('FROM usuarios WHERE correo_electronico')) || '';
+  assert.doesNotMatch(lookup, /correo_verificado_en/);
 });
 
 test('expired JWT sessions are rejected before consulting the database', async () => {
@@ -977,18 +986,6 @@ test('expired JWT sessions are rejected before consulting the database', async (
     assert.equal(response.status, 401);
     assert.equal(queries, 0);
   }, { now: () => 8 * 24 * 60 * 60 });
-});
-
-test('login rejects unverified email addresses without disclosing verification state', async () => {
-  const queries = [];
-  await withServer(async (sql) => { queries.push(sql); return sql.includes('INSERT INTO auth_login_rate_limits') ? '1\t900' : ''; }, async (base) => {
-    const response = await post(base + '/api/auth/login', { email: 'UNVERIFIED@example.com', password: 'wrong-password-123' });
-    assert.equal(response.status, 401);
-    assert.deepEqual(await response.json(), { error: 'Correo o contraseña incorrectos.' });
-  });
-  const lookup = queries.find((sql) => sql.includes('FROM usuarios WHERE correo_electronico')) || '';
-  assert.match(lookup, /correo_verificado_en IS NOT NULL/);
-  assert.ok(lookup.includes(Buffer.from('unverified@example.com').toString('hex')));
 });
 
 test('login persists failed credential buckets and logs no credential data', async () => {

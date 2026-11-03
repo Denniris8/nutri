@@ -74,7 +74,7 @@ function loadFlow(search = '', fetchOverride) {
   const requests = [];
   const defaultFetch = async (...request) => {
     requests.push(request);
-    if (request[0] === '/api/auth/register') return { ok: true, json: async () => ({ pendingVerification: true, message: 'Verifica tu correo.' }) };
+    if (request[0] === '/api/auth/register') return { ok: true, json: async () => ({ ok: true }) };
     if (request[0].startsWith('/api/onboarding/preferences') && !request[1]?.method) return { ok: true, json: async () => ({ preferences: {
       deviceMode: search.includes('edit=1') ? 'garmin' : 'ninguno', garminConnected: search.includes('edit=1'), garminEmail: search.includes('edit=1') ? 'owner@example.com' : null,
       patronAlimentario: 'vegano', allergiesStatus: 'sin_informacion', medicationsStatus: 'sin_informacion',
@@ -95,7 +95,7 @@ function loadFlow(search = '', fetchOverride) {
   return { elements, modeButtons, destinations, requests };
 }
 
-test('registration sends email and measured height, then returns to login pending verification', async () => {
+test('registration sends account details and navigates into the authenticated app', async () => {
   const { elements, modeButtons, destinations, requests } = loadFlow();
   assert.equal(elements['#loginEmail'].value, '');
   modeButtons[1].dispatch('click');
@@ -114,8 +114,9 @@ test('registration sends email and measured height, then returns to login pendin
   elements['#confirmPassword'].value = 'correct-horse-123';
   elements['#registerHeight'].value = '168.5';
   await elements['#registerForm'].dispatch('submit');
-  assert.equal(destinations.pop(), '/login.html');
+  assert.equal(destinations.pop(), '/');
   const registration = requests.find(([url]) => url === '/api/auth/register');
+  assert.equal(requests.some(([url]) => url === '/api/auth/login'), false);
   assert.equal(JSON.parse(registration[1].body).heightCm, '168.5');
   assert.equal(JSON.parse(registration[1].body).email, 'user@example.com');
 
