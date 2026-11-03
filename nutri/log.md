@@ -721,3 +721,5 @@
 - 2026-11-03 09:27 CST — Incrementada la versión PATCH a `0.1.59` para preparar la corrección del registro de comidas.
 - 2026-11-03 11:39 CST — OpenCode en Docker: eliminados los límites de 256 MiB de memoria y swap para evitar que el proceso de autenticación sea terminado por el límite del servicio.
 - 2026-11-03 11:41 CST — Incrementada la versión PATCH a `0.1.60` para preparar el cambio de límites de memoria de OpenCode.
+- 2026-11-03 12:02 CST — Compose: MySQL pasa del volumen nombrado `mysql_data` al directorio del host `/home/mysql`.
+- 2026-11-03 12:04 CST — Incrementada la versión PATCH a `0.1.61` para preparar el cambio del montaje de datos de MySQL.

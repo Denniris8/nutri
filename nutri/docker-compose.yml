@@ -9,7 +9,7 @@ services:
       MYSQL_PASSWORD: ${DB_PASSWORD:?Define DB_PASSWORD en .env}
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:?Define DB_PASSWORD en .env}
     volumes:
-      - mysql_data:/var/lib/mysql
+      - /home/mysql:/var/lib/mysql
       - ./mysql/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "mysqladmin ping --host=127.0.0.1 --user=root --password=\"$$MYSQL_ROOT_PASSWORD\" --silent"]
@@ -87,7 +87,6 @@ services:
       start_period: 15s
 
 volumes:
-  mysql_data:
   opencode_config:
   opencode_data:
   opencode_state:
