@@ -76,8 +76,6 @@ services:
       - opencode_config:/home/opencode/.config/opencode
       - opencode_data:/home/opencode/.local/share/opencode
       - opencode_state:/home/opencode/.local/state/opencode
-    mem_limit: 256m
-    memswap_limit: 256m
     pids_limit: 64
     cap_drop: [ALL]
     networks: [default, opencode_egress]

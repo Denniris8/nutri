@@ -719,3 +719,5 @@
 - 2026-11-02 23:51 CST — Incrementada la versión PATCH a `0.1.58` para el acceso directo tras el registro.
 - 2026-11-03 09:22 CST — Registro de comidas: redondea macros y cantidades a la precisión DECIMAL de MySQL antes de insertar y valida que los valores escalados y la energía 4-4-9 no excedan el rango; cubre el error 1265 de persistencia. Añadidas pruebas de regresión; no ejecutadas.
 - 2026-11-03 09:27 CST — Incrementada la versión PATCH a `0.1.59` para preparar la corrección del registro de comidas.
+- 2026-11-03 11:39 CST — OpenCode en Docker: eliminados los límites de 256 MiB de memoria y swap para evitar que el proceso de autenticación sea terminado por el límite del servicio.
+- 2026-11-03 11:41 CST — Incrementada la versión PATCH a `0.1.60` para preparar el cambio de límites de memoria de OpenCode.
