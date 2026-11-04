@@ -438,6 +438,7 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
 .error.info, .error.success { border-color: #47785b; background: #204a35; color: #b5ebc7; }
 .error.warn { border-color: #80652d; background: #493916; color: #f1cf83; }
 .hint { margin-top: 7px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.food-entry-date { color: #ffd54a; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 .modal { position: fixed; z-index: 30; inset: 0; display: none; align-items: center; justify-content: center; padding: 20px; background: rgba(20, 28, 23, .48); }
 .modal.show { display: flex; }

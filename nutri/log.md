@@ -741,3 +741,5 @@
 - 2026-11-04 00:07 CST — Incrementada la versión PATCH a `0.1.68` antes de confirmar los cambios locales de auditoría.
 - 2026-11-04 01:00 CST — Incrementada la versión PATCH a `0.1.69` antes de confirmar la corrección del loop de aclaración de comidas.
 - 2026-11-04 01:00 CST — Registro de comidas: una aclaración posterior reemplazaba la pregunta pendiente y el servidor olvidaba la confirmación previa del día durante la madrugada. Ahora recupera la confirmación y hora sugerida del historial; añadida prueba de regresión. No se ejecutaron pruebas.
+- 2026-11-04 01:12 CST — Modal de registro de comidas: el aviso «Se guardará para el día …» ahora resalta en amarillo, incluido el día seleccionado.
+- 2026-11-04 01:14 CST — Incrementada la versión PATCH a `0.1.70` antes de confirmar el ajuste visual del aviso de fecha en el modal de comidas.
