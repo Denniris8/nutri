@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { createHash, randomBytes, scryptSync } = require('node:crypto');
+const { createHash, createHmac, randomBytes, scryptSync } = require('node:crypto');
 const http = require('node:http');
 const test = require('node:test');
 const { beforeEach } = test;
@@ -1004,6 +1004,22 @@ test('login persists failed credential buckets and logs no credential data', asy
     assert.doesNotMatch(audit, /wrong-password-123|failed@example.com/);
     assert.ok(queries.some((sql) => sql.includes('auth_login_rate_limits') && sql.includes('UNHEX(')));
   });
+});
+
+test('login rate limit uses validated X-Real-IP supplied by Nginx', async () => {
+  const queries = [];
+  const ip = '203.0.113.42';
+  const secret = 'test-jwt-secret-must-be-at-least-32-bytes';
+  const expectedHash = createHmac('sha256', secret).update(`login-rate:ip:${ip}`).digest('hex');
+  await withServer(async (sql) => {
+    queries.push(sql);
+    if (sql.includes('INSERT INTO auth_login_rate_limits')) return '1\t900';
+    return '';
+  }, async (base) => {
+    const response = await post(base + '/api/auth/login', { email: 'failed@example.com', password: 'wrong-password-123' }, { 'X-Real-IP': ip });
+    assert.equal(response.status, 401);
+  });
+  assert.ok(queries.some((sql) => sql.includes(`UNHEX('${expectedHash}')`)));
 });
 
 test('login rate limiter rejects an exhausted shared IP bucket', async () => {

@@ -108,7 +108,7 @@ function validateTrainingPlan({ userId, requestId, goals, plan, macros, disclosu
     || !content || content.length > 30000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(content)
     || !macros || typeof macros !== 'object' || Array.isArray(macros)
     || Object.keys(macros).length !== macroFields.length || macroFields.some((key) => !Object.hasOwn(macros, key)
-      || macros[key] !== null && (typeof macros[key] !== 'number' || !Number.isFinite(macros[key]) || macros[key] < 0 || macros[key] > limits[key]))) {
+      || typeof macros[key] !== 'number' || !Number.isFinite(macros[key]) || macros[key] <= 0 || macros[key] > limits[key])) {
     throw Object.assign(new Error('El objetivo, el plan o sus macros no son válidos.'), { status: 400 });
   }
   const safeMacros = Object.fromEntries(macroFields.map((key) => [key, macros[key]]));

@@ -1,4 +1,5 @@
 const http = require('node:http');
+const net = require('node:net');
 const path = require('node:path');
 const { readFileSync } = require('node:fs');
 const { readFile } = require('node:fs/promises');
@@ -210,6 +211,11 @@ function authError(response, status, message) {
   json(response, status, { error: message });
 }
 
+function clientIp(request) {
+  const realIp = request.headers['x-real-ip'];
+  return typeof realIp === 'string' && net.isIP(realIp) ? realIp : request.socket.remoteAddress || 'unknown';
+}
+
 function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_SECRET, now = () => Math.floor(Date.now() / 1000), openCodeRequest = defaultOpenCodeRequest, sendVerificationEmail = defaultSendVerificationEmail, sendPasswordRecoveryEmail = defaultSendPasswordRecoveryEmail, testAccountPhone = process.env.DASHBOARD_TEST_ACCOUNT_PHONE || '+520000000000', allowTestAccountSeeding = process.env.ALLOW_TEST_ACCOUNT_SEEDING === 'true' && process.env.NODE_ENV !== 'production' } = {}) {
   const attempts = new Map();
 
@@ -236,7 +242,7 @@ function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_S
   }
 
   async function reserveLoginAttempt(request, email) {
-    const ip = request.socket.remoteAddress || 'unknown';
+    const ip = clientIp(request);
     const keys = [
       { kind: 'ip', hash: createHmac('sha256', jwtSecret).update(`login-rate:ip:${ip}`).digest('hex') },
       ...(email ? [{ kind: 'email', hash: createHmac('sha256', jwtSecret).update(`login-rate:email:${email}`).digest('hex') }] : []),
@@ -257,7 +263,7 @@ DELETE FROM auth_login_rate_limits WHERE (${scope}) AND attempts=0;`);
   }
 
   async function reserveRegistrationAttempt(request) {
-    const hash = createHmac('sha256', jwtSecret).update(`registration-rate:ip:${request.socket.remoteAddress || 'unknown'}`).digest('hex');
+    const hash = createHmac('sha256', jwtSecret).update(`registration-rate:ip:${clientIp(request)}`).digest('hex');
     const result = await dbQuery(`/* registration-rate-limit */
 DELETE FROM auth_login_rate_limits WHERE window_started_at < UTC_TIMESTAMP(3)-INTERVAL 1 DAY ORDER BY window_started_at LIMIT 500;
 INSERT INTO auth_login_rate_limits(kind,key_hash,window_started_at,attempts) VALUES ('ip',UNHEX('${hash}'),UTC_TIMESTAMP(3),1) ON DUPLICATE KEY UPDATE attempts=IF(window_started_at < UTC_TIMESTAMP(3)-INTERVAL ${registrationWindowMinutes} MINUTE,1,LEAST(attempts+1,${registrationLimit + 1})),window_started_at=IF(window_started_at < UTC_TIMESTAMP(3)-INTERVAL ${registrationWindowMinutes} MINUTE,UTC_TIMESTAMP(3),window_started_at);
@@ -275,7 +281,7 @@ SELECT attempts,GREATEST(1,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(3),DATE_ADD(window
   }
 
   function allowAttempt(request, response, type) {
-    const key = `${type}:${request.socket.remoteAddress || 'unknown'}`;
+    const key = `${type}:${clientIp(request)}`;
     const time = Date.now();
     const maxAttempts = type === 'chef-chat' ? 20 : loginLimit;
     const messageType = ['food-entry', 'training-analysis', 'training-plan', 'chef-chat'].includes(type);

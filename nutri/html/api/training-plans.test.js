@@ -52,6 +52,9 @@ test('training plan persistence rejects oversized or empty input', () => {
   assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: '', plan, macros, disclosure }), { status: 400 });
   assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan: 'x'.repeat(30001), macros, disclosure }), { status: 400 });
   assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan, macros: { ...macros, proteinas_g: '140 g' }, disclosure }), { status: 400 });
+  for (const invalid of [null, 0, -1]) {
+    assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan, macros: { ...macros, proteinas_g: invalid }, disclosure }), { status: 400 });
+  }
   assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan: '# Plan', macros, disclosure }), /distinguir datos/);
   assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan: planFor({ ...macros, calorias_kcal: 2800 }), macros: { ...macros, calorias_kcal: 2800 }, disclosure }), /4\/4\/9/);
 });
