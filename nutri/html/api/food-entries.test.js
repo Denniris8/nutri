@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitGrams, applyOpenFoodFactsMacros, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, needsSelectedNutritionDateConfirmation, numberVisibleFoodMeals, parseDeclaredFoodShortcut, pendingFoodItemSql, repairEstimatedEnergy, reportFoodProgress, selectedNutritionDateAnswer, usedFoodWebSearch } = require('./food-entries.js');
+const { applyExplicitGrams, applyOpenFoodFactsMacros, confirmedNutritionDateAnswer, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, needsSelectedNutritionDateConfirmation, numberVisibleFoodMeals, parseDeclaredFoodShortcut, pendingFoodItemSql, repairEstimatedEnergy, reportFoodProgress, selectedNutritionDateAnswer, usedFoodWebSearch } = require('./food-entries.js');
 
 test('accepts confirmed teaspoon and tablespoon quantities without requiring grams', () => {
   for (const quantityText of ['1 cucharadita', 'una cucharadita', '2 cditas.', '1 cucharada', 'dos cucharadas', '2 cdas.', 'una pizca', '1 taza', 'un puñado', '2 piezas']) {
@@ -21,6 +21,17 @@ test('uses the suggested end-of-day time only when the selected-date confirmatio
   assert.deepEqual(selectedNutritionDateAnswer(question, 'Sí'), { confirmed: true, time: { hours: [23], minute: 59 }, lastSecond: true });
   assert.equal(selectedNutritionDateAnswer(question, 'No').declined, true);
   assert.equal(selectedNutritionDateAnswer(question, 'A las 8:30 p. m.').time.hours[0], 20);
+});
+
+test('retains an accepted selected-date confirmation after a later food clarification replaces the pending question', () => {
+  const messages = [
+    { role: 'assistant', content: '¿Confirmas registrar esta comida en el día nutricional seleccionado (2026-11-03)? Para agregarla al balance de ese día, sugiero las 11:59:59 p. m.; confirma o indica otra hora.' },
+    { role: 'user', content: 'sí' },
+    { role: 'assistant', content: '¿Los 31 g son peso del polvo? ¿Autorizas estimar los macros?' },
+    { role: 'user', content: 'Los 31 g son peso del polvo, autorizo' },
+  ];
+  assert.deepEqual(confirmedNutritionDateAnswer(messages), { confirmed: true, time: { hours: [23], minute: 59 }, lastSecond: true });
+  assert.equal(needsSelectedNutritionDateConfirmation('2026-11-03', '2026-11-04', 60, Boolean(confirmedNutritionDateAnswer(messages))), false);
 });
 
 test('numbers meals in visible list order before completed-only filtering', () => {

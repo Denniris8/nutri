@@ -739,3 +739,5 @@
 - 2026-11-03 23:40 CST — Incrementada la versión PATCH a `0.1.66` antes de confirmar los cambios locales de planes y generación.
 - 2026-11-04 00:05 CST — Auditoría segura: se redujo el trabajo repetido al asociar cantidades, se corrigió SQL inválido cuando falta fibra y se añadieron pruebas. La sincronización Garmin registra fallos con el helper común de errores, sin guardar detalles sensibles. Suite Node: 170 aprobadas, 12 omitidas, 0 fallidas; no se confirmó todavía el origen externo del error Garmin.
 - 2026-11-04 00:07 CST — Incrementada la versión PATCH a `0.1.68` antes de confirmar los cambios locales de auditoría.
+- 2026-11-04 01:00 CST — Incrementada la versión PATCH a `0.1.69` antes de confirmar la corrección del loop de aclaración de comidas.
+- 2026-11-04 01:00 CST — Registro de comidas: una aclaración posterior reemplazaba la pregunta pendiente y el servidor olvidaba la confirmación previa del día durante la madrugada. Ahora recupera la confirmación y hora sugerida del historial; añadida prueba de regresión. No se ejecutaron pruebas.

@@ -161,6 +161,15 @@ function selectedNutritionDateAnswer(question, answer) {
   return { confirmed: true, time: suggestedLastSecond ? { hours: [23], minute: 59 } : null, lastSecond: suggestedLastSecond };
 }
 
+function confirmedNutritionDateAnswer(messages) {
+  for (let index = 0; index < messages.length - 1; index += 1) {
+    if (messages[index].role !== 'assistant' || messages[index + 1].role !== 'user') continue;
+    const answer = selectedNutritionDateAnswer(messages[index].content, messages[index + 1].content);
+    if (answer?.confirmed) return answer;
+  }
+  return null;
+}
+
 function localDateTimeToUtc(fecha, hour, minute, timezone) {
   const [year, month, day] = fecha.split('-').map(Number);
   const wallTime = Date.UTC(year, month - 1, day, hour, minute);
@@ -669,6 +678,10 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     const localClockMinutes = localNow.minutes;
     const asksSelectedDateConfirmation = isSelectedNutritionDateQuestion(saved.question);
     const selectedDateAnswer = asksSelectedDateConfirmation ? selectedNutritionDateAnswer(saved.question, entry.descripcion) : null;
+    const dateNeedsConfirmation = needsSelectedNutritionDateConfirmation(entry.fecha, localNow.date, localClockMinutes, asksSelectedDateConfirmation && selectedDateAnswer?.confirmed);
+    const priorDateAnswer = dateNeedsConfirmation
+      ? confirmedNutritionDateAnswer(await readFoodConversationMessages({ entryId, dbQuery }))
+      : null;
     const correctionIntent = /\b(corrige|corregir|actualiza|actualizar|reemplaza|reemplazar|cambia|cambiar|modifica|modificar)\b/i.test(entry.descripcion)
       || /\b(?:complet(?:a|ar|en)|recalcul(?:a|ar|en))\b.{0,60}\bmacros?\b|\bmacros?\b.{0,60}\b(?:faltantes?|incompletos?|recalcular)\b/i.test(entry.descripcion);
     const returnDayClarification = async (question) => {
@@ -688,7 +701,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       await returnDayClarification(saved.question);
       return;
     }
-    if (needsSelectedNutritionDateConfirmation(entry.fecha, localNow.date, localClockMinutes, asksSelectedDateConfirmation && selectedDateAnswer?.confirmed)
+    if (dateNeedsConfirmation && !priorDateAnswer
       && !entry.targetEntryId && !saved.targetEntryId && !correctionIntent) {
       const selectedDateLabel = new Intl.DateTimeFormat('es-MX', { timeZone: 'UTC', day: 'numeric', month: 'long', year: 'numeric' }).format(new Date(`${entry.fecha}T12:00:00Z`));
       const currentDateLabel = new Intl.DateTimeFormat('es-MX', { timeZone: entry.timezone, day: 'numeric', month: 'long', year: 'numeric' }).format(localNow.now);
@@ -708,7 +721,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     const priorUserText = asksTimeChoice || asksSelectedDateConfirmation ? (await readConversation()).filter((message) => message.role === 'user').map((message) => message.content).join('\n') : '';
     const parsedFoodReference = parseFoodReferenceTime(entry.descripcion) || parseFoodReferenceTime(saved.description);
     const foodReference = parsedFoodReference?.time && !parsedFoodReference.time.invalid ? parsedFoodReference : null;
-    const requestedTime = parseFoodTime(foodReference?.withoutReferenceTime || entry.descripcion) || (priorUserText ? parseFoodTime(priorUserText) : null);
+    const requestedTime = parseFoodTime(foodReference?.withoutReferenceTime || entry.descripcion) || selectedDateAnswer?.time || priorDateAnswer?.time || (priorUserText ? parseFoodTime(priorUserText) : null);
     const asksAddition = /\b(agrega|agregar|añade|añadir|incorpora|incorporar)\b/i.test(entry.descripcion);
     const reuseAsNewMeal = Boolean(foodReference) && !correctionIntent && !asksAddition;
     let modelDescription = asksSelectedDateConfirmation && selectedDateAnswer?.confirmed ? saved.description : entry.descripcion;
@@ -1131,4 +1144,4 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
   }
 }
 
-module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, localDateTimeToUtc, needsSelectedNutritionDateConfirmation, normalizeFoodReply, numberVisibleFoodMeals, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, selectedNutritionDateAnswer, usedFoodWebSearch, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, confirmedNutritionDateAnswer, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, localDateTimeToUtc, needsSelectedNutritionDateConfirmation, normalizeFoodReply, numberVisibleFoodMeals, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, selectedNutritionDateAnswer, usedFoodWebSearch, validateFoodEntry, validFoodItem };
