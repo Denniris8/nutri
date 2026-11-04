@@ -45,7 +45,7 @@ test('password recovery email reuses the configured template with recovery copy 
 
 test('EmailJS rejection returns a sanitized error code', async () => {
   await assert.rejects(
-    sendVerificationEmail('person@example.test', 'token_123', env, async () => ({ ok: false })),
+    sendVerificationEmail('person@example.test', 'token_123', env, async () => ({ ok: false, text: async () => '' })),
     { code: 'EMAILJS_REJECTED' },
   );
 });

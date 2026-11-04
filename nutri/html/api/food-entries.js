@@ -467,15 +467,24 @@ function explicitFoodMeasures(descriptions) {
 function applyExplicitQuantities(items, descriptions, allowUniqueMass = false) {
   const measures = explicitFoodMeasures(descriptions);
   const terms = (value) => new Set(String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().split(/[^a-z0-9]+/).filter((word) => word.length > 2));
-  const measureGroups = [...new Map(measures.map((measure) => [`${measure.value}:${measure.unit}`, { ...measure, contexts: measures.filter((candidate) => candidate.value === measure.value && candidate.unit === measure.unit).map(({ segment }) => segment) }])).values()];
+  const groupedMeasures = new Map();
+  for (const measure of measures) {
+    const key = `${measure.value}:${measure.unit}`;
+    const group = groupedMeasures.get(key);
+    if (group) group.contexts.push(measure.segment);
+    else groupedMeasures.set(key, { ...measure, contexts: [measure.segment] });
+  }
+  const measureGroups = [...groupedMeasures.values()].map((measure) => ({
+    ...measure,
+    contextTerms: measure.contexts.map(terms),
+  }));
   for (const item of items) {
     if (!item || item.quantityGrams != null || hasExplicitVolume(item)) continue;
     const directMass = explicitFoodMasses(item.quantityText);
     if (directMass.length === 1) { item.quantityGrams = directMass[0]; continue; }
     const nameTerms = terms(item.name);
     const sourceTerms = terms(item.sourceText);
-    const matches = measureGroups.map((measure) => ({ ...measure, score: Math.max(...measure.contexts.map((context) => {
-      const contextTerms = terms(context);
+    const matches = measureGroups.map((measure) => ({ ...measure, score: Math.max(...measure.contextTerms.map((contextTerms) => {
       const nameScore = [...contextTerms].filter((word) => nameTerms.has(word)).length;
       return nameScore || [...contextTerms].filter((word) => sourceTerms.has(word)).length;
     })) }))
@@ -513,11 +522,12 @@ function isQuantityQuestion(text) {
 const roundFoodDecimal = (value, scale = 2) => value == null ? null : Number(Number(value).toFixed(scale));
 
 function pendingFoodItemSql(entryId, item, textSql) {
-  const macros = Object.fromEntries(Object.entries(item.macros).map(([key, value]) => [key, roundFoodDecimal(value)]));
+  const macros = Object.fromEntries(['energyKcal', 'proteinG', 'carbohydrateG', 'fatG', 'fiberG'].map((key) => [key, roundFoodDecimal(item.macros[key])]));
   const value = (field) => field == null ? 'NULL' : textSql(field);
   const energy449 = roundFoodDecimal(4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG);
   const method = item.macroSource === 'usda_fdc' ? 'usda' : ['openfoodfacts', 'webfetch', 'websearch'].includes(item.macroSource) ? item.macroSource : item.macroSource === 'opencode_estimado' ? 'opencode_estimado' : 'declarado_usuario';
-  const fields = [entryId, textSql(item.sourceText), textSql(item.name.trim()), value(item.sourceName), value(item.sourceUrl), value(item.sourceQuote), value(item.quantityText), item.quantityGrams == null ? 'NULL' : roundFoodDecimal(item.quantityGrams, 3), textSql(item.macroSource), textSql(method), textSql(item.macroBasis), textSql(item.macroStatus), macros.energyKcal, energy449, macros.proteinG, macros.carbohydrateG, macros.fatG, macros.fiberG];
+  const number = (field) => field == null ? 'NULL' : field;
+  const fields = [entryId, textSql(item.sourceText), textSql(item.name.trim()), value(item.sourceName), value(item.sourceUrl), value(item.sourceQuote), value(item.quantityText), number(item.quantityGrams == null ? null : roundFoodDecimal(item.quantityGrams, 3)), textSql(item.macroSource), textSql(method), textSql(item.macroBasis), textSql(item.macroStatus), number(macros.energyKcal), number(energy449), number(macros.proteinG), number(macros.carbohydrateG), number(macros.fatG), number(macros.fiberG)];
   return `INSERT INTO registros_comida_items(registro_comida_id,fragmento_original,nombre_alimento,nombre_fuente_web,url_fuente_web,cita_fuente,cantidad_texto,cantidad_g,fuente_macros,metodo_energia,base_macros,estado_macros,energia_kcal,energia_449_kcal,proteina_g,carbohidratos_g,grasa_g,fibra_g) VALUES (${fields.join(',')})`;
 }
 

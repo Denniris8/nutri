@@ -24,6 +24,6 @@ test('application error rows preserve upstream HTTP status separately', async ()
     route: '/api/auth/resend-verification', httpStatus: 503, upstreamHttpStatus: 401,
     error: Object.assign(new Error(), { code: 'EMAILJS_HTTP_401' }), description: 'No se pudo enviar el correo.',
   });
-  assert.match(query, /EMAILJS_HTTP_401/);
-  assert.match(query, /HTTP_503,401,/);
+  assert.ok(query.includes(textSql('EMAILJS_HTTP_401')));
+  assert.ok(query.includes(`${textSql('503')},${textSql('401')}`));
 });

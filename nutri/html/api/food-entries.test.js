@@ -34,6 +34,7 @@ test('draft candidate SQL accepts numeric fiber without treating it as text', ()
   const item = { name: 'Ensalada', sourceText: 'Ensalada', quantityGrams: 120, quantityText: '120 g', macroBasis: 'per_portion', macroStatus: 'estimado', macroSource: 'opencode_estimado', macros: { energyKcal: 60, proteinG: 2, carbohydrateG: 6, fatG: 3, fiberG: 2 } };
   assert.match(pendingFoodItemSql(1, item, textSql), /,2\)$/);
   assert.match(pendingFoodItemSql(1, { ...item, macros: { ...item.macros, fiberG: null } }, textSql), /,NULL\)$/);
+  assert.match(pendingFoodItemSql(1, { ...item, macros: Object.fromEntries(Object.entries(item.macros).filter(([key]) => key !== 'fiberG')) }, textSql), /,NULL\)$/);
 });
 
 test('parses only a complete, validated user-declared single-food shortcut', () => {
@@ -75,6 +76,15 @@ test('converts compact kilograms only for a single pending food', () => {
   const items = [{ name: 'Yogur', quantityGrams: null }, { name: 'Avena', quantityGrams: 40 }];
   applyExplicitGrams(items, '0,15kg', true);
   assert.equal(items[0].quantityGrams, 150);
+});
+
+test('assigns contextual quantities to the matching foods', () => {
+  const items = [
+    { name: 'pollo', sourceText: 'pollo', quantityGrams: null },
+    { name: 'arroz', sourceText: 'arroz', quantityGrams: null },
+  ];
+  applyExplicitGrams(items, 'pollo 150g, arroz 200g');
+  assert.deepEqual(items.map(({ quantityGrams }) => quantityGrams), [150, 200]);
 });
 
 test('flags macro values that exceed physical or 4-4-9 plausibility bounds', () => {

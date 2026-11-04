@@ -439,7 +439,7 @@ test('food request disables web tools after the server confirms generic authoriz
   });
   assert.deepEqual(sent.tools, {});
   assert.equal(JSON.parse(sent.parts[0].text).genericEstimateApproved, true);
-  assert.match(sent.system, /Estimación autorizada/);
+  assert.match(sent.system, /`genericEstimateApproved:true`/);
 });
 
 test('the canonical food prompt is sent only with the first message of each session', async () => {
@@ -453,33 +453,35 @@ test('the canonical food prompt is sent only with the first message of each sess
   assert.equal(typeof systems[2], 'string');
 });
 
-test('food first pass has web tools disabled and carries the exact Open Food Facts candidate', async () => {
+test('food identification pass disables web tools and carries exact known-food candidates', async () => {
   let sent;
   await requestFoodDescription({
-    sessionId: 'ses_private_food', description: 'Yogur Griego Natural', allowWebSearch: false,
-    openFoodFactsCandidates: [{ name: 'Yogur Griego Natural', sourceName: 'Open Food Facts (dato colaborativo)' }],
+    sessionId: 'ses_private_food', description: 'Yogur Griego Natural', foodIdentificationFirstPass: true, allowWebSearch: false,
+    knownFoodCandidates: [{ name: 'Yogur Griego Natural', sourceName: 'Open Food Facts (dato colaborativo)' }],
     requestOpenCode: async (_method, _route, body) => {
       sent = body;
       return { status: 200, data: { parts: [{ type: 'text', text: '{"items":[],"clarificationQuestion":null}' }] } };
     },
   });
   assert.deepEqual(sent.tools, {});
-  assert.deepEqual(JSON.parse(sent.parts[0].text).candidatosOpenFoodFacts, [
+  const context = JSON.parse(sent.parts[0].text);
+  assert.equal(context.foodIdentificationFirstPass, true);
+  assert.deepEqual(context.knownFoodCandidates, [
     { name: 'Yogur Griego Natural', sourceName: 'Open Food Facts (dato colaborativo)' },
   ]);
 });
 
-test('food Open Food Facts extraction pass disables web tools and marks the pass', async () => {
+test('food identification pass disables web tools and marks the canonical pass field', async () => {
   let sent;
   await requestFoodDescription({
-    sessionId: 'ses_private_food', description: 'Yogur Griego Natural', allowWebSearch: false, openFoodFactsFirstPass: true,
+    sessionId: 'ses_private_food', description: 'Yogur Griego Natural', allowWebSearch: false, foodIdentificationFirstPass: true,
     requestOpenCode: async (_method, _route, body) => {
       sent = body;
       return { status: 200, data: { parts: [{ type: 'text', text: '{"items":[],"clarificationQuestion":null}' }] } };
     },
   });
   assert.deepEqual(sent.tools, {});
-  assert.equal(JSON.parse(sent.parts[0].text).openFoodFactsFirstPass, true);
+  assert.equal(JSON.parse(sent.parts[0].text).foodIdentificationFirstPass, true);
 });
 
 test.skip('retired clarification flow: same-description save reprocesses an item-validation clarification', async () => {
@@ -1034,6 +1036,24 @@ test('login rate limiter rejects an exhausted shared IP bucket', async () => {
     assert.equal(response.headers.get('retry-after'), '321');
     assert.equal(accountLookup, false);
   });
+});
+
+test('Garmin sync records a safe error code when its integration fails', async () => {
+  const queries = [];
+  const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
+  await withServer(async (sql) => {
+    queries.push(sql);
+    if (sql.includes('SELECT s.usuario_id')) return '27';
+    if (sql.includes('SELECT p.modo_dispositivo,HEX(c.ciphertext)')) throw Object.assign(new Error('private integration detail'), { code: 'GARMIN_SYNC_TEST' });
+    return '';
+  }, async (base) => {
+    const response = await post(base + '/api/integrations/garmin/sync', { date: '2026-11-03' }, { Cookie: cookie, 'X-Client-Timezone': 'UTC' });
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: 'No se pudieron sincronizar las actividades Garmin.' });
+  });
+  const audit = queries.find((sql) => sql.includes('INSERT INTO errores_aplicacion')) || '';
+  assert.ok(audit.includes(Buffer.from('GARMIN_SYNC_TEST').toString('hex')));
+  assert.doesNotMatch(audit, /private integration detail/);
 });
 
 test('rejecting terms revokes the active session', async () => {

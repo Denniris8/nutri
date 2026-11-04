@@ -620,11 +620,18 @@ COMMIT;`);
           || typeof timezone !== 'string' || timezone.length > 64) { authError(response, 400, 'La fecha o zona horaria no es válida.'); return; }
       try { new Intl.DateTimeFormat('en-US', { timeZone: timezone }).format(); }
       catch { authError(response, 400, 'La zona horaria no es válida.'); return; }
+      const traceId = randomUUID();
       try {
         const result = await syncGarminTraining({ userId: claims.sub, date, timezone, dbQuery, textSql, secret: jwtSecret });
         if (result.saved || result.updated) await addNotification({ userId: claims.sub, category: 'entrenamiento', state: 'guardado', title: 'Actividades Garmin sincronizadas', message: `Garmin: ${result.saved} nueva${result.saved === 1 ? '' : 's'} y ${result.updated} actualizada${result.updated === 1 ? '' : 's'}.`, dbQuery, textSql });
         json(response, 200, result);
-      } catch (error) { authError(response, error.status || 502, error.status ? error.message : 'No se pudieron sincronizar las actividades Garmin.'); }
+      } catch (error) {
+        const status = error.status || 502;
+        try {
+          await recordApplicationError({ dbQuery, textSql, userId: claims.sub, traceId, area: 'garmin-training-sync', event: 'sync_failed', stage: 'sync', action: 'POST /api/integrations/garmin/sync', method: 'POST', route: '/api/integrations/garmin/sync', httpStatus: status, upstreamHttpStatus: error.upstreamHttpStatus, error, description: 'No se pudieron sincronizar las actividades Garmin.' });
+        } catch { console.error(JSON.stringify({ area: 'garmin-training-sync', event: 'error_log_failed', trace_id: traceId })); }
+        authError(response, status, error.status ? error.message : 'No se pudieron sincronizar las actividades Garmin.');
+      }
       return;
     }
 
