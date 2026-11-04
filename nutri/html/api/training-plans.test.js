@@ -70,19 +70,19 @@ test('saved plan listing is scoped to the authenticated user and limited to the 
   assert.equal(plans[0].id, 5);
 });
 
-test('activation uses authenticated ownership, serializes changes, and rejects ambiguous history', async () => {
+test('activation allows same-day training and closes the prior plan at the preceding day', async () => {
   let sql;
   const activated = await activateTrainingPlan({
     userId: '27', planId: '5', startDate: '2026-10-24', today: '2026-10-23',
-    dayStart: '2026-10-24 00:00:00', dayEnd: '2026-10-25 00:00:00',
     textSql: (value) => `'${value}'`,
-    dbQuery: async (query) => { sql = query; return '{"ok":true,"planExists":true,"alreadyActive":false,"hasTraining":false,"vigencyId":9}'; },
+    dbQuery: async (query) => { sql = query; return '{"ok":true,"planExists":true,"alreadyActive":false,"vigencyId":9}'; },
   });
   assert.match(sql, /START TRANSACTION/);
   assert.match(sql, /SELECT id INTO @locked_user FROM usuarios WHERE id=27 FOR UPDATE/);
   assert.match(sql, /UPDATE vigencias_planes_entrenamiento SET fecha_fin/);
   assert.match(sql, /INSERT INTO vigencias_planes_entrenamiento/);
-  assert.match(sql, /@has_training/);
+  assert.doesNotMatch(sql, /@has_training|registros_entrenamientos/);
+  assert.match(sql, /fecha_fin=DATE_SUB\('2026-10-24',INTERVAL 1 DAY\)/);
   assert.deepEqual(activated, { vigencyId: '9', alreadyActive: false });
 });
 

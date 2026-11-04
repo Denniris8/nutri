@@ -43,11 +43,12 @@ test('training plan rejects an invalid user or empty goals before opening a sess
   assert.equal(calls, 0);
 });
 
-test('training plan JSON stores only the four rest-day macro values or explicit nulls', () => {
-  const valid = { macros_objetivo: { proteinas_g: null, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 }, plan_markdown: planText.replace('| Proteínas | 140 g |', '| Proteínas | No disponible |') };
+test('training plan requires four numeric rest-day macro estimates', () => {
+  const valid = { macros_objetivo: { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 }, plan_markdown: planText };
   assert.deepEqual(parseTrainingPlanReply([{ type: 'text', text: JSON.stringify(valid) }], planPrompt), {
     plan: valid.plan_markdown, macros: valid.macros_objetivo,
   });
+  assert.throws(() => parseTrainingPlanReply([{ type: 'text', text: JSON.stringify({ ...valid, macros_objetivo: { ...valid.macros_objetivo, proteinas_g: null }, plan_markdown: valid.plan_markdown.replace('| Proteínas | 140 g |', '| Proteínas | No disponible |') }) }], planPrompt), /metas de macros no válidas/);
   assert.throws(() => parseTrainingPlanReply([{ type: 'text', text: '{"macros_objetivo":{},"plan_markdown":"# Plan"}' }]));
   assert.throws(() => parseTrainingPlanReply([{ type: 'text', text: JSON.stringify({ ...valid, macros_entrenamiento: valid.macros_objetivo }) }]));
   assert.throws(() => parseTrainingPlanReply([{ type: 'text', text: JSON.stringify({ ...valid, plan_markdown: valid.plan_markdown.replace('Edad registrada: 32 años.', 'Edad registrada: 35 años; peso: 82 kg.') }) }], planPrompt, { profile: { age: null }, biometricRecords: [], plicometricRecords: [] }), /no están en el perfil/);

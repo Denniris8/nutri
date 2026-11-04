@@ -439,6 +439,7 @@ trainingPlanSendButton?.addEventListener('click', async () => {
   trainingPlanTrigger.setAttribute('aria-busy', 'true');
   trainingPlanTriggerLoading.hidden = false;
   appendTrainingPlanMessage('user', goals);
+  trainingPlanGoalsInput.value = '';
   const progressId = createFoodRequestId();
   const progress = startTrainingProgress(progressId, appendTrainingPlanMessage);
   notifyApp('Generando tu plan de entrenamiento.', 'info');
@@ -457,7 +458,6 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     generatedTrainingGoals = goals;
     generatedTrainingMacros = result.macros;
     setTrainingPlanTargets(generatedTrainingMacros);
-    trainingPlanGoalsInput.value = '';
     trainingPlanSaveButton.hidden = false;
     trainingPlanSaveButton.disabled = false;
     trainingPlanSaveButton.title = '';

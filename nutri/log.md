@@ -731,3 +731,7 @@
 - 2026-11-03 12:34 CST — Incrementada la versión PATCH a `0.1.64` para preparar la reconciliación correctiva de 0006.
 - 2026-11-03 15:07 CST — Registro de comidas: desactivadas temporalmente las búsquedas externas de Open Food Facts y USDA; alimentos no resueltos pasan a websearch y se conserva reutilización del historial local.
 - 2026-11-03 17:41 CST — Incrementada la versión PATCH a `0.1.65` para preparar la desactivación temporal de búsquedas USDA y Open Food Facts.
+- 2026-11-03 23:24 CST — Planes de entrenamiento: metas nutricionales ya no admiten `null`; el prompt pide estimaciones numéricas conservadoras y explícitamente provisionales cuando faltan datos.
+- 2026-11-03 23:32 CST — Generación de planes: se limpia el campo de objetivos al enviar el mensaje, sin afectar el texto enviado ni la conversación.
+- 2026-11-03 23:36 CST — Vigencias de planes: permite activar o cambiar un plan aunque haya entrenamientos guardados en la fecha de inicio; conserva el cierre de la vigencia anterior el día previo y no reasigna sesiones ya guardadas.
+- 2026-11-03 23:40 CST — Incrementada la versión PATCH a `0.1.66` antes de confirmar los cambios locales de planes y generación.

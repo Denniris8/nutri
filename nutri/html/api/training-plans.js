@@ -147,7 +147,7 @@ async function readTrainingPlanForDate({ userId, date, dbQuery, textSql }) {
   return row ? JSON.parse(row) : null;
 }
 
-async function activateTrainingPlan({ userId, planId, startDate, today, dayStart, dayEnd, dbQuery, textSql }) {
+async function activateTrainingPlan({ userId, planId, startDate, today, dbQuery, textSql }) {
   const user = String(userId);
   const plan = String(planId);
   const dateValue = (value) => {
@@ -156,7 +156,7 @@ async function activateTrainingPlan({ userId, planId, startDate, today, dayStart
     return Number.isFinite(parsed) && new Date(parsed).toISOString().slice(0, 10) === value;
   };
   if (!/^\d+$/.test(user) || !/^[1-9]\d{0,19}$/.test(plan) || !dateValue(startDate) || !dateValue(today)
-    || !dayStart || !dayEnd || startDate < today) throw Object.assign(new Error('La fecha de inicio del plan no es válida.'), { status: 400 });
+    || startDate < today) throw Object.assign(new Error('La fecha de inicio del plan no es válida.'), { status: 400 });
   const result = await dbQuery(`SET @locked_user=NULL,@plan_exists=NULL,@active_id=NULL,@active_plan=NULL,@active_start=NULL;
 START TRANSACTION;
 SELECT id INTO @locked_user FROM usuarios WHERE id=${user} FOR UPDATE;
@@ -164,19 +164,16 @@ SET @plan_exists=(SELECT id FROM planes_entrenamiento WHERE id=${plan} AND usuar
 SELECT id,plan_id,fecha_inicio INTO @active_id,@active_plan,@active_start FROM vigencias_planes_entrenamiento WHERE usuario_id=${user} AND fecha_fin IS NULL LIMIT 1 FOR UPDATE;
 SET @already_active=COALESCE(@active_plan=${plan} AND @active_start=${textSql(startDate)},FALSE);
 SET @overlap=EXISTS(SELECT 1 FROM vigencias_planes_entrenamiento WHERE usuario_id=${user} AND id<>COALESCE(@active_id,0) AND (fecha_fin IS NULL OR fecha_fin>=${textSql(startDate)}));
-SET @has_training=EXISTS(SELECT 1 FROM registros_entrenamientos WHERE usuario_id=${user} AND creado_en>=${textSql(dayStart)} AND creado_en<${textSql(dayEnd)});
-SET @can_activate=@locked_user IS NOT NULL AND @plan_exists IS NOT NULL AND ${textSql(startDate)}>=${textSql(today)} AND NOT @overlap AND (@active_id IS NULL OR @active_start<${textSql(startDate)} OR @already_active) AND (@already_active OR NOT @has_training);
+SET @can_activate=@locked_user IS NOT NULL AND @plan_exists IS NOT NULL AND ${textSql(startDate)}>=${textSql(today)} AND NOT @overlap AND (@active_id IS NULL OR @active_start<${textSql(startDate)} OR @already_active);
 UPDATE vigencias_planes_entrenamiento SET fecha_fin=DATE_SUB(${textSql(startDate)},INTERVAL 1 DAY) WHERE id=@active_id AND @can_activate AND NOT @already_active;
 INSERT INTO vigencias_planes_entrenamiento(usuario_id,plan_id,fecha_inicio,fecha_fin,creado_en) SELECT ${user},${plan},${textSql(startDate)},NULL,UTC_TIMESTAMP(3) WHERE @can_activate AND NOT @already_active;
 SET @new_id=LAST_INSERT_ID();
-SELECT JSON_OBJECT('ok',@can_activate,'planExists',@plan_exists IS NOT NULL,'alreadyActive',@already_active,'hasTraining',@has_training,'vigencyId',IF(@already_active,@active_id,@new_id));
+SELECT JSON_OBJECT('ok',@can_activate,'planExists',@plan_exists IS NOT NULL,'alreadyActive',@already_active,'vigencyId',IF(@already_active,@active_id,@new_id));
 COMMIT;`);
   let outcome;
   try { outcome = JSON.parse(result.trim().split(/\r?\n/).at(-1)); } catch { throw new Error('No se pudo verificar la activación del plan.'); }
   if (!outcome.planExists) throw Object.assign(new Error('El plan no existe.'), { status: 404 });
-  if (!outcome.ok) throw Object.assign(new Error(outcome.hasTraining
-    ? 'Ya hay entrenamientos guardados en esa fecha; activa el plan desde otro día para conservar la trazabilidad.'
-    : 'La fecha se cruza con otra vigencia o no avanza respecto al plan actual.'), { status: 409 });
+  if (!outcome.ok) throw Object.assign(new Error('La fecha se cruza con otra vigencia o no avanza respecto al plan actual.'), { status: 409 });
   return { vigencyId: String(outcome.vigencyId), alreadyActive: outcome.alreadyActive };
 }
 

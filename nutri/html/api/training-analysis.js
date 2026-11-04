@@ -95,7 +95,7 @@ function parseTrainingPlanReply(parts, systemPrompt, context) {
   const limits = { proteinas_g: 10000, carbohidratos_g: 10000, grasas_g: 10000, calorias_kcal: 100000 };
   for (const key of keys) {
     const value = macros[key];
-    if (value !== null && (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > limits[key])) throw new Error('El plan generado contiene metas de macros no válidas.');
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > limits[key]) throw new Error('El plan generado contiene metas de macros no válidas.');
   }
   validatePlanSemantics(reply.plan_markdown, macros, extractPlanDisclosure(systemPrompt), context);
   return { plan: reply.plan_markdown.trim(), macros: Object.fromEntries(keys.map((key) => [key, macros[key]])) };

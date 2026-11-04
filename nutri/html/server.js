@@ -12,7 +12,7 @@ const { syncGarminTraining } = require('./api/garmin-training-sync.js');
 const { readBiometrics, saveBiometric } = require('./api/biometrics.js');
 const { readPlicometrics, savePlicometric } = require('./api/plicometrics.js');
 const { clearFoodChatHistory, deleteFoodEntry, getFoodEntryProgress, readFoodEntries, readPendingFoodDraft, saveFoodEntry } = require('./api/food-entries.js');
-const { calendarDayRange, readCalendarTimezone } = require('./api/calendar-day.js');
+const { readCalendarTimezone } = require('./api/calendar-day.js');
 const { deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError } = require('./api/opencode-food.js');
 const { buildChefNutritionContext, deleteChefSession, sendChefMessage } = require('./api/chef-chat.js');
 const { recordApplicationError } = require('./api/application-errors.js');
@@ -1202,8 +1202,7 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
       try {
         const timezone = await readCalendarTimezone(claims.sub, dbQuery, request.headers['x-client-timezone']);
         const today = localCalendarDate(timezone);
-        const { start, end } = calendarDayRange(data.startDate, timezone);
-        const activated = await activateTrainingPlan({ userId: claims.sub, planId: trainingPlanActivate[1], startDate: data.startDate, today, dayStart: start, dayEnd: end, dbQuery, textSql });
+        const activated = await activateTrainingPlan({ userId: claims.sub, planId: trainingPlanActivate[1], startDate: data.startDate, today, dbQuery, textSql });
         json(response, 200, { ok: true, ...activated });
       } catch (error) {
         const status = Number.isInteger(error.status) ? error.status : 503;
