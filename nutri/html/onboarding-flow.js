@@ -90,6 +90,7 @@ if (document.querySelector('#todayView')) {
 }
 
 const trainingPlanGoalsInput = document.querySelector('#trainingPlanGoals');
+const trainingPlanGoalsLabel = document.querySelector('label[for="trainingPlanGoals"]');
 const trainingPlanSendButton = document.querySelector('#sendTrainingPlanGoals');
 const trainingPlanSaveButton = document.querySelector('#saveTrainingPlan');
 const goToSavedTrainingPlansButton = document.querySelector('#goToSavedTrainingPlans');
@@ -394,6 +395,9 @@ async function cancelTrainingPlan() {
     if (!response.ok) throw new Error(result.error || 'No se pudo eliminar la sesión del plan.');
     if (generation !== trainingPlanGeneration) return;
     generatedTrainingPlan = generatedTrainingPlanRunId = generatedTrainingGoals = generatedTrainingMacros = null;
+    trainingPlanGoalsLabel.textContent = 'Tus objetivos';
+    trainingPlanGoalsInput.placeholder = 'Ej.: Quiero ganar fuerza y masa muscular, entrenar 4 días por semana y priorizar piernas. Tengo experiencia intermedia y dispongo de mancuernas y gimnasio.';
+    trainingPlanSendButton.textContent = 'Enviar mensaje';
     trainingPlanSessionActive = false;
     planLoading.hidden = true;
     trainingPlanDialog?.close();
@@ -421,18 +425,18 @@ trainingPlanSendButton?.addEventListener('click', async () => {
   }
   trainingPlanSendButton.disabled = true;
   const generation = ++trainingPlanGeneration;
+  const refining = Boolean(generatedTrainingPlan && generatedTrainingPlanRunId && !savedTrainingPlan);
+  trainingPlanGoalsLabel.textContent = refining ? '¿Qué quieres cambiar del borrador?' : 'Tus objetivos';
   trainingPlanGoalsInput.disabled = true;
-  trainingPlanSaveButton.hidden = true;
-  trainingPlanSaveButton.disabled = true;
-  trainingPlanSaveButton.textContent = 'Guardar';
-  trainingPlanSaveButton.title = 'Guardar el plan generado';
-  generatedTrainingPlan = null;
-  generatedTrainingPlanRunId = null;
-  generatedTrainingGoals = null;
-  generatedTrainingMacros = null;
-  savedTrainingPlan = false;
-  setTrainingPlanTargets(selectedActiveTrainingPlan?.macros || null);
-  planSummaryText.textContent = 'Generando plan…';
+  if (!refining) {
+    trainingPlanSaveButton.hidden = true;
+    trainingPlanSaveButton.disabled = true;
+    trainingPlanSaveButton.textContent = 'Guardar';
+    trainingPlanSaveButton.title = 'Guardar el plan generado';
+    savedTrainingPlan = false;
+    setTrainingPlanTargets(selectedActiveTrainingPlan?.macros || null);
+  }
+  planSummaryText.textContent = refining ? 'Aplicando cambios al borrador…' : 'Generando plan…';
   planLoading.hidden = false;
   void requestScreenWakeLock();
   trainingPlanTrigger.setAttribute('aria-busy', 'true');
@@ -441,11 +445,11 @@ trainingPlanSendButton?.addEventListener('click', async () => {
   trainingPlanGoalsInput.value = '';
   const progressId = createFoodRequestId();
   const progress = startTrainingProgress(progressId, appendTrainingPlanMessage);
-  notifyApp('Generando tu plan de entrenamiento.', 'info');
+  notifyApp(refining ? 'Actualizando el borrador del plan.' : 'Generando tu plan de entrenamiento.', 'info');
   try {
-    const response = await fetch('/api/training-plan', {
+    const response = await fetch(refining ? '/api/training-plan/refine' : '/api/training-plan', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goals, progressId, suppressNotification: true }),
+      body: JSON.stringify(refining ? { runId: generatedTrainingPlanRunId, changes: goals, progressId } : { goals, progressId, suppressNotification: true }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo generar el plan.');
@@ -454,15 +458,18 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     appendTrainingPlanMessage('assistant', result.plan);
     generatedTrainingPlan = result.plan;
     generatedTrainingPlanRunId = result.runId;
-    generatedTrainingGoals = goals;
+    if (!refining) generatedTrainingGoals = goals;
     generatedTrainingMacros = result.macros;
     setTrainingPlanTargets(generatedTrainingMacros);
+    trainingPlanGoalsLabel.textContent = '¿Qué quieres cambiar del borrador?';
+    trainingPlanGoalsInput.placeholder = 'Ej.: cambia la rutina a 3 días y prioriza ejercicios con mancuernas.';
+    trainingPlanSendButton.textContent = 'Aplicar cambios';
     trainingPlanSaveButton.hidden = false;
     trainingPlanSaveButton.disabled = false;
     trainingPlanSaveButton.title = '';
-    planSummaryText.textContent = 'Plan generado · no guardado';
-    notifyApp('Plan generado. Solo aparece en esta vista y no se guarda.', 'success');
-    await notifyResultIfHidden(trainingPlanDialog, 'plan', 'generado', 'Plan generado, aún sin guardar', 'Tu plan está listo para revisar y guardar.');
+    planSummaryText.textContent = refining ? 'Borrador actualizado · no guardado' : 'Plan generado · no guardado';
+    notifyApp(refining ? 'Cambios aplicados. El borrador sigue sin guardar.' : 'Plan generado. Solo aparece en esta vista y no se guarda.', 'success');
+    await notifyResultIfHidden(trainingPlanDialog, 'plan', 'generado', refining ? 'Borrador actualizado' : 'Plan generado, aún sin guardar', 'Tu plan está listo para revisar y guardar.');
   } catch (error) {
     if (generation !== trainingPlanGeneration) return;
     const sessionFailed = error.message === 'No se pudo abrir la sesión para crear el plan.';

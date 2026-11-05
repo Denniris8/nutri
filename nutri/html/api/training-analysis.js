@@ -280,6 +280,41 @@ async function deleteTrainingPlanSession({ userId, runId, requestOpenCode = open
   return withUserLock(id, () => closePendingPlanSession(id, requestOpenCode, runId), planLocks);
 }
 
+async function refineTrainingPlan({ userId, runId, changes, progressId, progressRecorder, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
+  const id = String(userId);
+  const text = typeof changes === 'string' ? changes.trim() : '';
+  if (!/^\d+$/.test(id) || typeof runId !== 'string' || !text || text.length > 2000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(text)) {
+    throw Object.assign(new Error('Describe los cambios que quieres hacer (máximo 2000 caracteres).'), { status: 400 });
+  }
+  return withUserLock(id, async () => {
+    const pending = pendingPlanSessions.get(id);
+    if (!pending || pending.runId !== runId) throw Object.assign(new Error('El borrador ya no está disponible. Genera un plan nuevo.'), { status: 409 });
+    const config = await readConfig();
+    const systemPrompt = await readTrainingPlanPrompt();
+    const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
+    reportTrainingProgress(id, progressId, 'plan_sent', progressRecorder?.record);
+    const send = async (correccionFormato) => {
+      const result = await requestOpenCode('POST', `/session/${encodeURIComponent(pending.sessionId)}/message`, {
+        system: systemPrompt, tools: {}, ...(model ? { model } : {}),
+        ...(config.agent ? { agent: config.agent } : {}), ...(config.variant ? { variant: config.variant } : {}),
+        parts: [{ type: 'text', text: JSON.stringify({ goals: pending.goals, context: pending.context, borradorActual: { plan_markdown: pending.plan, macros_objetivo: pending.macros }, cambiosSolicitados: text, ...(correccionFormato ? { correccionFormato } : {}) }) }],
+      }, config.requestTimeoutMs);
+      if (result.status < 200 || result.status >= 300) throw Object.assign(new Error('No se pudo actualizar el plan.'), { upstream: true });
+      reportTrainingProgress(id, progressId, 'plan_received', progressRecorder?.record);
+      return parseTrainingPlanReply(result.data?.parts || [], systemPrompt, pending.context);
+    };
+    let refined;
+    try { refined = await send(); }
+    catch (error) {
+      if (error.upstream) throw error;
+      refined = await send(`Aplica los cambios solicitados al borrador y devuelve únicamente el objeto JSON completo requerido. Error de validación previo: ${String(error.message).slice(0, 250)}`);
+    }
+    pending.plan = refined.plan;
+    pending.macros = refined.macros;
+    return { ...refined, runId };
+  }, planLocks);
+}
+
 async function generateTrainingPlan({ userId, goals, context, progressId, progressRecorder, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
   const id = String(userId);
   const text = typeof goals === 'string' ? goals.trim() : '';
@@ -336,7 +371,7 @@ async function generateTrainingPlan({ userId, goals, context, progressId, progre
         plan = await generate(`Corrige la respuesta anterior: ${String(error.message).slice(0, 300)} Devuelve únicamente el JSON completo requerido.`);
       }
       const runId = randomUUID();
-      pendingPlanSessions.set(id, { sessionId, runId });
+      pendingPlanSessions.set(id, { sessionId, runId, goals: text, context, plan: plan.plan, macros: plan.macros });
       retained = true;
       return { ...plan, runId };
     } catch (error) {
@@ -353,4 +388,4 @@ async function generateTrainingPlan({ userId, goals, context, progressId, progre
   }, planLocks);
 }
 
-module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, extractExplicitSteps, generateTrainingPlan, getTrainingProgress, parseReply, parseTrainingPlanReply, readTrainingPlanPrompt, reportTrainingProgress };
+module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, extractExplicitSteps, generateTrainingPlan, getTrainingProgress, parseReply, parseTrainingPlanReply, readTrainingPlanPrompt, refineTrainingPlan, reportTrainingProgress };

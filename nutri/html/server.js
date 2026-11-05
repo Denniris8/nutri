@@ -18,7 +18,7 @@ const { deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, reco
 const { buildChefNutritionContext, deleteChefSession, sendChefMessage } = require('./api/chef-chat.js');
 const { recordApplicationError } = require('./api/application-errors.js');
 const { sendPasswordRecoveryEmail: defaultSendPasswordRecoveryEmail, sendVerificationEmail: defaultSendVerificationEmail } = require('./api/email.js');
-const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, getTrainingProgress, readTrainingPlanPrompt, reportTrainingProgress } = require('./api/training-analysis.js');
+const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, getTrainingProgress, readTrainingPlanPrompt, refineTrainingPlan, reportTrainingProgress } = require('./api/training-analysis.js');
 const { createAnalysisProgressRecorder } = require('./api/analysis-progress.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailyStepData, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
 const { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
@@ -1163,6 +1163,37 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
         const message = cleanupFailed ? 'No se pudo cerrar la sesión temporal; el plan no se guardó en la aplicación.' : sessionOpenFailed ? 'No se pudo preparar el análisis del plan.' : error.status ? error.message : 'No se pudo generar el plan de entrenamiento.';
         if (status >= 500) json(response, status, { error: message, traceId });
         else authError(response, status, message);
+      }
+      return;
+    }
+
+    if (pathname === '/api/training-plan/refine') {
+      if (request.method !== 'POST') { response.writeHead(405, { Allow: 'POST' }).end(); return; }
+      if (!sameOrigin(request)) { authError(response, 403, 'Solicitud no permitida.'); return; }
+      if (!allowAttempt(request, response, 'training-plan-refine')) return;
+      let claims;
+      try { claims = await authenticated(request); }
+      catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
+      if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
+      let data;
+      try { data = await bodyJson(request); }
+      catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
+      if (data.progressId != null && (typeof data.progressId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(data.progressId))) {
+        authError(response, 400, 'Solicitud de progreso no válida.'); return;
+      }
+      const progressRecorder = createAnalysisProgressRecorder({ dbQuery, textSql, userId: claims.sub, flow: 'plan', operationId: data.progressId || randomUUID() });
+      try {
+        reportTrainingProgress(claims.sub, data.progressId, 'plan_context_started', progressRecorder.record);
+        const refined = await refineTrainingPlan({ userId: claims.sub, runId: data.runId, changes: data.changes, progressId: data.progressId, progressRecorder, requestOpenCode: openCodeRequest });
+        reportTrainingProgress(claims.sub, data.progressId, 'plan_complete', progressRecorder.record);
+        await progressRecorder.flush();
+        json(response, 200, refined);
+      } catch (error) {
+        reportTrainingProgress(claims.sub, data.progressId, 'plan_failed', progressRecorder.record);
+        await progressRecorder.flush();
+        const status = error.status || 502;
+        if (status >= 500) json(response, status, { error: 'No se pudo actualizar el plan.' });
+        else authError(response, status, error.message);
       }
       return;
     }

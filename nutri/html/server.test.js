@@ -1132,7 +1132,7 @@ test('training plan generation is blocked when the account has no registered wei
   }, { openCodeRequest: async (...args) => { openCodeCalls.push(args); return { status: 200, data: {} }; } });
 });
 
-test('authenticated user can generate and save a training plan through the API', async () => {
+test('authenticated user can refine an unsaved training plan and save the updated draft', async () => {
   const queries = [];
   const requests = [];
   const disclosure = 'Las metas de calorías y carbohidratos se ajustan según los entrenamientos registrados para el día seleccionado.';
@@ -1163,7 +1163,14 @@ test('authenticated user can generate and save a training plan through the API',
     assert.deepEqual(generated.macros, macros);
     assert.match(generated.runId, /^[0-9a-f-]{36}$/i);
 
-    saveRequest = { runId: generated.runId, goals: 'Ganar fuerza', plan: generated.plan, macros: generated.macros, suppressNotification: true };
+    const refineResponse = await post(base + '/api/training-plan/refine', { runId: generated.runId, changes: 'Reduce la rutina a tres días', suppressNotification: true }, { Cookie: cookie });
+    assert.equal(refineResponse.status, 200);
+    const refined = await refineResponse.json();
+    assert.equal(refined.runId, generated.runId);
+    assert.equal(refined.plan, plan);
+    assert.deepEqual(refined.macros, macros);
+
+    saveRequest = { runId: generated.runId, goals: 'Ganar fuerza', plan: refined.plan, macros: refined.macros, suppressNotification: true };
     const savedResponse = await post(base + '/api/training-plans', saveRequest, { Cookie: cookie });
     assert.equal(savedResponse.status, 201);
     const saved = await savedResponse.json();
@@ -1173,6 +1180,7 @@ test('authenticated user can generate and save a training plan through the API',
     assert.ok(queries.some((sql) => sql.includes('INSERT INTO planes_entrenamiento') && sql.includes('usuario_id=27')));
     assert.deepEqual(requests, [
       { method: 'POST', endpoint: '/session' },
+      { method: 'POST', endpoint: '/session/ses_plan123/message' },
       { method: 'POST', endpoint: '/session/ses_plan123/message' },
       { method: 'DELETE', endpoint: '/session/ses_plan123' },
     ]);
@@ -1185,7 +1193,15 @@ test('authenticated user can generate and save a training plan through the API',
         return { status: 201, data: { id: 'ses_plan123' } };
       }
       if (method === 'POST') {
-        assert.deepEqual(JSON.parse(body.parts[0].text), { goals: 'Ganar fuerza', context: {
+        const message = JSON.parse(body.parts[0].text);
+        if (Object.hasOwn(message, 'cambiosSolicitados')) {
+          assert.equal(message.goals, 'Ganar fuerza');
+          assert.equal(message.cambiosSolicitados, 'Reduce la rutina a tres días');
+          assert.equal(message.borradorActual.plan_markdown, plan);
+          assert.deepEqual(message.borradorActual.macros_objetivo, macros);
+          return { status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({ macros_objetivo: macros, plan_markdown: plan }) }] } };
+        }
+        assert.deepEqual(message, { goals: 'Ganar fuerza', context: {
           profile: { age: 32, sex: 'masculino', heightCm: 175, restingMetabolismKcal: null, restingMetabolismSource: null },
           preferences: null, biometricRecords: [], plicometricRecords: [], previousTrainingPlanSummary: null,
         } });

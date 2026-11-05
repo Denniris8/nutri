@@ -764,3 +764,5 @@
 - 2026-11-05 11:26 CST — Incrementada la versión PATCH a `0.1.76` antes del commit solicitado.
 - 2026-11-05 11:43 CST — Preparada migración 0014 con el reporte BIA autorizado para la cuenta de producción 25 y el 2026-11-02; verifica ID+nombre y evita duplicar otra fila BIA de ese día. Como no se proporcionó hora, usa 00:00 solo como marcador de fecha. Comprobación MySQL productiva de solo lectura confirmó cuenta y ausencia de filas biométricas ese día; migración no aplicada.
 - 2026-11-05 11:43 CST — Incrementada la versión PATCH a `0.1.77` antes del commit solicitado.
+- 2026-11-05 11:59 CST — Añadido refinamiento conversacional del borrador de plan sin guardar: conserva sesión/contexto, aplica cambios pedidos, valida el plan completo y deja Guardar como acción separada. Añadida prueba de integración; no ejecutada.
+- 2026-11-05 12:00 CST — Incrementada la versión PATCH a `0.1.78` antes del commit solicitado.
