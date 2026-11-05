@@ -1944,6 +1944,7 @@ const foodDate = () => foodEntryDate || document.querySelector('#daySelect')?.va
 let foodRequestId = '';
 let foodTargetEntryId = null;
 let foodPending = false;
+let foodPreviewEdits = [];
 let foodSessionReady = false;
 let foodSessionPreparing = false;
 let foodOpenCodeSessionActive = false;
@@ -2010,7 +2011,9 @@ function renderFoodChat(messages) {
 function renderFoodPreview(items = []) {
   const chat = document.querySelector('#foodChatMessages');
   const previewItems = Array.isArray(items) ? items : [];
+  foodPreviewEdits = [];
   if (!previewItems.length) return;
+  const edits = new Map();
   const preview = document.createElement('section');
   preview.className = 'food-chat-preview';
   preview.setAttribute('aria-label', 'Vista previa editable de alimentos');
@@ -2048,9 +2051,32 @@ function renderFoodPreview(items = []) {
         document.querySelector('#foodEntryFeedback').textContent = 'Indica el alimento y su cantidad para aplicar la edición.';
         return;
       }
+      const originalQuantity = (item.quantityText || (item.quantityGrams != null ? `${item.quantityGrams} g` : '')).trim();
+      if (newName === (item.name || '').trim() && newQuantity === originalQuantity) {
+        if (!edits.has(item)) {
+          document.querySelector('#foodEntryFeedback').textContent = 'No hay cambios en este alimento.';
+          return;
+        }
+        edits.delete(item);
+      } else {
+        edits.set(item, { name: newName, quantity: newQuantity });
+      }
+      foodPreviewEdits = [...edits].map(([original, change]) => ({
+        originalName: original.name || '', originalSourceText: original.sourceText || original.name || '',
+        originalQuantityText: original.quantityText || (original.quantityGrams == null ? '' : `${original.quantityGrams} g`),
+        name: change.name, quantityText: change.quantity,
+      }));
       const description = document.querySelector('#foodDescription');
-      description.value = `Para la aclaración del borrador: alimento ${newName}, cantidad ${newQuantity}${item.name && item.name !== newName ? ` (antes aparecía como ${item.name})` : ''}.`;
-      document.querySelector('#foodEntryFeedback').textContent = 'Revisa la respuesta y envíala para actualizar la vista previa.';
+      const corrections = [...edits].map(([original, change]) => {
+        const oldQuantity = original.quantityText || (original.quantityGrams == null ? 'sin cantidad' : `${original.quantityGrams} g`);
+        return `alimento «${original.name || original.sourceText}» (${original.sourceText || original.name}, cantidad original «${oldQuantity}») → «${change.name}», cantidad «${change.quantity}»`;
+      });
+      description.value = edits.size
+        ? `Correcciones de la vista previa: ${corrections.join('; ')}.`
+        : '';
+      document.querySelector('#foodEntryFeedback').textContent = edits.size
+        ? 'Revisa y envía todas las correcciones para actualizar la vista previa.'
+        : 'No hay cambios en la vista previa.';
       description.focus();
     });
     row.append(name, quantity, status, edit, nutrition);
@@ -2202,7 +2228,8 @@ async function submitFoodMessage(retry = null) {
   const text = retry?.text || description.value.trim();
   if (!text) return;
   const audioReady = unlockFoodAudio();
-  const body = retry?.body || { requestId: foodRequestId, fecha: foodDate(), descripcion: text, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, targetEntryId: foodTargetEntryId, suppressNotification: true };
+  const body = retry?.body || { requestId: foodRequestId, fecha: foodDate(), descripcion: text, timezone: Intl.DateTimeFormat().resolvedOptions().timeZone, targetEntryId: foodTargetEntryId, previewEdits: foodPreviewEdits, suppressNotification: true };
+  foodPreviewEdits = [];
   let draftRestored = false;
   let resultNotificationHandled = false;
   foodPending = true;

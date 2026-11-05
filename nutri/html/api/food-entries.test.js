@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitGrams, applyOpenFoodFactsMacros, confirmedNutritionDateAnswer, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, isGenericEstimatePermissionQuestion, knownFoodsShortcut, needsSelectedNutritionDateConfirmation, numberVisibleFoodMeals, parseDeclaredFoodShortcut, pendingFoodItemSql, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, selectedNutritionDateAnswer, usedFoodWebSearch } = require('./food-entries.js');
+const { applyExplicitGrams, applyOpenFoodFactsMacros, applyPreviewQuantityEdits, confirmedNutritionDateAnswer, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, isGenericEstimatePermissionQuestion, knownFoodsShortcut, needsSelectedNutritionDateConfirmation, numberVisibleFoodMeals, parseDeclaredFoodShortcut, pendingFoodItemSql, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, selectedNutritionDateAnswer, usedFoodWebSearch } = require('./food-entries.js');
 
 test('accepts confirmed teaspoon and tablespoon quantities without requiring grams', () => {
   for (const quantityText of ['1 cucharadita', 'una cucharadita', '2 cditas.', '1 cucharada', 'dos cucharadas', '2 cdas.', 'una pizca', '1 taza', 'un puñado', '2 piezas']) {
@@ -160,11 +160,34 @@ test('known food matching tolerates accents, whitespace, and typographic dashes 
 
 test('pending food draft returns saved candidate items for its preview', async () => {
   const draft = JSON.stringify({ id: 12, requestId: 'request', fecha: '2026-11-04', description: 'pollo', question: '¿Cuántos gramos?', state: 'borrador_chat' });
-  const item = JSON.stringify({ name: 'Pollo', quantityText: '150 g', quantityGrams: 150, macroStatus: 'estimado', macros: { energyKcal: 200 } });
+  const item = JSON.stringify({ sourceText: 'pollo asado', name: 'Pollo', quantityText: '150 g', quantityGrams: 150, macroBasis: 'per_100g', macroStatus: 'estimado', macroSource: 'websearch', sourceName: 'Ficha', sourceUrl: 'https://example.com/pollo', sourceQuote: 'Datos nutricionales', macros: { energyKcal: 200 } });
   let call = 0;
   const result = await readPendingFoodDraft({ userId: 7, dbQuery: async () => (++call === 1 ? draft : call === 2 ? '' : item) });
   assert.equal(result.previewItems[0].name, 'Pollo');
   assert.equal(result.previewItems[0].quantityText, '150 g');
+  assert.equal(result.previewItems[0].sourceText, 'pollo asado');
+  assert.equal(result.previewItems[0].macroSource, 'websearch');
+  assert.equal(result.previewItems[0].macroBasis, 'per_100g');
+});
+
+test('preview quantity edits scale saved portion macros and preserve source metadata', () => {
+  const prior = {
+    sourceText: 'pollo', name: 'Pollo', quantityText: '100 g', quantityGrams: 100,
+    macroBasis: 'per_portion', macroStatus: 'estimado', macroSource: 'websearch',
+    sourceName: 'Ficha', sourceUrl: 'https://example.com/pollo', sourceQuote: 'Datos',
+    macros: { energyKcal: 232, proteinG: 20, carbohydrateG: 20, fatG: 8, fiberG: null },
+  };
+  const resultItem = { ...prior, macros: { energyKcal: 1, proteinG: 1, carbohydrateG: 1, fatG: 1, fiberG: 0 } };
+  applyPreviewQuantityEdits([resultItem], [prior], [{
+    originalName: 'Pollo', originalSourceText: 'pollo', originalQuantityText: '100 g',
+    name: 'Pollo', quantityText: '0.15 kg',
+  }]);
+  assert.equal(resultItem.quantityGrams, 150);
+  assert.equal(resultItem.quantityText, '0.15 kg');
+  assert.equal(resultItem.sourceText, 'pollo');
+  assert.deepEqual(resultItem.macros, { energyKcal: 348, proteinG: 30, carbohydrateG: 30, fatG: 12, fiberG: null });
+  assert.equal(resultItem.macroSource, 'websearch');
+  assert.equal(resultItem.sourceUrl, prior.sourceUrl);
 });
 
 test('per-100 g source products are never applied to foods measured by volume', () => {

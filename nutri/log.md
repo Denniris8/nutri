@@ -751,3 +751,5 @@
 - 2026-11-04 01:00 CST — Registro de comidas: una aclaración posterior reemplazaba la pregunta pendiente y el servidor olvidaba la confirmación previa del día durante la madrugada. Ahora recupera la confirmación y hora sugerida del historial; añadida prueba de regresión. No se ejecutaron pruebas.
 - 2026-11-04 01:12 CST — Modal de registro de comidas: el aviso «Se guardará para el día …» ahora resalta en amarillo, incluido el día seleccionado.
 - 2026-11-04 01:14 CST — Incrementada la versión PATCH a `0.1.70` antes de confirmar el ajuste visual del aviso de fecha en el modal de comidas.
+- 2026-11-04 20:56 CST — Vista previa de comidas: las ediciones de varias filas se acumulan; el servidor escala de forma determinista macros de cambios solo de cantidad en g/kg y conserva procedencia; los cambios de producto quedan para resolver por OpenCode. Pruebas ampliadas, no ejecutadas.
+- 2026-11-04 21:43 CST — Incrementada la versión PATCH a `0.1.72` antes del commit de los ajustes al flujo de edición de comidas.

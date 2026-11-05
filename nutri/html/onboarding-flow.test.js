@@ -348,21 +348,37 @@ test('food modal shows a safe OpenCode transport error without trace details', a
   assert.equal(elements['#foodLoading'].hidden, true);
 });
 
-test('clarification shows an editable food preview and applies edits to the reply composer', async () => {
-  const { elements } = loadFlow('', async (url) => url === '/api/food-entries'
-    ? { ok: true, json: async () => ({ state: 'requiere_aclaracion', requestId: '123e4567-e89b-42d3-a456-426614174000', question: '¿Cuántos gramos?', messages: [{ role: 'assistant', content: '¿Cuántos gramos?' }], previewItems: [{ name: 'Pollo', quantityText: '100 g', quantityGrams: 100, macroStatus: 'estimado', macros: { energyKcal: 165, proteinG: 31, carbohydrateG: 0, fatG: 4 } }] }) }
-    : { ok: true, json: async () => ({ progress: null }) });
+test('clarification applies multiple preview edits together in the reply composer', async () => {
+  const foodPosts = [];
+  const { elements } = loadFlow('', async (url, options = {}) => {
+    if (url === '/api/food-entries') {
+      foodPosts.push(options);
+      return { ok: true, json: async () => ({ state: 'requiere_aclaracion', requestId: '123e4567-e89b-42d3-a456-426614174000', question: '¿Cuántos gramos?', messages: [{ role: 'assistant', content: '¿Cuántos gramos?' }], previewItems: [
+      { sourceText: 'Pollo', name: 'Pollo', quantityText: '100 g', quantityGrams: 100, macroStatus: 'estimado', macros: { energyKcal: 165, proteinG: 31, carbohydrateG: 0, fatG: 4 } },
+      { sourceText: 'Arroz', name: 'Arroz', quantityText: '50 g', quantityGrams: 50, macroStatus: 'estimado', macros: { energyKcal: 65, proteinG: 1, carbohydrateG: 14, fatG: 0 } },
+      ] }) };
+    }
+    return { ok: true, json: async () => ({ progress: null }) };
+  });
   await elements['#registerFoodButton'].dispatch('click');
   elements['#foodDescription'].value = 'pollo';
   await elements['#registerFoodForm'].dispatch('submit');
   const preview = elements['#foodChatMessages'].children.find((child) => child.className === 'food-chat-preview');
   assert.ok(preview);
-  const row = preview.children[1];
-  row.children[0].value = 'Pollo asado';
-  row.children[1].value = '150 g';
-  await row.children[3].dispatch('click');
-  assert.match(elements['#foodDescription'].value, /Pollo asado, cantidad 150 g/);
+  const rows = preview.children.filter((child) => child.className === 'food-preview-row');
+  rows[0].children[0].value = 'Pollo asado';
+  rows[0].children[1].value = '150 g';
+  await rows[0].children[3].dispatch('click');
+  rows[1].children[1].value = '75 g';
+  await rows[1].children[3].dispatch('click');
+  assert.match(elements['#foodDescription'].value, /Pollo.*Pollo asado.*150 g/);
+  assert.match(elements['#foodDescription'].value, /Arroz.*Arroz.*75 g/);
   assert.equal(elements['#foodDescription'].focused, true);
+  await elements['#registerFoodForm'].dispatch('submit');
+  const sentEdits = JSON.parse(foodPosts[1].body).previewEdits;
+  assert.equal(sentEdits.length, 2);
+  assert.equal(sentEdits[0].name, 'Pollo asado');
+  assert.equal(sentEdits[1].quantityText, '75 g');
 });
 
 test('More tab switches the visible dashboard section', () => {

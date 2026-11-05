@@ -529,6 +529,50 @@ function applyExplicitGrams(items, description, allowUniqueMissing = false) {
   return applyExplicitQuantities(items, description, allowUniqueMissing);
 }
 
+function explicitMassGrams(value) {
+  const match = String(value || '').trim().match(/^(\d+(?:[.,]\d+)?)\s*(kg|kilogramos?|gr|g|gramos?)$/i);
+  if (!match) return null;
+  const grams = Number(match[1].replace(',', '.')) * (/^(?:kg|kilogramos?)$/i.test(match[2]) ? 1000 : 1);
+  return Number.isFinite(grams) && grams > 0 && grams <= 9999999.999 ? grams : null;
+}
+
+function applyPreviewQuantityEdits(items, pendingItems, edits) {
+  if (!Array.isArray(items) || !Array.isArray(pendingItems) || !Array.isArray(edits)) return items;
+  for (const edit of edits) {
+    if (!edit || typeof edit.originalName !== 'string' || typeof edit.originalSourceText !== 'string'
+      || typeof edit.originalQuantityText !== 'string' || edit.name !== edit.originalName) continue;
+    const quantityGrams = explicitMassGrams(edit.quantityText);
+    if (quantityGrams == null) continue;
+    const previous = pendingItems.filter((item) => item.name === edit.originalName
+      && item.sourceText === edit.originalSourceText && (item.quantityText || '') === edit.originalQuantityText);
+    if (previous.length !== 1) continue;
+    const prior = previous[0];
+    let matches = items.filter((item) => item.name === prior.name
+      && (item.sourceText === prior.sourceText || item.quantityGrams === prior.quantityGrams));
+    if (matches.length !== 1) matches = items.filter((item) => item.name === prior.name);
+    if (matches.length !== 1) continue;
+    const item = matches[0];
+    item.name = prior.name;
+    item.sourceText = prior.sourceText;
+    if (prior.macroBasis === 'per_100g') {
+      item.macros = { ...prior.macros };
+      item.macroBasis = 'per_100g';
+    } else if (prior.macroBasis === 'per_portion' && Number.isFinite(prior.quantityGrams) && prior.quantityGrams > 0) {
+      const factor = quantityGrams / prior.quantityGrams;
+      item.macros = Object.fromEntries(Object.entries(prior.macros).map(([key, value]) => [key, value == null ? null : value * factor]));
+      item.macroBasis = 'per_portion';
+    } else continue;
+    item.macroStatus = prior.macroStatus;
+    item.macroSource = prior.macroSource;
+    item.sourceName = prior.sourceName;
+    item.sourceUrl = prior.sourceUrl;
+    item.sourceQuote = prior.sourceQuote;
+    item.quantityGrams = quantityGrams;
+    item.quantityText = edit.quantityText.trim();
+  }
+  return items;
+}
+
 function isQuantityQuestion(text) {
   return /(?:cu[aá]ntos?\s+(?:gramos?|mililitros?)|cantidad\s+en\s+(?:gramos?|mililitros?)|qu[eé]\s+cantidad|peso aproximado)/i.test(String(text || ''));
 }
@@ -884,7 +928,10 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       result = parseReply(parts);
     }
     if (reuseAsNewMeal && result) { result.action = 'new'; result.targetEntryId = null; }
-    let items = repairEstimatedEnergy(applyOpenFoodFactsMacros(applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems), openFoodFactsProducts));
+    let items = applyPreviewQuantityEdits(
+      repairEstimatedEnergy(applyOpenFoodFactsMacros(applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems), openFoodFactsProducts)),
+      pendingFoodItems, data.previewEdits,
+    );
     if (result) result.items = items;
     const getReplyIssues = () => [
       ...(!['new', 'append', 'update'].includes(result?.action) ? ['action'] : []),
@@ -907,7 +954,10 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       stage = 'parse';
       result = parseReply(parts);
       if (reuseAsNewMeal && result) { result.action = 'new'; result.targetEntryId = null; }
-      items = repairEstimatedEnergy(applyOpenFoodFactsMacros(applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems), openFoodFactsProducts));
+      items = applyPreviewQuantityEdits(
+        repairEstimatedEnergy(applyOpenFoodFactsMacros(applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems), openFoodFactsProducts)),
+        pendingFoodItems, data.previewEdits,
+      );
       if (result) result.items = items;
       replyIssues = getReplyIssues();
       if ((replyIssues.length || (!items.length && !result?.clarificationQuestion)) && attempt === retryLimit) {
@@ -1059,7 +1109,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
         catch { for (const item of candidates) await persistCandidate(item); }
       }
       const messages = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`);
-      const previewItems = candidates.map(({ name, quantityText, quantityGrams, macroStatus, macros }) => ({ name, quantityText, quantityGrams, macroStatus, macros }));
+      const previewItems = candidates.map(({ sourceText, name, quantityText, quantityGrams, macroBasis, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote, macros }) => ({ sourceText, name, quantityText, quantityGrams, macroBasis, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote, macros }));
       json(response, 200, { state: 'requiere_aclaracion', entryId, requestId: entry.requestId, targetEntryId: clarificationTargetId, question, previewItems, messages: messages ? messages.split(/\r?\n/).map((row) => JSON.parse(row)) : [], message: question });
       return;
     }
@@ -1168,4 +1218,4 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
   }
 }
 
-module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, confirmedNutritionDateAnswer, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, isGenericEstimatePermissionQuestion, knownFoodsShortcut, localDateTimeToUtc, needsSelectedNutritionDateConfirmation, normalizeFoodReply, numberVisibleFoodMeals, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, selectedNutritionDateAnswer, usedFoodWebSearch, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, applyPreviewQuantityEdits, clearFoodChatHistory, confirmedNutritionDateAnswer, deleteFoodEntry, explicitMassGrams, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, isGenericEstimatePermissionQuestion, knownFoodsShortcut, localDateTimeToUtc, needsSelectedNutritionDateConfirmation, normalizeFoodReply, numberVisibleFoodMeals, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, selectedNutritionDateAnswer, usedFoodWebSearch, validateFoodEntry, validFoodItem };
