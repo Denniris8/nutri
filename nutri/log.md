@@ -753,3 +753,5 @@
 - 2026-11-04 01:14 CST — Incrementada la versión PATCH a `0.1.70` antes de confirmar el ajuste visual del aviso de fecha en el modal de comidas.
 - 2026-11-04 20:56 CST — Vista previa de comidas: las ediciones de varias filas se acumulan; el servidor escala de forma determinista macros de cambios solo de cantidad en g/kg y conserva procedencia; los cambios de producto quedan para resolver por OpenCode. Pruebas ampliadas, no ejecutadas.
 - 2026-11-04 21:43 CST — Incrementada la versión PATCH a `0.1.72` antes del commit de los ajustes al flujo de edición de comidas.
+- 2026-11-05 10:38 CST — Los errores al cargar la lista de planes guardados ya no borran las metas del plan vigente del día; la lista y los objetivos activos se cargan por solicitudes independientes. No se ejecutaron pruebas.
+- 2026-11-05 10:38 CST — Incrementada la versión PATCH a `0.1.73` antes del commit solicitado.

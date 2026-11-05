@@ -361,7 +361,6 @@ async function loadSavedTrainingPlans() {
     message.textContent = error.message || 'No se pudieron cargar los planes guardados.';
     savedTrainingPlansList.replaceChildren(message);
     savedTrainingPlansList.setAttribute('aria-busy', 'false');
-    if (!generatedTrainingMacros || savedTrainingPlan) setTrainingPlanTargets(null);
     notifyApp(message.textContent, 'error');
   }
 }
