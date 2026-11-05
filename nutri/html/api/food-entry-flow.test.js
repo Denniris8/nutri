@@ -89,7 +89,7 @@ test('registra leche y whey con cantidades del mensaje tras respuesta inválida 
   };
   const responseBody = await new Promise((resolve) => saveFoodEntry({
     response: {}, data: { fecha: '2026-10-22', descripcion: description, requestId: '8e4d53e9-4268-4b45-8b12-1b510e8db22e', timezone: 'UTC' },
-    userId: 999991, dbQuery, textSql: (value) => `'${String(value).replace(/'/g, "''")}'`, json: (_response, _status, body) => resolve(body),
+    userId: 999991, dbQuery, textSql: (value) => `'${String(value).replace(/'/g, "''")}'`, json: (_response, _status, body) => resolve(body), now: () => new Date('2026-10-22T12:00:00Z'),
     requestOpenCode,
   }));
 
@@ -106,6 +106,66 @@ test('registra leche y whey con cantidades del mensaje tras respuesta inválida 
   assert.match(insert, /'250 ml',null/i);
   assert.match(insert, /'31 g',31/i);
   assert.match(insert, /111,111,9,12,3,null\)/i);
+});
+
+test('registra atún, sopa instantánea y mini wontons con un solo análisis y cantidades exactas', async () => {
+  const description = '100 g atún Tunny en agua con aceite (1 lata), Maruchan Instant Lunch de res de 90 g, 44 g mini wontons';
+  const itemSpecs = [
+    ['Atún Tunny en agua con aceite', '100 g', 100, 180, 24, 0, 9],
+    ['Maruchan Instant Lunch de res', '90 g', 90, 410, 9, 55, 16],
+    ['Mini wontons', '44 g', 44, 90, 4, 12, 3],
+  ];
+  const savedItems = itemSpecs.map(([name, quantity, quantityGrams, energyKcal, proteinG, carbohydrateG, fatG], index) => ({
+    itemId: String(index + 1), name, quantity, quantityGrams, basis: 'per_portion', energyKcal, proteinG, carbohydrateG, fatG, fiberG: null,
+    macroStatus: 'estimado', macroSource: 'opencode_estimado',
+  }));
+  const statements = [];
+  let committed = false;
+  const dbQuery = async (sql) => {
+    statements.push(sql);
+    if (sql.includes("SELECT 'timezone';")) return 'timezone\nUTC\ndraftDate\nprior';
+    if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return `550\n${JSON.stringify({ state: 'borrador_chat', fecha: '2026-11-04', description, question: null, targetEntryId: null })}`;
+    if (sql.includes('SELECT session_id FROM sesiones_comidas_opencode')) return '';
+    if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)')) return '';
+    if (sql.includes("SELECT 'records';")) return committed ? [
+      'records', JSON.stringify({ id: '550', fecha: '2026-11-04', createdAt: '2026-11-04T12:00:00Z', state: 'completado', description }),
+      'items', ...savedItems.map((item) => JSON.stringify({ entryId: '550', ...item })), 'clarifications',
+    ].join('\n') : 'records\nitems\nclarifications';
+    if (sql.includes('COMMIT')) { committed = true; return ''; }
+    return '';
+  };
+  let analysisCalls = 0;
+  const requestOpenCode = async (method, path, body) => {
+    if (method === 'POST' && path === '/session') return { status: 200, data: { id: 'ses_foodQuickEntryTest' } };
+    if (method === 'POST' && path.endsWith('/message')) {
+      analysisCalls += 1;
+      const context = JSON.parse(body.parts[0].text);
+      assert.equal(context.foodIdentificationFirstPass, undefined);
+      assert.equal(context.genericEstimateApproved, true);
+      assert.equal(body.tools.websearch, undefined);
+      return { status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({
+        action: 'new', targetEntryId: null, clarificationQuestion: null,
+        items: itemSpecs.map(([name, quantity, quantityGrams, energyKcal, proteinG, carbohydrateG, fatG]) => ({
+          sourceText: name, name, quantityText: quantity, quantityGrams, macroBasis: 'per_portion', macroStatus: 'estimado', macroSource: 'opencode_estimado',
+          sourceName: null, sourceUrl: null, sourceQuote: null,
+          macros: { energyKcal, proteinG, carbohydrateG, fatG, fiberG: null },
+        })),
+      }) }] } };
+    }
+    if (method === 'DELETE') return { status: 204, data: {} };
+    throw new Error(`Unexpected OpenCode request: ${method} ${path}`);
+  };
+  const responseBody = await new Promise((resolve) => saveFoodEntry({
+    response: {}, data: { fecha: '2026-11-04', descripcion: description, requestId: '8e4d53e9-4268-4b45-8b12-1b510e8db230', timezone: 'UTC' },
+    userId: 999991, dbQuery, textSql: (value) => value == null ? 'NULL' : `'${String(value).replace(/'/g, "''")}'`, json: (_response, _status, body) => resolve(body), now: () => new Date('2026-11-04T12:00:00Z'),
+    requestOpenCode,
+  }));
+
+  assert.equal(responseBody.state, 'completado');
+  assert.equal(analysisCalls, 1);
+  assert.equal(responseBody.records[0].items.length, 3);
+  assert.deepEqual(responseBody.records[0].items.map(({ quantity, quantityGrams }) => [quantity, quantityGrams]), [['100 g', 100], ['90 g', 90], ['44 g', 44]]);
+  assert.ok(statements.some((sql) => sql.includes('INSERT INTO registros_comida_items(')));
 });
 
 test('guarda el formato completo declarado sin crear ni consultar una sesión OpenCode', async () => {
@@ -130,7 +190,7 @@ test('guarda el formato completo declarado sin crear ni consultar una sesión Op
   };
   const responseBody = await new Promise((resolve) => saveFoodEntry({
     response: {}, data: { fecha: '2026-10-22', descripcion: description, requestId: '8e4d53e9-4268-4b45-8b12-1b510e8db22f', timezone: 'UTC' },
-    userId: 999991, dbQuery, textSql: (value) => `'${String(value).replace(/'/g, "''")}'`, json: (_response, _status, body) => resolve(body),
+    userId: 999991, dbQuery, textSql: (value) => `'${String(value).replace(/'/g, "''")}'`, json: (_response, _status, body) => resolve(body), now: () => new Date('2026-10-22T12:00:00Z'),
     requestOpenCode: async () => { throw new Error('OpenCode must not be called for fully declared data'); },
   }));
   assert.equal(responseBody.state, 'completado');

@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitGrams, applyOpenFoodFactsMacros, confirmedNutritionDateAnswer, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, needsSelectedNutritionDateConfirmation, numberVisibleFoodMeals, parseDeclaredFoodShortcut, pendingFoodItemSql, repairEstimatedEnergy, reportFoodProgress, selectedNutritionDateAnswer, usedFoodWebSearch } = require('./food-entries.js');
+const { applyExplicitGrams, applyOpenFoodFactsMacros, confirmedNutritionDateAnswer, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, isGenericEstimatePermissionQuestion, knownFoodsShortcut, needsSelectedNutritionDateConfirmation, numberVisibleFoodMeals, parseDeclaredFoodShortcut, pendingFoodItemSql, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, selectedNutritionDateAnswer, usedFoodWebSearch } = require('./food-entries.js');
 
 test('accepts confirmed teaspoon and tablespoon quantities without requiring grams', () => {
   for (const quantityText of ['1 cucharadita', 'una cucharadita', '2 cditas.', '1 cucharada', 'dos cucharadas', '2 cdas.', 'una pizca', '1 taza', 'un puñado', '2 piezas']) {
@@ -21,6 +21,12 @@ test('uses the suggested end-of-day time only when the selected-date confirmatio
   assert.deepEqual(selectedNutritionDateAnswer(question, 'Sí'), { confirmed: true, time: { hours: [23], minute: 59 }, lastSecond: true });
   assert.equal(selectedNutritionDateAnswer(question, 'No').declined, true);
   assert.equal(selectedNutritionDateAnswer(question, 'A las 8:30 p. m.').time.hours[0], 20);
+});
+
+test('detects generic-macro permission questions so the server can resolve them automatically', () => {
+  assert.equal(isGenericEstimatePermissionQuestion('¿Autorizas estimar los macros?'), true);
+  assert.equal(isGenericEstimatePermissionQuestion('¿Quieres que use genéricos?'), true);
+  assert.equal(isGenericEstimatePermissionQuestion('¿Cuántos gramos consumiste?'), false);
 });
 
 test('retains an accepted selected-date confirmation after a later food clarification replaces the pending question', () => {
@@ -141,6 +147,24 @@ test('known foods shortcut scales previously saved macros and ignores unknown fo
   assert.equal(reply.items[0].name, 'Pollo');
   assert.equal(await knownFoodsShortcut({ description: 'Pavo 200 g', userId: 1, dbQuery, textSql }), null);
   assert.equal(await knownFoodsShortcut({ description: 'pollo asado con salsa', userId: 1, dbQuery, textSql }), null);
+});
+
+test('known food matching tolerates accents, whitespace, and typographic dashes without fuzzy item substitutions', async () => {
+  const textSql = (value) => `'${String(value).replace(/'/g, "''")}'`;
+  const row = JSON.stringify({ name: 'Pollo-asado', grams: 100, macroStatus: 'estimado', macroSource: 'opencode_estimado', energyKcal: 150, proteinG: 25, carbohydrateG: 0, fatG: 5, fiberG: null });
+  const dbQuery = async () => row;
+  const reply = await knownFoodsShortcut({ description: 'pollo–asado 100 g', userId: 1, dbQuery, textSql });
+  assert.equal(reply.items[0].name, 'Pollo-asado');
+  assert.equal(await knownFoodsShortcut({ description: 'pollo empanizado 100 g', userId: 1, dbQuery, textSql }), null);
+});
+
+test('pending food draft returns saved candidate items for its preview', async () => {
+  const draft = JSON.stringify({ id: 12, requestId: 'request', fecha: '2026-11-04', description: 'pollo', question: '¿Cuántos gramos?', state: 'borrador_chat' });
+  const item = JSON.stringify({ name: 'Pollo', quantityText: '150 g', quantityGrams: 150, macroStatus: 'estimado', macros: { energyKcal: 200 } });
+  let call = 0;
+  const result = await readPendingFoodDraft({ userId: 7, dbQuery: async () => (++call === 1 ? draft : call === 2 ? '' : item) });
+  assert.equal(result.previewItems[0].name, 'Pollo');
+  assert.equal(result.previewItems[0].quantityText, '150 g');
 });
 
 test('per-100 g source products are never applied to foods measured by volume', () => {

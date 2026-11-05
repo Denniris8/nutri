@@ -2007,6 +2007,59 @@ function renderFoodChat(messages) {
   scrollChatToLatest(chat);
 }
 
+function renderFoodPreview(items = []) {
+  const chat = document.querySelector('#foodChatMessages');
+  const previewItems = Array.isArray(items) ? items : [];
+  if (!previewItems.length) return;
+  const preview = document.createElement('section');
+  preview.className = 'food-chat-preview';
+  preview.setAttribute('aria-label', 'Vista previa editable de alimentos');
+  const heading = document.createElement('strong');
+  heading.textContent = 'Vista previa';
+  preview.append(heading);
+  const hint = document.createElement('span');
+  hint.textContent = 'Ajusta alimento o cantidad y luego envía la respuesta para recalcular.';
+  preview.append(hint);
+  for (const item of previewItems) {
+    const row = document.createElement('div');
+    row.className = 'food-preview-row';
+    const name = document.createElement('input');
+    name.value = item.name || '';
+    name.setAttribute('aria-label', 'Alimento');
+    const quantity = document.createElement('input');
+    quantity.value = item.quantityText || (item.quantityGrams != null ? `${item.quantityGrams} g` : '');
+    quantity.placeholder = 'Cantidad';
+    quantity.setAttribute('aria-label', `Cantidad de ${item.name || 'alimento'}`);
+    const status = document.createElement('span');
+    status.textContent = item.macroStatus === 'estimado' ? 'Macros estimados' : 'Macros disponibles';
+    const macros = item.macros || {};
+    const nutrition = document.createElement('span');
+    nutrition.textContent = Number.isFinite(macros.energyKcal)
+      ? `${macros.energyKcal} kcal · P ${macros.proteinG ?? '—'} g · C ${macros.carbohydrateG ?? '—'} g · G ${macros.fatG ?? '—'} g`
+      : '';
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'button-muted';
+    edit.textContent = 'Usar cambios';
+    edit.addEventListener('click', () => {
+      const newName = name.value.trim();
+      const newQuantity = quantity.value.trim();
+      if (!newName || !newQuantity) {
+        document.querySelector('#foodEntryFeedback').textContent = 'Indica el alimento y su cantidad para aplicar la edición.';
+        return;
+      }
+      const description = document.querySelector('#foodDescription');
+      description.value = `Para la aclaración del borrador: alimento ${newName}, cantidad ${newQuantity}${item.name && item.name !== newName ? ` (antes aparecía como ${item.name})` : ''}.`;
+      document.querySelector('#foodEntryFeedback').textContent = 'Revisa la respuesta y envíala para actualizar la vista previa.';
+      description.focus();
+    });
+    row.append(name, quantity, status, edit, nutrition);
+    preview.append(row);
+  }
+  chat.append(preview);
+  scrollChatToLatest(chat);
+}
+
 async function restoreFoodDraft(feedback) {
   const response = await fetch('/api/food-entries/pending', { credentials: 'same-origin' });
   if (!response.ok) {
@@ -2022,6 +2075,7 @@ async function restoreFoodDraft(feedback) {
     foodEntryDate = draft.fecha;
     foodTargetEntryId = draft.targetEntryId || null;
     renderFoodChat(draft.messages || []);
+    renderFoodPreview(draft.previewItems);
     document.querySelector('#foodEntryDate').textContent = `Borrador del día ${draft.fecha}; todavía no está guardado como comida.`;
     label.textContent = draft.question ? 'Tu respuesta' : 'Alimentos consumidos';
     description.placeholder = draft.question ? 'Responde la pregunta del asistente…' : 'Describe o corrige los alimentos…';
@@ -2224,6 +2278,7 @@ async function submitFoodMessage(retry = null) {
     finishFoodProgress(result.state === 'requiere_aclaracion' ? 'Esperando aclaración.' : 'Registro completado.');
     placeProgressAfterLatestUserMessage(document.querySelector('#foodChatMessages'), progressMessage);
     if (result.state === 'requiere_aclaracion') {
+      renderFoodPreview(result.previewItems);
       foodOpenCodeSessionActive = true;
       foodRequestId = result.requestId;
       foodEntryDate = foodDate();

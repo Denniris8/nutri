@@ -176,20 +176,21 @@ test('food save rejects an invalid OpenCode response without exposing it to the 
   let storedSession = '';
   let sent;
   let firstSent;
+  const selectedDate = new Date().toISOString().slice(0, 10);
   const description = '100g frijoles negros cocidos';
   const rawReply = [{ type: 'text', text: '{"items":[{"name":"frijoles negros"}]}' }];
   await withServer(async (sql) => {
     queries.push(sql);
     if (sql.includes('SELECT s.usuario_id')) return '27';
     if (sql.includes('SELECT session_id FROM sesiones_comidas_opencode')) return storedSession;
-    if (sql.includes('INSERT INTO registros_comidas(')) return `61\n${JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-13', description, question: null, targetEntryId: null })}`;
+    if (sql.includes('INSERT INTO registros_comidas(')) return `61\n${JSON.stringify({ state: 'borrador_chat', fecha: selectedDate, description, question: null, targetEntryId: null })}`;
     const sessionInsert = sql.match(/INSERT INTO sesiones_comidas_opencode[^]*?VALUES \(27,CONVERT\(0x([a-f\d]+) USING utf8mb4\)\)/i);
     if (sessionInsert) { storedSession = Buffer.from(sessionInsert[1], 'hex').toString(); return ''; }
     return '';
   }, async (base) => {
     const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
     const saved = await post(base + '/api/food-entries', {
-      requestId: '123e4567-e89b-42d3-a456-426614174000', fecha: '2026-10-13', descripcion: description,
+      requestId: '123e4567-e89b-42d3-a456-426614174000', fecha: selectedDate, descripcion: description,
     }, { Cookie: cookie });
     assert.equal(saved.status, 502);
     const result = await saved.json();

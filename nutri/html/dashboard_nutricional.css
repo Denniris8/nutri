@@ -498,6 +498,11 @@ details:not([open]) > .collapsible-summary::after { transform: rotate(-90deg); }
 .food-chat-thread { display: grid; max-height: min(34vh, 280px); gap: 8px; overflow: auto; padding: 12px; border: 1px solid var(--line); border-radius: var(--shape-md); background: var(--md-sys-color-surface-container-low); }
 .food-chat-thread[hidden] { display: none; }
 .food-chat-messages { display: grid; gap: 10px; padding: 2px; }
+.food-chat-preview { display: grid; gap: 8px; padding: 10px; border: 1px solid var(--md-sys-color-outline-variant); border-radius: 10px; background: var(--md-sys-color-surface-container); }
+.food-preview-row { display: grid; grid-template-columns: minmax(90px, 1fr) minmax(80px, 0.7fr) auto auto; align-items: center; gap: 8px; }
+.food-preview-row input { min-width: 0; width: 100%; }
+.food-preview-row span { font-size: 12px; color: var(--text-muted); }
+@media (max-width: 520px) { .food-preview-row { grid-template-columns: 1fr 1fr; } .food-preview-row span { grid-column: 1; } }
 .food-chat-messages:empty { display: none; }
 .food-loading { display: flex; align-items: center; gap: 10px; margin: 0; padding: 6px 2px 2px; color: #ffd166; }
 .food-chat-message { display: grid; max-width: 86%; gap: 2px; padding: 8px 11px; border-radius: 12px 12px 12px 3px; background: var(--md-sys-color-surface-container-high); color: var(--text); font-size: 13px; line-height: 1.4; }

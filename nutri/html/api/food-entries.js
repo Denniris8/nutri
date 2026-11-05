@@ -226,6 +226,7 @@ async function readPendingFoodDraft({ userId, dbQuery }) {
   const draft = JSON.parse(row);
   const messages = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${draft.id} ORDER BY id;`);
   draft.messages = messages ? messages.split(/\r?\n/).map((message) => JSON.parse(message)).filter((message) => !isLegacyFoodNameError(message) && !isFoodIdentityRefusal(message)) : [];
+  draft.previewItems = await readDraftFoodItems({ entryId: draft.id, userId, dbQuery });
   if (isLegacyFoodNameError({ role: 'assistant', content: draft.question }) || isFoodIdentityRefusal({ role: 'assistant', content: draft.question })) draft.question = null;
   if (!draft.messages.length && draft.question) draft.messages = [{ role: 'user', content: draft.description }, { role: 'assistant', content: draft.question }];
   return draft;
@@ -271,6 +272,10 @@ function hasGenericEstimateApproval(messages, pendingQuestion, answer) {
     }
   }
   return approved;
+}
+
+function isGenericEstimatePermissionQuestion(question) {
+  return /(?:autoriz(?:as|a|ar)|permiso|aceptas|puedo|quieres que).{0,100}(?:estim|macros? gen[eé]ric|gen[eé]ric)/i.test(String(question || ''));
 }
 
 async function readDraftFoodItems({ entryId, userId, dbQuery }) {
@@ -540,13 +545,13 @@ function pendingFoodItemSql(entryId, item, textSql) {
   return `INSERT INTO registros_comida_items(registro_comida_id,fragmento_original,nombre_alimento,nombre_fuente_web,url_fuente_web,cita_fuente,cantidad_texto,cantidad_g,fuente_macros,metodo_energia,base_macros,estado_macros,energia_kcal,energia_449_kcal,proteina_g,carbohidratos_g,grasa_g,fibra_g) VALUES (${fields.join(',')})`;
 }
 
-const foodKey = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
+const foodKey = (value) => String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[‐‑‒–—]/g, '-').replace(/[’‘]/g, "'").trim().toLowerCase().replace(/\s+/g, ' ');
 
 async function readKnownFoods({ userId, names, dbQuery, textSql }) {
   const unique = [...new Set((names || []).map((name) => String(name || '').trim()).filter((name) => name && name.length <= 150))].slice(0, 12);
   const known = new Map();
   if (!unique.length) return known;
-  const rows = await dbQuery(`SELECT JSON_OBJECT('name',i.nombre_alimento,'grams',i.cantidad_g,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente,'energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g,'fiberG',i.fibra_g) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.estado='completado' AND i.base_macros='per_portion' AND i.cantidad_g>0 AND i.energia_kcal IS NOT NULL AND i.nombre_alimento IN (${unique.map(textSql).join(',')}) ORDER BY e.creado_en DESC,i.id DESC LIMIT 200;`);
+  const rows = await dbQuery(`SELECT JSON_OBJECT('name',i.nombre_alimento,'grams',i.cantidad_g,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente,'energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g,'fiberG',i.fibra_g) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.estado='completado' AND e.creado_en >= UTC_TIMESTAMP() - INTERVAL 7 DAY AND i.base_macros='per_portion' AND i.cantidad_g>0 AND i.energia_kcal IS NOT NULL AND i.nombre_alimento IN (${unique.map(textSql).join(',')}) ORDER BY e.creado_en DESC,i.id DESC LIMIT 200;`);
   for (const row of rows ? rows.split(/\r?\n/).filter(Boolean) : []) {
     let food;
     try { food = JSON.parse(row); } catch { continue; }
@@ -714,9 +719,13 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       return;
     }
     const pendingFoodItems = saved.question ? await readDraftFoodItems({ entryId, userId, dbQuery }) : [];
+    let modelDescription = asksSelectedDateConfirmation && selectedDateAnswer?.confirmed ? saved.description : entry.descripcion;
     let conversationMessages;
     const readConversation = () => conversationMessages ??= readFoodConversationMessages({ entryId, dbQuery });
-    const genericEstimateApproved = hasGenericEstimateApproval(await readConversation(), saved.question, entry.descripcion);
+    const multipleExplicitMasses = !saved.question && !parseDeclaredFoodShortcut(modelDescription)
+      && explicitFoodMasses(modelDescription).length >= 2;
+    const genericEstimateApproved = multipleExplicitMasses
+      || hasGenericEstimateApproval(await readConversation(), saved.question, entry.descripcion);
     const asksTimeChoice = /Hay varias comidas a esa hora|¿Te refieres a las .*a\. m\. o p\. m\./i.test(saved.question || '');
     const priorUserText = asksTimeChoice || asksSelectedDateConfirmation ? (await readConversation()).filter((message) => message.role === 'user').map((message) => message.content).join('\n') : '';
     const parsedFoodReference = parseFoodReferenceTime(entry.descripcion) || parseFoodReferenceTime(saved.description);
@@ -724,7 +733,6 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     const requestedTime = parseFoodTime(foodReference?.withoutReferenceTime || entry.descripcion) || selectedDateAnswer?.time || priorDateAnswer?.time || (priorUserText ? parseFoodTime(priorUserText) : null);
     const asksAddition = /\b(agrega|agregar|añade|añadir|incorpora|incorporar)\b/i.test(entry.descripcion);
     const reuseAsNewMeal = Boolean(foodReference) && !correctionIntent && !asksAddition;
-    let modelDescription = asksSelectedDateConfirmation && selectedDateAnswer?.confirmed ? saved.description : entry.descripcion;
     const conversation = await readFoodConversationText({ entryId, dbQuery, fallback: '', excludeLatestUser: true, messages: await readConversation() });
     const fastPathAllowed = !saved.question && !conversation && !genericEstimateApproved && !reuseAsNewMeal
       && !correctionIntent && !asksAddition && entry.targetEntryId == null && !requestedTime && !foodReference
@@ -802,6 +810,13 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
         }
       }
     };
+    const reusablePendingFoodCandidates = pendingFoodItems
+      .filter((item) => item?.name && item.macros
+        && ['energyKcal', 'proteinG', 'carbohydrateG', 'fatG'].every((key) => Number.isFinite(item.macros[key]))
+        && ['declarado_usuario', 'usda_fdc', 'openfoodfacts', 'webfetch', 'websearch', 'opencode_estimado'].includes(item.macroSource))
+      .map(({ name, macroBasis, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote, macros }) => ({
+        name, macroBasis, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote, macros,
+      }));
     if (directReply) {
       traceFoodSession(trace, 'declared_food_fast_path', { itemCount: directReply.items.length });
     } else {
@@ -814,7 +829,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       sessionId = session.sessionId;
       stage = 'analysis';
       analysisDeadline = Date.now() + maxFoodResponseWaitMs;
-      requestArgs = { sessionId, description: modelDescription, initialDescription: saved.description, genericEstimateApproved, allowWebSearch: Boolean(saved.question || correctionIntent || activeTarget), foodIdentificationFirstPass, ...(reuseAsNewMeal ? { referenciaComidaSolicitada: true } : {}), ...(!session.reused && conversation ? { conversation } : {}), comidasDisponibles: mealsForModel, ...(reuseAsNewMeal && referenceMeals.length ? { comidasReferencia: referenceMeals } : {}), alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
+      requestArgs = { sessionId, description: modelDescription, initialDescription: saved.description, genericEstimateApproved, allowWebSearch: Boolean(saved.question || correctionIntent || activeTarget || !foodIdentificationFirstPass), foodIdentificationFirstPass, ...(reuseAsNewMeal ? { referenciaComidaSolicitada: true } : {}), ...(!session.reused && conversation ? { conversation } : {}), comidasDisponibles: mealsForModel, ...(reuseAsNewMeal && referenceMeals.length ? { comidasReferencia: referenceMeals } : {}), ...(reusablePendingFoodCandidates.length ? { knownFoodCandidates: reusablePendingFoodCandidates } : {}), alimentosPendientes: pendingFoodItems, continuacionRegistro: Boolean(activeTarget), diaNutricional: entry.fecha, trace, requestOpenCode };
       let parts = await requestFoodWithSessionRecovery(requestArgs);
       webSearchUsed = usedFoodWebSearch(parts);
       stage = 'parse';
@@ -850,7 +865,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
         requestArgs.knownFoodCandidates = openFoodFactsProducts;
         traceFoodSession(trace, 'web_resolution_started', { unresolvedCount: result.items.filter(needsSource).length });
         parts = await requestFoodWithSessionRecovery({
-          ...requestArgs, retryFeedback: 'No consultes Open Food Facts ni USDA. Conserva macros y procedencia de los candidatos de historial solo si el alimento coincide exactamente. Usa únicamente websearch para los alimentos sin candidato local. Si el snippet no identifica exactamente el alimento o no contiene todos los macros, solicita permiso para estimarlos; no simules haber abierto la página ni inventes citas.',
+          ...requestArgs, retryFeedback: 'No consultes Open Food Facts ni USDA. Conserva macros y procedencia de los candidatos de historial solo si el alimento coincide exactamente. Usa únicamente websearch para los alimentos sin candidato local. Si el snippet no identifica exactamente el alimento o no contiene todos los macros, estima macros típicos razonables como opencode_estimado; no solicites permiso, no simules haber abierto la página ni inventes citas.',
         });
         webSearchUsed ||= usedFoodWebSearch(parts);
         stage = 'parse';
@@ -859,6 +874,14 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     } else if (foodIdentificationFirstPass && !result?.clarificationQuestion) {
       requestArgs.allowWebSearch = true;
       requestArgs.foodIdentificationFirstPass = false;
+    }
+    if (requestArgs && isGenericEstimatePermissionQuestion(result?.clarificationQuestion)) {
+      const parts = await requestFoodWithSessionRecovery({
+        ...requestArgs,
+        retryFeedback: 'No vuelvas a solicitar permiso para estimar macros. Usa websearch solo si aporta evidencia exacta y suficiente; en caso contrario, estima macros típicos razonables con macroSource opencode_estimado. Pregunta únicamente si falta identificación o una cantidad imprescindible. No inventes citas.',
+      });
+      webSearchUsed ||= usedFoodWebSearch(parts);
+      result = parseReply(parts);
     }
     if (reuseAsNewMeal && result) { result.action = 'new'; result.targetEntryId = null; }
     let items = repairEstimatedEnergy(applyOpenFoodFactsMacros(applyFoodMacroReferences(applyExplicitQuantities(Array.isArray(result?.items) ? result.items : [], quantityContext, answeredPendingQuantity), referenceItems), openFoodFactsProducts));
@@ -1036,7 +1059,8 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
         catch { for (const item of candidates) await persistCandidate(item); }
       }
       const messages = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`);
-      json(response, 200, { state: 'requiere_aclaracion', entryId, requestId: entry.requestId, targetEntryId: clarificationTargetId, question, messages: messages ? messages.split(/\r?\n/).map((row) => JSON.parse(row)) : [], message: question });
+      const previewItems = candidates.map(({ name, quantityText, quantityGrams, macroStatus, macros }) => ({ name, quantityText, quantityGrams, macroStatus, macros }));
+      json(response, 200, { state: 'requiere_aclaracion', entryId, requestId: entry.requestId, targetEntryId: clarificationTargetId, question, previewItems, messages: messages ? messages.split(/\r?\n/).map((row) => JSON.parse(row)) : [], message: question });
       return;
     }
     if (!items.length) throw new Error('El asistente no devolvió alimentos para completar el registro.');
@@ -1144,4 +1168,4 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
   }
 }
 
-module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, confirmedNutritionDateAnswer, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, knownFoodsShortcut, localDateTimeToUtc, needsSelectedNutritionDateConfirmation, normalizeFoodReply, numberVisibleFoodMeals, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, selectedNutritionDateAnswer, usedFoodWebSearch, validateFoodEntry, validFoodItem };
+module.exports = { applyExplicitGrams, applyExplicitQuantities, applyFoodMacroReferences, applyOpenFoodFactsMacros, clearFoodChatHistory, confirmedNutritionDateAnswer, deleteFoodEntry, foodItemIssues, getFoodEntryProgress, hasExplicitVolume, isGenericEstimatePermissionQuestion, knownFoodsShortcut, localDateTimeToUtc, needsSelectedNutritionDateConfirmation, normalizeFoodReply, numberVisibleFoodMeals, parseDeclaredFoodShortcut, parseFoodReferenceTime, parseFoodReply, parseFoodTime, pendingFoodItemSql, readFoodEntries, readPendingFoodDraft, repairEstimatedEnergy, reportFoodProgress, saveFoodEntry, selectedNutritionDateAnswer, usedFoodWebSearch, validateFoodEntry, validFoodItem };

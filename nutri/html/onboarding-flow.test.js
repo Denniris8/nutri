@@ -348,6 +348,23 @@ test('food modal shows a safe OpenCode transport error without trace details', a
   assert.equal(elements['#foodLoading'].hidden, true);
 });
 
+test('clarification shows an editable food preview and applies edits to the reply composer', async () => {
+  const { elements } = loadFlow('', async (url) => url === '/api/food-entries'
+    ? { ok: true, json: async () => ({ state: 'requiere_aclaracion', requestId: '123e4567-e89b-42d3-a456-426614174000', question: '¿Cuántos gramos?', messages: [{ role: 'assistant', content: '¿Cuántos gramos?' }], previewItems: [{ name: 'Pollo', quantityText: '100 g', quantityGrams: 100, macroStatus: 'estimado', macros: { energyKcal: 165, proteinG: 31, carbohydrateG: 0, fatG: 4 } }] }) }
+    : { ok: true, json: async () => ({ progress: null }) });
+  await elements['#registerFoodButton'].dispatch('click');
+  elements['#foodDescription'].value = 'pollo';
+  await elements['#registerFoodForm'].dispatch('submit');
+  const preview = elements['#foodChatMessages'].children.find((child) => child.className === 'food-chat-preview');
+  assert.ok(preview);
+  const row = preview.children[1];
+  row.children[0].value = 'Pollo asado';
+  row.children[1].value = '150 g';
+  await row.children[3].dispatch('click');
+  assert.match(elements['#foodDescription'].value, /Pollo asado, cantidad 150 g/);
+  assert.equal(elements['#foodDescription'].focused, true);
+});
+
 test('More tab switches the visible dashboard section', () => {
   const tabs = ['today', 'progress', 'more'].map((dashboardTab) => Object.assign(new Element(), { dataset: { dashboardTab } }));
   const views = ['today', 'progress', 'more'].map((dashboardView) => Object.assign(new Element(), { dataset: { dashboardView }, hidden: true }));
