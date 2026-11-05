@@ -101,6 +101,14 @@ test('active plan lookup is scoped to user and calendar date', async () => {
   assert.deepEqual(result, active);
 });
 
+test('active plan lookup recovers null macro columns from its validated plan table', async () => {
+  const result = await readTrainingPlanForDate({
+    userId: '27', date: '2026-10-24', textSql: (value) => `'${value}'`,
+    dbQuery: async () => JSON.stringify({ macros: { proteinas_g: null, carbohidratos_g: null, grasas_g: null, calorias_kcal: null }, plan }),
+  });
+  assert.deepEqual(result.macros, { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 });
+});
+
 test('plan deletion is scoped to the authenticated user and refuses plans with vigencies', async () => {
   let sql;
   const deleted = await deleteTrainingPlan({ userId: '27', planId: '5', dbQuery: async (query) => {

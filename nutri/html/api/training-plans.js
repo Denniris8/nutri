@@ -32,6 +32,25 @@ function validateMacroPresentation(content, macros, disclosure) {
   }
 }
 
+function recoverMissingPlanMacros(macros, content) {
+  if (!macros || typeof macros !== 'object' || typeof content !== 'string') return macros;
+  const labels = {
+    proteinas_g: /prote[ií]nas/i,
+    carbohidratos_g: /carbohidratos/i,
+    grasas_g: /grasas/i,
+    calorias_kcal: /calor[ií]as/i,
+  };
+  const recovered = { ...macros };
+  for (const [key, label] of Object.entries(labels)) {
+    if (recovered[key] != null) continue;
+    const rows = content.split(/\r?\n/).map((line) => line.split('|').map((cell) => cell.trim()))
+      .filter((cells) => cells.length >= 3 && label.test(cells[1] || ''));
+    if (rows.length !== 1 || !/^(?:\d+(?:[.,]\d+)?)\s*(?:g|kcal)?$/i.test(rows[0][2])) continue;
+    recovered[key] = Number(rows[0][2].replace(/\s*(?:g|kcal)\s*$/i, '').replace(',', '.'));
+  }
+  return recovered;
+}
+
 function validatePlanSemantics(content, macros, disclosure, context) {
   const sections = ['[Datos Registrados]', '[Estimaciones Calculadas]', '[Supuestos Adoptados]'];
   const positions = sections.map((label) => content.indexOf(label));
@@ -144,7 +163,10 @@ async function readTrainingPlanForDate({ userId, date, dbQuery, textSql }) {
     throw Object.assign(new Error('La fecha del plan no es válida.'), { status: 400 });
   }
   const row = await dbQuery(`SELECT JSON_OBJECT('id',p.id,'goals',p.objetivos,'plan',p.contenido,'macros',JSON_OBJECT('proteinas_g',p.objetivo_proteinas_g,'carbohidratos_g',p.objetivo_carbohidratos_g,'grasas_g',p.objetivo_grasas_g,'calorias_kcal',p.objetivo_calorias_kcal),'vigencyId',v.id,'startDate',DATE_FORMAT(v.fecha_inicio,'%Y-%m-%d'),'endDate',DATE_FORMAT(v.fecha_fin,'%Y-%m-%d')) FROM vigencias_planes_entrenamiento v JOIN planes_entrenamiento p ON p.id=v.plan_id AND p.usuario_id=v.usuario_id WHERE v.usuario_id=${id} AND v.fecha_inicio<=${textSql(date)} AND (v.fecha_fin IS NULL OR v.fecha_fin>=${textSql(date)}) ORDER BY v.fecha_inicio DESC,v.id DESC LIMIT 1;`);
-  return row ? JSON.parse(row) : null;
+  if (!row) return null;
+  const plan = JSON.parse(row);
+  plan.macros = recoverMissingPlanMacros(plan.macros, plan.plan);
+  return plan;
 }
 
 async function activateTrainingPlan({ userId, planId, startDate, today, dbQuery, textSql }) {

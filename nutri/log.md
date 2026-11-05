@@ -757,3 +757,5 @@
 - 2026-11-05 10:38 CST — Incrementada la versión PATCH a `0.1.73` antes del commit solicitado.
 - 2026-11-05 10:47 CST — Actualizado el identificador cache-busting del JavaScript del dashboard: su URL anterior tenía caché inmutable por un año y podía impedir que los navegadores recibieran la corrección de metas activas.
 - 2026-11-05 10:47 CST — Incrementada la versión PATCH a `0.1.74` antes del commit solicitado.
+- 2026-11-05 11:00 CST — El plan vigente ahora recupera metas faltantes en columnas antiguas a partir de su tabla de macros validada; conserva los valores ya persistidos y no infiere metas si la tabla es ambigua. Añadida prueba de regresión, no ejecutada.
+- 2026-11-05 11:00 CST — Incrementada la versión PATCH a `0.1.75` antes del commit solicitado.
