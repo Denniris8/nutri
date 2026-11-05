@@ -100,6 +100,10 @@ function validatePlanSemantics(content, macros, disclosure, context) {
   }
 }
 
+function requireRegisteredWeight(context) {
+  if (context?.hasWeight !== true) throw Object.assign(new Error('Registra al menos un peso en biometría antes de crear un plan.'), { status: 400 });
+}
+
 function summarizeTrainingPlan(plan) {
   if (!plan) return null;
   const clean = (value) => String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
@@ -130,6 +134,7 @@ function validateTrainingPlan({ userId, requestId, goals, plan, macros, disclosu
       || typeof macros[key] !== 'number' || !Number.isFinite(macros[key]) || macros[key] <= 0 || macros[key] > limits[key])) {
     throw Object.assign(new Error('El objetivo, el plan o sus macros no son válidos.'), { status: 400 });
   }
+  if (context) requireRegisteredWeight(context);
   const safeMacros = Object.fromEntries(macroFields.map((key) => [key, macros[key]]));
   validatePlanSemantics(content, safeMacros, disclosure, context);
   return { id, requestId, objectives, content, macros: safeMacros };
@@ -218,4 +223,4 @@ COMMIT;`);
   return outcome.deleted === true;
 }
 
-module.exports = { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan, validateMacroPresentation, validatePlanSemantics, validateTrainingPlan };
+module.exports = { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, requireRegisteredWeight, saveTrainingPlan, summarizeTrainingPlan, validateMacroPresentation, validatePlanSemantics, validateTrainingPlan };

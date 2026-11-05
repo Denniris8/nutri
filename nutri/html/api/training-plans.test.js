@@ -57,6 +57,7 @@ test('training plan persistence rejects oversized or empty input', () => {
   }
   assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan: '# Plan', macros, disclosure }), /distinguir datos/);
   assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan: planFor({ ...macros, calorias_kcal: 2800 }), macros: { ...macros, calorias_kcal: 2800 }, disclosure }), /4\/4\/9/);
+  assert.throws(() => validateTrainingPlan({ userId: '27', requestId, goals: 'Objetivo', plan, macros, disclosure, context: { hasWeight: false } }), { status: 400, message: /Registra al menos un peso/ });
 });
 
 test('saved plan listing is scoped to the authenticated user and limited to the latest three', async () => {

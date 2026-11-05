@@ -1097,10 +1097,11 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
       const progressRecorder = createAnalysisProgressRecorder({ dbQuery, textSql, userId: claims.sub, flow: 'plan', operationId: data.progressId || traceId });
       try {
         reportTrainingProgress(claims.sub, data.progressId, 'plan_context_started', progressRecorder.record);
-        const labels = new Set(['profile', 'preferences', 'biometrics', 'plicometrics', 'age', 'previousPlan']);
+        const labels = new Set(['profile', 'preferences', 'biometrics', 'hasWeight', 'plicometrics', 'age', 'previousPlan']);
         const contextRows = await dbQuery(`SELECT 'profile'; ${accountProfileSql(claims.sub)}
 SELECT 'preferences'; ${preferencesSql(claims.sub)}
 SELECT 'biometrics'; SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT('measuredAt',DATE_FORMAT(medido_en,'%Y-%m-%d %H:%i:%s'),'source',fuente,'weightKg',peso_kg,'bodyAge',edad_corporal,'bodyFatPct',grasa_pct,'restingMetabolismKcal',metabolismo_basal_kcal,'visceralFat',grasa_visceral,'bmi',imc,'musclePct',musculo_pct)),JSON_ARRAY()) FROM (SELECT medido_en,fuente,peso_kg,edad_corporal,grasa_pct,metabolismo_basal_kcal,grasa_visceral,imc,musculo_pct FROM registros_biometricos WHERE usuario_id=${claims.sub} ORDER BY medido_en DESC,id DESC LIMIT 24) AS biometric_records;
+SELECT 'hasWeight'; SELECT EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND peso_kg IS NOT NULL);
 SELECT 'plicometrics'; SELECT COALESCE(JSON_ARRAYAGG(JSON_OBJECT('fecha',fecha,'tricepsMm',triceps_mm,'bicepsMm',biceps_mm,'subescapularMm',subescapular_mm,'suprailiacoMm',suprailiaco_mm,'abdominalMm',abdominal_mm,'musloAnteriorMm',muslo_anterior_mm,'pantorrillaMm',pantorrilla_mm)),JSON_ARRAY()) FROM (SELECT id,fecha,triceps_mm,biceps_mm,subescapular_mm,suprailiaco_mm,abdominal_mm,muslo_anterior_mm,pantorrilla_mm FROM registros_plicometro WHERE usuario_id=${claims.sub} ORDER BY fecha DESC,id DESC LIMIT 24) AS plicometric_records;
 SELECT 'age'; SELECT JSON_OBJECT('age',edad) FROM usuarios WHERE id=${claims.sub} LIMIT 1;
 SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ'),'goals',objetivos,'content',contenido,'macros',JSON_OBJECT('proteinas_g',objetivo_proteinas_g,'carbohidratos_g',objetivo_carbohidratos_g,'grasas_g',objetivo_grasas_g,'calorias_kcal',objetivo_calorias_kcal)) FROM planes_entrenamiento WHERE usuario_id=${claims.sub} ORDER BY creado_en DESC,id DESC LIMIT 1;`);
@@ -1116,6 +1117,12 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
         const age = ageRow ? JSON.parse(ageRow).age : null;
         const biometrics = JSON.parse(contextData.get('biometrics') || '[]');
         const plicometrics = JSON.parse(contextData.get('plicometrics') || '[]');
+        if (contextData.get('hasWeight') !== '1') {
+          reportTrainingProgress(claims.sub, data.progressId, 'plan_failed', progressRecorder.record);
+          await progressRecorder.flush();
+          authError(response, 400, 'Registra al menos un peso en biometría antes de crear un plan.');
+          return;
+        }
         const previousPlanRow = contextData.get('previousPlan');
         const context = {
           profile: { age, sex: profile?.sex ?? null, heightCm: profile?.heightCm ?? null, restingMetabolismKcal: profile?.restingMetabolismKcal ?? null, restingMetabolismSource: profile?.restingMetabolismSource ?? null },
@@ -1248,6 +1255,10 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
           dbQuery(`SELECT JSON_OBJECT('age',(SELECT edad FROM usuarios WHERE id=${claims.sub} LIMIT 1),'hasWeight',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND peso_kg IS NOT NULL),'bodyFacts',JSON_OBJECT('bmi',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND imc IS NOT NULL),'bodyFatPct',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND grasa_pct IS NOT NULL),'musclePct',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND musculo_pct IS NOT NULL),'visceralFat',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND grasa_visceral IS NOT NULL),'bodyAge',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND edad_corporal IS NOT NULL),'restingMetabolismKcal',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND metabolismo_basal_kcal IS NOT NULL)),'plicometryFacts',JSON_OBJECT('tricepsMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND triceps_mm IS NOT NULL),'bicepsMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND biceps_mm IS NOT NULL),'subescapularMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND subescapular_mm IS NOT NULL),'suprailiacoMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND suprailiaco_mm IS NOT NULL),'abdominalMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND abdominal_mm IS NOT NULL),'musloAnteriorMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND muslo_anterior_mm IS NOT NULL),'pantorrillaMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND pantorrilla_mm IS NOT NULL)));`),
         ]);
         const facts = JSON.parse(factsRow);
+        if (facts.hasWeight !== true) {
+          authError(response, 400, 'Registra al menos un peso en biometría antes de crear un plan.');
+          return;
+        }
         const context = { profile: { age: facts.age, sex: profile?.sex ?? null, heightCm: profile?.heightCm ?? null, restingMetabolismKcal: profile?.restingMetabolismKcal ?? null }, hasWeight: facts.hasWeight, bodyFacts: facts.bodyFacts, plicometryFacts: facts.plicometryFacts };
         const saved = await saveTrainingPlan({ userId: claims.sub, requestId: data.runId, goals: data.goals, plan: data.plan, macros: data.macros, disclosure, context, dbQuery, textSql });
         if (typeof data.runId === 'string') try {

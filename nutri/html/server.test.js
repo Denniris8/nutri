@@ -1117,6 +1117,21 @@ test('registration rejects invalid origins and invalid fields before database ac
   });
 });
 
+test('training plan generation is blocked when the account has no registered weight', async () => {
+  const openCodeCalls = [];
+  await withServer(async (sql) => {
+    if (sql.includes('SELECT s.usuario_id')) return '27';
+    if (sql.includes("SELECT 'profile';")) return ['profile', JSON.stringify({ sex: 'masculino', heightCm: 175 }), 'preferences', 'null', 'biometrics', '[]', 'hasWeight', '0', 'plicometrics', '[]', 'age', JSON.stringify({ age: 32 }), 'previousPlan'].join('\n');
+    return '';
+  }, async (base) => {
+    const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
+    const response = await post(base + '/api/training-plan', { goals: 'Ganar fuerza', suppressNotification: true }, { Cookie: cookie });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /Registra al menos un peso/);
+    assert.deepEqual(openCodeCalls, []);
+  }, { openCodeRequest: async (...args) => { openCodeCalls.push(args); return { status: 200, data: {} }; } });
+});
+
 test('authenticated user can generate and save a training plan through the API', async () => {
   const queries = [];
   const requests = [];
@@ -1127,11 +1142,11 @@ test('authenticated user can generate and save a training plan through the API',
   await withServer(async (sql) => {
     queries.push(sql);
     if (sql.includes('SELECT s.usuario_id')) return '27';
-    if (sql.includes("SELECT 'profile';")) return ['profile', JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null }), 'preferences', 'biometrics', '[]', 'plicometrics', '[]', 'age', JSON.stringify({ age: 32 }), 'previousPlan'].join('\n');
+    if (sql.includes("SELECT 'profile';")) return ['profile', JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null }), 'preferences', 'biometrics', '[]', 'hasWeight', '1', 'plicometrics', '[]', 'age', JSON.stringify({ age: 32 }), 'previousPlan'].join('\n');
     if (sql.includes("SELECT JSON_OBJECT('accountName'")) return JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null });
     if (sql.includes("SELECT JSON_OBJECT('age',edad)")) return JSON.stringify({ age: 32 });
     if (sql.includes("SELECT JSON_OBJECT('age',(SELECT edad")) return JSON.stringify({
-      age: 32, hasWeight: false,
+      age: 32, hasWeight: true,
       bodyFacts: { bmi: false, bodyFatPct: false, musclePct: false, visceralFat: false, bodyAge: false, restingMetabolismKcal: false },
       plicometryFacts: { tricepsMm: false, bicepsMm: false, subescapularMm: false, suprailiacoMm: false, abdominalMm: false, musloAnteriorMm: false, pantorrillaMm: false },
     });
@@ -1191,11 +1206,11 @@ test('training plan save logs a sanitized MySQL error code', async () => {
   await withServer(async (sql) => {
     statements.push(sql);
     if (sql.includes('SELECT s.usuario_id')) return '27';
-    if (sql.includes("SELECT 'profile';")) return ['profile', JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null }), 'preferences', 'biometrics', '[]', 'plicometrics', '[]', 'age', JSON.stringify({ age: 32 }), 'previousPlan'].join('\n');
+    if (sql.includes("SELECT 'profile';")) return ['profile', JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null }), 'preferences', 'biometrics', '[]', 'hasWeight', '1', 'plicometrics', '[]', 'age', JSON.stringify({ age: 32 }), 'previousPlan'].join('\n');
     if (sql.includes("SELECT JSON_OBJECT('accountName'")) return JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null });
     if (sql.includes("SELECT JSON_OBJECT('age',edad)")) return JSON.stringify({ age: 32 });
     if (sql.includes("SELECT JSON_OBJECT('age',(SELECT edad")) return JSON.stringify({
-      age: 32, hasWeight: false,
+      age: 32, hasWeight: true,
       bodyFacts: { bmi: false, bodyFatPct: false, musclePct: false, visceralFat: false, bodyAge: false, restingMetabolismKcal: false },
       plicometryFacts: { tricepsMm: false, bicepsMm: false, subescapularMm: false, suprailiacoMm: false, abdominalMm: false, musloAnteriorMm: false, pantorrillaMm: false },
     });

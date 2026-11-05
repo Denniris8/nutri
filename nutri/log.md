@@ -759,3 +759,6 @@
 - 2026-11-05 10:47 CST — Incrementada la versión PATCH a `0.1.74` antes del commit solicitado.
 - 2026-11-05 11:00 CST — El plan vigente ahora recupera metas faltantes en columnas antiguas a partir de su tabla de macros validada; conserva los valores ya persistidos y no infiere metas si la tabla es ambigua. Añadida prueba de regresión, no ejecutada.
 - 2026-11-05 11:00 CST — Incrementada la versión PATCH a `0.1.75` antes del commit solicitado.
+- 2026-11-05 11:15 CST — Crear/generar y guardar planes ahora requiere al menos un peso registrado en biometría; la comprobación usa existencia histórica del registro y devuelve un aviso 400 antes de invocar OpenCode. Añadidas pruebas de regresión, no ejecutadas.
+- 2026-11-05 11:26 CST — Preparada la migración 0013 para eliminar todos los planes y sus vigencias; las sesiones de entrenamiento se conservan sin vínculo al plan. Consulta MySQL de solo lectura: 10 planes, 2 vigencias activas y 10 sesiones vinculadas. Documentada la necesidad de respaldo externo verificado y recuperación correctiva; no aplicada y no se usó SSH.
+- 2026-11-05 11:26 CST — Incrementada la versión PATCH a `0.1.76` antes del commit solicitado.
