@@ -755,3 +755,5 @@
 - 2026-11-04 21:43 CST — Incrementada la versión PATCH a `0.1.72` antes del commit de los ajustes al flujo de edición de comidas.
 - 2026-11-05 10:38 CST — Los errores al cargar la lista de planes guardados ya no borran las metas del plan vigente del día; la lista y los objetivos activos se cargan por solicitudes independientes. No se ejecutaron pruebas.
 - 2026-11-05 10:38 CST — Incrementada la versión PATCH a `0.1.73` antes del commit solicitado.
+- 2026-11-05 10:47 CST — Actualizado el identificador cache-busting del JavaScript del dashboard: su URL anterior tenía caché inmutable por un año y podía impedir que los navegadores recibieran la corrección de metas activas.
+- 2026-11-05 10:47 CST — Incrementada la versión PATCH a `0.1.74` antes del commit solicitado.
