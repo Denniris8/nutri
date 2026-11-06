@@ -340,6 +340,8 @@ async function readTrainingEntries({ userId, dbQuery, date, timezone }) {
   const id = String(userId);
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta no válida.'), { status: 400 });
   let dateFilter = '';
+  // ponytail: only the unscoped history is capped; a selected day must be complete for accurate totals.
+  const historyLimit = date === undefined ? ' LIMIT 100' : '';
   if (date !== undefined) {
     let start;
     let end;
@@ -350,7 +352,7 @@ async function readTrainingEntries({ userId, dbQuery, date, timezone }) {
     } catch { throw Object.assign(new Error('La fecha o zona horaria no es válida.'), { status: 400 }); }
     dateFilter = ` AND e.creado_en>='${start}' AND e.creado_en<'${end}'`;
   }
-  const rows = await dbQuery(`SET time_zone='+00:00'; SELECT JSON_OBJECT('id',e.id,'createdAt',DATE_FORMAT(e.creado_en,'%Y-%m-%dT%H:%i:%sZ'),'description',e.descripcion,'activity',e.actividad,'durationMinutes',e.duracion_minutos,'weightKg',e.peso_kg,'met',e.met,'caloriesKcal',e.energia_kcal,'distanceMeters',e.distancia_metros,'energyType',e.tipo_energia,'origin',e.origen,'externalActivityId',e.external_activity_id,'garminIncludedInActive',e.garmin_incluido_en_active,'plan',IF(p.id IS NULL,NULL,JSON_OBJECT('id',p.id,'goals',p.objetivos,'startDate',DATE_FORMAT(v.fecha_inicio,'%Y-%m-%d'),'endDate',DATE_FORMAT(v.fecha_fin,'%Y-%m-%d')))) FROM registros_entrenamientos e LEFT JOIN vigencias_planes_entrenamiento v ON v.id=e.plan_vigencia_id LEFT JOIN planes_entrenamiento p ON p.id=v.plan_id AND p.usuario_id=e.usuario_id WHERE e.usuario_id=${id}${dateFilter} ORDER BY e.creado_en DESC,e.id DESC LIMIT 100;`);
+  const rows = await dbQuery(`SET time_zone='+00:00'; SELECT JSON_OBJECT('id',e.id,'createdAt',DATE_FORMAT(e.creado_en,'%Y-%m-%dT%H:%i:%sZ'),'description',e.descripcion,'activity',e.actividad,'durationMinutes',e.duracion_minutos,'weightKg',e.peso_kg,'met',e.met,'caloriesKcal',e.energia_kcal,'distanceMeters',e.distancia_metros,'energyType',e.tipo_energia,'origin',e.origen,'externalActivityId',e.external_activity_id,'garminIncludedInActive',e.garmin_incluido_en_active,'plan',IF(p.id IS NULL,NULL,JSON_OBJECT('id',p.id,'goals',p.objetivos,'startDate',DATE_FORMAT(v.fecha_inicio,'%Y-%m-%d'),'endDate',DATE_FORMAT(v.fecha_fin,'%Y-%m-%d')))) FROM registros_entrenamientos e LEFT JOIN vigencias_planes_entrenamiento v ON v.id=e.plan_vigencia_id LEFT JOIN planes_entrenamiento p ON p.id=v.plan_id AND p.usuario_id=e.usuario_id WHERE e.usuario_id=${id}${dateFilter} ORDER BY e.creado_en DESC,e.id DESC${historyLimit};`);
   return rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [];
 }
 

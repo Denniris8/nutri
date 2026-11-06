@@ -21,6 +21,7 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
   const tokenRoot = await mkdtemp(path.join(os.tmpdir(), 'nutri-garmin-sync-'));
   let client;
   let timeout;
+  let timedOut = false;
   try {
     const fromGarmin = createRequire(path.join(garminRoot, 'package.json'));
     const { Client } = fromGarmin('@modelcontextprotocol/sdk/client/index.js');
@@ -36,6 +37,7 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
     return await Promise.race([
       (async () => {
         await client.connect(transport);
+        if (timedOut) throw new Error('Se agotó el tiempo de sincronización Garmin.');
         const localDate = localCalendarDate(calendarTimezone);
         const stepDates = [date].filter((stepDate) => stepDate <= localDate);
         const [result, stepResults] = await Promise.all([
@@ -54,6 +56,9 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
             } catch { return [stepDate, null]; }
           })),
         ]);
+        clearTimeout(timeout);
+        timeout = null;
+        if (timedOut) throw new Error('Se agotó el tiempo de sincronización Garmin.');
         let activitiesUnavailable = result.isError === true;
         let activities = [];
         if (!activitiesUnavailable) {
@@ -116,7 +121,12 @@ COMMIT;`;
         const unchanged = counts.filter((count) => count === 0).length;
         return { activities: activities.length, activitiesUnavailable, saved, updated, unchanged, skipped: activities.length - rows.size, stepsUpdated, stepsUnavailable, activeCaloriesUpdated, activeCaloriesUnavailable };
       })(),
-      new Promise((_, reject) => { timeout = setTimeout(() => reject(new Error('Se agotó el tiempo de sincronización Garmin.')), 45000); }),
+      new Promise((_, reject) => {
+        timeout = setTimeout(() => {
+          timedOut = true;
+          reject(new Error('Se agotó el tiempo de sincronización Garmin.'));
+        }, 45000);
+      }),
     ]);
   } finally {
     clearTimeout(timeout);

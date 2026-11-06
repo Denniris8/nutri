@@ -194,7 +194,7 @@ async function readFoodEntries({ userId, fecha, dbQuery, textSql }) {
   }
   const rows = await dbQuery(`SET time_zone='+00:00';
 SELECT 'records';
-SELECT JSON_OBJECT('id',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d'),'createdAt',DATE_FORMAT(e.creado_en,'%Y-%m-%dT%H:%i:%sZ'),'state',e.estado,'description',e.descripcion_original) FROM registros_comidas e WHERE e.usuario_id=${userId} AND e.fecha_consumo=${textSql(date)} AND e.estado<>'borrador_chat' ORDER BY e.creado_en,e.id LIMIT 100;
+SELECT JSON_OBJECT('id',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d'),'createdAt',DATE_FORMAT(e.creado_en,'%Y-%m-%dT%H:%i:%sZ'),'state',e.estado,'description',e.descripcion_original) FROM registros_comidas e WHERE e.usuario_id=${userId} AND e.fecha_consumo=${textSql(date)} AND e.estado<>'borrador_chat' ORDER BY e.creado_en,e.id;
 SELECT 'items';
 SELECT JSON_OBJECT('entryId',i.registro_comida_id,'itemId',CAST(i.id AS CHAR),'sourceText',i.fragmento_original,'name',i.nombre_alimento,'quantity',i.cantidad_texto,'quantityGrams',i.cantidad_g,'basis',i.base_macros,'energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g,'fiberG',i.fibra_g,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.fecha_consumo=${textSql(date)} ORDER BY e.creado_en,e.id,i.id;
 SELECT 'clarifications';
@@ -691,7 +691,7 @@ SELECT JSON_OBJECT('entryId',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d'
     if (appended) {
       const prior = JSON.parse(appended);
       await progressRecorder.flush();
-      json(response, 200, { state: 'completado', entryId: prior.entryId, records: await readFoodEntries({ userId, fecha: prior.fecha, dbQuery, textSql }), message: 'Los alimentos ya se habían añadido a esa comida.' });
+      json(response, 200, { state: 'completado', entryId: prior.entryId, requestId: entry.requestId, fecha: prior.fecha, records: await readFoodEntries({ userId, fecha: prior.fecha, dbQuery, textSql }), message: 'Los alimentos ya se habían añadido a esa comida.' });
       return;
     }
     if (entry.targetEntryId && !await dbQuery(`SELECT id FROM registros_comidas WHERE id=${entry.targetEntryId} AND usuario_id=${userId} AND fecha_consumo=${textSql(entry.fecha)} AND estado='completado' LIMIT 1;`)) {
@@ -707,7 +707,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
 
     const saved = JSON.parse(savedRow);
     if (saved.state === 'completado') {
-      json(response, 200, { state: 'completado', entryId, records: await readFoodEntries({ userId, fecha: saved.fecha, dbQuery, textSql }), message: 'Esta comida ya estaba guardada.' });
+      json(response, 200, { state: 'completado', entryId, requestId: entry.requestId, fecha: saved.fecha, records: await readFoodEntries({ userId, fecha: saved.fecha, dbQuery, textSql }), message: 'Esta comida ya estaba guardada.' });
       return;
     }
     if (saved.fecha !== entry.fecha) throw Object.assign(new Error('La fecha del borrador no coincide.'), { status: 409 });
@@ -1088,26 +1088,15 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       const clarificationTargetId = retainedTargetId;
       const destination = clarificationTargetId == null ? 'NULL' : clarificationTargetId;
       const createdAtUpdate = createdAt ? `,creado_en=${textSql(createdAt)}` : '';
+      const candidates = items.filter((item) => !foodItemIssues(item).length);
       const statements = ["SET time_zone='+00:00'", 'START TRANSACTION', `DELETE FROM registros_comida_items WHERE registro_comida_id=${entryId}`, `UPDATE registros_comidas SET estado='borrador_chat',registro_comida_destino_id=${destination},pregunta_pendiente=${textSql(question)}${createdAtUpdate},energia_kcal=NULL,energia_449_kcal=NULL,proteina_g=NULL,carbohidratos_g=NULL,grasa_g=NULL,fibra_g=NULL WHERE id=${entryId} AND usuario_id=${userId}`];
       for (const message of assistantMessages) if (message !== question) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(message)})`);
       if (!assistantMessages.includes(question)) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(question)})`);
+      statements.push(...candidates.map((item) => pendingFoodItemSql(entryId, item, textSql)));
       statements.push(resolveNotificationsSql({ userId, category: 'comida', textSql }));
       if (!suppressNotification) statements.push(notificationInsertSql({ userId, category: 'comida', state: 'requiere_respuesta', title: 'Comida: falta una aclaración', message: question, referenceId: entryId, textSql }));
       statements.push('COMMIT');
       await dbQuery(`${statements.join(';')};`);
-      const candidates = items.filter((item) => !foodItemIssues(item).length);
-      const persistCandidate = async (item) => {
-        try { await dbQuery(`${pendingFoodItemSql(entryId, item, textSql)};`); }
-        catch (error) {
-          traceFoodSession(trace, 'draft_candidate_persistence_failed', { stage: 'persistence', errorCode: safeOpenCodeErrorCode(error) });
-          try { await recordFoodError({ dbQuery, textSql, userId, trace, stage: 'persistence', error }); }
-          catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed' })); }
-        }
-      };
-      if (candidates.length) {
-        try { await dbQuery(`START TRANSACTION;${candidates.map((item) => pendingFoodItemSql(entryId, item, textSql)).join(';')};COMMIT;`); }
-        catch { for (const item of candidates) await persistCandidate(item); }
-      }
       const messages = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${entryId} ORDER BY id;`);
       const previewItems = candidates.map(({ sourceText, name, quantityText, quantityGrams, macroBasis, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote, macros }) => ({ sourceText, name, quantityText, quantityGrams, macroBasis, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote, macros }));
       json(response, 200, { state: 'requiere_aclaracion', entryId, requestId: entry.requestId, targetEntryId: clarificationTargetId, question, previewItems, messages: messages ? messages.split(/\r?\n/).map((row) => JSON.parse(row)) : [], message: question });

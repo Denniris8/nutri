@@ -1,7 +1,13 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitQuantities, applyFoodMacroReferences, foodItemIssues, normalizeFoodReply, parseFoodReferenceTime, parseFoodReply, pendingFoodItemSql, saveFoodEntry } = require('./food-entries.js');
+const { applyExplicitQuantities, applyFoodMacroReferences, foodItemIssues, normalizeFoodReply, parseFoodReferenceTime, parseFoodReply, pendingFoodItemSql, readFoodEntries, saveFoodEntry } = require('./food-entries.js');
 const { deleteFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, openCodeRequest } = require('./opencode-food.js');
+
+test('la lectura diaria de comidas no trunca registros después de 100', async () => {
+  let query = '';
+  await readFoodEntries({ userId: '27', fecha: '2026-10-22', dbQuery: async (sql) => { query = sql; return ''; }, textSql: (value) => `'${value}'` });
+  assert.doesNotMatch(query, /LIMIT\s+100/i);
+});
 
 test('rechaza energía 4-4-9 que excede DECIMAL(10,2) aunque cada macro quepa', () => {
   const item = {

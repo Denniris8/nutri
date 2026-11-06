@@ -2259,7 +2259,7 @@ async function submitFoodMessage(retry = null) {
     progressFinalized = true;
   };
   let pollingProgress = true;
-  const progressPoll = (async () => {
+  void (async () => {
     while (pollingProgress) {
       if (!document.hidden) try {
         const response = await fetch(`/api/food-entries/progress?requestId=${encodeURIComponent(body.requestId)}`, { credentials: 'same-origin' });
@@ -2374,7 +2374,6 @@ async function submitFoodMessage(retry = null) {
     if (!draftRestored && !resultNotificationHandled) await notifyResultIfHidden(foodDialog, 'comida', 'error', 'No se pudo completar el registro de comida', feedback.textContent, foodTargetEntryId);
   } finally {
     pollingProgress = false;
-    await progressPoll;
     if (!progressFinalized) finishFoodProgress('Solicitud finalizada.');
     if (!progressMessage.isConnected) placeProgressAfterLatestUserMessage(document.querySelector('#foodChatMessages'), progressMessage);
     foodPending = false;

@@ -772,3 +772,6 @@
 - 2026-11-06 13:18 CST — Intensificado a amarillo el texto «Se guardará para el día…» del modal Registrar comida.
 - 2026-11-06 13:18 CST — Incrementada la versión de caché del CSS principal a `v=71` para que los navegadores no reutilicen el stylesheet anterior; mantiene el amarillo intenso del aviso de fecha en Registrar comida.
 - 2026-11-06 14:50 CST — Incrementada la versión PATCH a `0.1.79` antes del commit solicitado.
+- 2026-11-06 15:21 CST — Corregido el flujo de comidas: el sondeo de progreso no bloquea el cierre del envío, las respuestas idempotentes incluyen requestId/fecha y borrador con candidatos se persiste en una sola transacción.
+- 2026-11-06 15:38 CST — Corregidos topes que truncaban comidas/entrenamientos de un día y se evita persistir datos Garmin si el timeout vence mientras siguen pendientes las consultas remotas.
+- 2026-11-06 15:43 CST — Incrementada la versión PATCH a `0.1.80` antes del commit.

@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { calculateTrainingEnergy, estimateStepEnergyKcal, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./training-entries.js');
+const { calculateTrainingEnergy, estimateStepEnergyKcal, readTrainingEntries, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./training-entries.js');
 
 const manual = (overrides = {}) => ({ origin: 'manual', activity: 'Correr', createdAt: '2026-10-15T10:00:00Z', durationMinutes: 30, met: 7, weightKg: 70, ...overrides });
 const garmin = (overrides = {}) => ({ origin: 'garmin', energyType: 'reportada_dispositivo', activity: 'running', createdAt: '2026-10-15T10:00:00Z', durationMinutes: 30, caloriesKcal: 250, ...overrides });
@@ -9,6 +9,15 @@ const trainingRequest = (overrides = {}) => ({
   analysis: { activity: 'Correr', durationMinutes: 30, weightKg: 70, met: 7 }, suppressNotification: true, ...overrides,
 });
 const trainingJson = (response, status, body) => { response.status = status; response.body = body; };
+
+test('la lectura diaria de entrenamientos es completa y conserva el límite solo en el historial general', async () => {
+  const queries = [];
+  const dbQuery = async (sql) => { queries.push(sql); return sql.includes('SELECT zona_horaria') ? 'UTC' : ''; };
+  await readTrainingEntries({ userId: '27', date: '2026-10-22', timezone: 'UTC', dbQuery });
+  await readTrainingEntries({ userId: '27', dbQuery });
+  assert.doesNotMatch(queries.at(-2), /LIMIT\s+100/i);
+  assert.match(queries.at(-1), /LIMIT\s+100/i);
+});
 
 test('manual training registration persists and verifies the calculated session', async () => {
   const queries = [];
