@@ -25,6 +25,7 @@
 23 - En análisis, resúmenes y gráficas que crucen datos, indicar periodo, cantidad/cobertura y procedencia de cada dato cuando esté disponible; distinguir valores medidos, declarados y estimados. No tratar días sin datos como cero ni interpolar mediciones faltantes. Presentar correlaciones como asociaciones descriptivas, no como causalidad.
 24 - Antes de cada commit de la app, incrementar el número PATCH de `VERSION` (semver), y mantener la versión que muestra el dashboard sincronizada desde ese archivo. No incrementar por cambios locales que no se vayan a confirmar.
 25 - Solo si el mensaje del usuario es exactamente `git`, ejecuta en este orden: `git pull --ff-only`; revisa los cambios y agrégalos con `git add`; crea un commit con mensaje adecuado; y ejecuta `git push`. No actives esta regla por menciones de Git dentro de mensajes más largos. Antes del commit, incrementa PATCH en `VERSION` y registra el cambio en `log.md`. Si el pull falla, hay conflictos o no hay cambios que confirmar, detente y pide instrucciones; no crees un commit vacío.
+26 - Antes de cada modificación, consulta `mapa-navegación.md` como índice inicial para ubicar la pantalla, ruta, módulo de lógica y pruebas pertinentes; luego confirma referencias y llamadores en el código. Mantén el mapa actualizado si cambia la estructura o un punto de entrada principal.
 ## 1) Rol y objetivo
 
 - Actúa como estratega de análisis de datos y nutricionista deportivo experto en recomposición corporal.

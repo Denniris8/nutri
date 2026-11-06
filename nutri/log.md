@@ -766,3 +766,9 @@
 - 2026-11-05 11:43 CST — Incrementada la versión PATCH a `0.1.77` antes del commit solicitado.
 - 2026-11-05 11:59 CST — Añadido refinamiento conversacional del borrador de plan sin guardar: conserva sesión/contexto, aplica cambios pedidos, valida el plan completo y deja Guardar como acción separada. Añadida prueba de integración; no ejecutada.
 - 2026-11-05 12:00 CST — Incrementada la versión PATCH a `0.1.78` antes del commit solicitado.
+- 2026-11-05 15:34 CST — Creado `mapa-navegación.md` con rutas de pantallas, APIs, pruebas y fuentes canónicas; añadida regla en `AGENTS.md` para consultarlo al iniciar futuras modificaciones.
+- 2026-11-06 12:48 CST — Quitada la fibra de la presentación de macros por alimento y del total de comida; se conserva el dato interno y en la base.
+- 2026-11-06 13:09 CST — Mejorado Chef: recetas con cantidades, porciones y macros estimados por porción; restauración del mensaje en fallos; reuso de sesión tras reinicio y limpieza de sesiones propias obsoletas/configuración anterior. Añadidas pruebas; no ejecutadas.
+- 2026-11-06 13:18 CST — Intensificado a amarillo el texto «Se guardará para el día…» del modal Registrar comida.
+- 2026-11-06 13:18 CST — Incrementada la versión de caché del CSS principal a `v=71` para que los navegadores no reutilicen el stylesheet anterior; mantiene el amarillo intenso del aviso de fecha en Registrar comida.
+- 2026-11-06 14:50 CST — Incrementada la versión PATCH a `0.1.79` antes del commit solicitado.

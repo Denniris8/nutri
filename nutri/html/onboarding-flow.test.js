@@ -16,6 +16,7 @@ class Element {
 
   addEventListener(name, listener) { (this.listeners[name] ||= []).push(listener); }
   setAttribute(name, value) { this.attributes[name] = value; }
+  removeAttribute(name) { delete this.attributes[name]; }
   setCustomValidity(message) { this.validationMessage = message; }
   reportValidity() { this.reportedValidity = true; }
   isConnected = true;
@@ -61,6 +62,7 @@ function loadFlow(search = '', fetchOverride) {
     'daySelect', 'previousDayButton', 'nextDayButton', 'registerFoodButton', 'foodButtonLoading', 'registerFoodDialog', 'registerFoodForm',
     'foodEntryDate', 'foodEntryFeedback', 'foodLoading', 'foodLoadingText', 'foodChatThread', 'foodChatMessages', 'foodDescriptionLabel', 'foodDescription', 'saveFoodButton',
     'appNoticeDialog', 'appNoticeText', 'foodButtonLoading', 'editUnitSystem',
+    'chefDialog', 'chefForm', 'chefChatMessages', 'chefMessage', 'chefSendButton', 'chefLoading', 'chefFeedback', 'chefButton',
   ];
   const elements = Object.fromEntries(ids.map((id) => [`#${id}`, new Element()]));
   elements['.mode-buttons'] = new Element();
@@ -153,6 +155,13 @@ test('password recovery request uses the entered email and shows a generic confi
   assert.equal(requests.at(-1)[0], '/api/auth/request-password-reset');
   assert.equal(JSON.parse(requests.at(-1)[1].body).email, 'user@example.com');
   assert.equal(elements['#loginForm'].hidden, false);
+});
+
+test('Chef restores the submitted message after a failed request so it can be retried', async () => {
+  const { elements } = loadFlow('', async () => { throw new Error('network unavailable'); });
+  elements['#chefMessage'].value = 'Quiero una receta con frijoles';
+  await elements['#chefForm'].dispatch('submit');
+  assert.equal(elements['#chefMessage'].value, 'Quiero una receta con frijoles');
 });
 
 test('password reset link shows the new-password form and submits its token', async () => {

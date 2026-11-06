@@ -83,7 +83,33 @@ async function openChefSession(userId, config, request) {
   if (cached?.fingerprint === fingerprint) {
     const current = await request('GET', `/session/${encodeURIComponent(cached.id)}`, undefined, config.requestTimeoutMs);
     if (current.status >= 200 && current.status < 300 && current.data?.metadata?.chefUserId === userId && current.data?.metadata?.chefConfigSha256 === fingerprint) return cached.id;
+    if (current.status >= 500) throw Object.assign(new Error('No se pudo verificar la sesión de Chef.'), { code: 'CHEF_SESSION_VERIFY_FAILED' });
     sessions.delete(userId);
+  } else if (cached) {
+    const deleted = await request('DELETE', `/session/${encodeURIComponent(cached.id)}`, undefined, config.requestTimeoutMs);
+    if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) {
+      throw Object.assign(new Error('No se pudo cerrar la sesión anterior de Chef.'), { code: 'CHEF_SESSION_CLEANUP_FAILED' });
+    }
+    sessions.delete(userId);
+  }
+  const listed = await request('GET', '/session', undefined, config.requestTimeoutMs);
+  if (listed.status < 200 || listed.status >= 300 || !Array.isArray(listed.data)) {
+    throw Object.assign(new Error('No se pudieron revisar las sesiones anteriores de Chef.'), { code: 'CHEF_SESSION_DISCOVERY_FAILED' });
+  }
+  const owned = listed.data.filter((session) => session?.metadata?.chefUserId === userId && /^ses_[A-Za-z0-9_-]{4,120}$/.test(session.id || ''));
+  const reusable = owned
+    .filter((session) => session.metadata.chefConfigSha256 === fingerprint)
+    .sort((a, b) => Date.parse(b.time?.updated || b.time?.created || 0) - Date.parse(a.time?.updated || a.time?.created || 0))[0];
+  for (const session of owned) {
+    if (session.id === reusable?.id) continue;
+    const deleted = await request('DELETE', `/session/${encodeURIComponent(session.id)}`, undefined, config.requestTimeoutMs);
+    if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) {
+      throw Object.assign(new Error('No se pudieron cerrar sesiones anteriores de Chef.'), { code: 'CHEF_SESSION_CLEANUP_FAILED' });
+    }
+  }
+  if (reusable) {
+    sessions.set(userId, { id: reusable.id, fingerprint });
+    return reusable.id;
   }
   const model = config.model ? { id: config.model.modelID, providerID: config.model.providerID, ...(config.variant ? { variant: config.variant } : {}) } : undefined;
   const created = await request('POST', '/session', {

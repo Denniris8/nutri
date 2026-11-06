@@ -1932,6 +1932,7 @@ chefForm?.addEventListener('submit', async (event) => {
     appendChefMessage('assistant', result.answer);
     chefFeedback.textContent = '';
   } catch (error) {
+    chefMessage.value = message;
     appendChefMessage('error', error.message || 'No se pudo generar una respuesta de Chef.');
     chefFeedback.textContent = error.message || 'No se pudo generar una respuesta de Chef.';
     notifyApp(chefFeedback.textContent, 'error');
@@ -3021,7 +3022,7 @@ function renderFoodEntries(records) {
       name.textContent = `${item.name}${item.quantity ? ` · ${item.quantity}` : ''}${item.basis === 'per_100g' ? ' · por 100 g' : ''}`;
       const macros = document.createElement('p');
       macros.className = 'meal-macros';
-      macros.textContent = `Macros${item.macroStatus === 'estimado' ? ' estimados' : ''}: ${item.energyKcal} kcal · proteína ${item.proteinG} g · carbohidratos ${item.carbohydrateG} g · grasa ${item.fatG} g · fibra ${item.fiberG ?? '—'} g`;
+      macros.textContent = `Macros${item.macroStatus === 'estimado' ? ' estimados' : ''}: ${item.energyKcal} kcal · proteína ${item.proteinG} g · carbohidratos ${item.carbohydrateG} g · grasa ${item.fatG} g`;
       food.append(name, macros);
       if (['usda_fdc', 'openfoodfacts', 'webfetch', 'websearch'].includes(item.macroSource) && item.sourceName) {
         const source = document.createElement('details');
@@ -3065,7 +3066,7 @@ function renderFoodEntries(records) {
           const values = record.items.map((item) => item[key] == null ? NaN : Number(item[key]));
           return values.every(Number.isFinite) ? new Intl.NumberFormat('es-MX', { maximumFractionDigits: 1 }).format(values.reduce((total, value) => total + value, 0)) : '—';
         };
-        macros.textContent = `${sum('energyKcal')} kcal · proteína ${sum('proteinG')} g · carbohidratos ${sum('carbohydrateG')} g · grasa ${sum('fatG')} g · fibra ${sum('fiberG')} g`;
+        macros.textContent = `${sum('energyKcal')} kcal · proteína ${sum('proteinG')} g · carbohidratos ${sum('carbohydrateG')} g · grasa ${sum('fatG')} g`;
       }
       total.append(title, macros);
       card.append(total);

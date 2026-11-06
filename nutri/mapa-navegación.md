@@ -1,0 +1,71 @@
+# Mapa de navegación del proyecto
+
+Índice inicial para localizar las pantallas, flujos y lógica antes de modificar código. Las referencias son rutas desde `nutri/`; los números de línea se omiten para que no queden obsoletos.
+
+## Recorrido rápido
+
+1. Identifica la pantalla en `html/` y su JavaScript/CSS asociado.
+2. Sigue la acción hasta el endpoint en `html/server.js`.
+3. Localiza la lógica en el módulo correspondiente de `html/api/`.
+4. Revisa las pruebas `*.test.js` cercanas y las reglas/prompt canónicos indicados abajo.
+5. Busca referencias y llamadores antes de editar: `grep -R "nombreFuncionORuta" html`.
+
+## Aplicación web
+
+| Necesidad | Punto de entrada |
+|---|---|
+| Servidor HTTP, autenticación, rutas API y archivos servidos | `html/server.js` |
+| Dashboard y estructura de pantallas | `html/dashboard_nutricional.html` |
+| Flujos de dashboard, formularios, chat de comidas/planes y eventos de UI | `html/onboarding-flow.js` |
+| Estilos principales del dashboard y componentes | `html/dashboard_nutricional.css` |
+| Acceso y autenticación | `html/login.html`; rutas y sesión en `html/server.js` |
+| Preferencias | `html/preferencias.html`; módulo `html/api/preferences.js` |
+| Términos | `html/terminos.html` |
+| Avisos accesibles | `html/notifications.css`; renderizado y eventos en `html/server.js` |
+| Consentimiento de cookies | `html/cookie-consent.js`, `html/cookie-consent.css` |
+| Ayudas emergentes | `html/help-popups.css`; contenido y estructura en `html/dashboard_nutricional.html` |
+| PWA, caché e instalación | `html/manifest.webmanifest`, `html/service-worker.js`, `html/pwa-register.js`, `html/pwa-icon.*` |
+
+## Lógica de API (`html/api/`)
+
+| Funcionalidad | Módulo principal | Pruebas relacionadas |
+|---|---|---|
+| Perfil y datos de cuenta | `account-profile.js` | `server.test.js` |
+| Biométricos y TMB Mifflin | `biometrics.js`, `mifflin.js` | `server.test.js` |
+| Plicometría | `plicometrics.js` | `server.test.js` |
+| Preferencias y credenciales Garmin | `preferences.js`, `integration-credentials.js` | `preferences.test.js`, `server.test.js` |
+| Verificación y sincronización Garmin | `garmin-verification.js`, `garmin-training-sync.js` | `server.test.js` |
+| Registro, validación, consulta y borradores de comidas | `food-entries.js` | `food-entries*.test.js`, `food-entry-flow.test.js`, `server.test.js` |
+| Conexión OpenCode, fuentes alimentarias y sesión de comidas | `opencode-food.js` | `server.test.js`, pruebas de flujo de comidas |
+| Chat del chef | `chef-chat.js` | `chef-chat.test.js` |
+| Análisis y registro de entrenamientos, pasos y energía | `training-entries.js` | `training-entries.test.js`, `server.test.js` |
+| Planes: generación, refinamiento y sesión pendiente | `training-analysis.js` | `training-analysis.test.js`, `training-plan.test.js`, `server.test.js` |
+| Validación, guardado, activación y lectura de planes | `training-plans.js` | `training-plans.test.js`, `server.test.js` |
+| Fechas y zona horaria del calendario | `calendar-day.js` | `calendar-day.test.js` |
+| Notificaciones | `notifications.js` | `notifications.test.js`, `server.test.js` |
+| Eventos de progreso de análisis | `analysis-progress.js` | `analysis-progress.test.js` |
+| Registro de errores | `application-errors.js`; errores de OpenCode de comidas en `opencode-food.js` | `application-errors.test.js` |
+| Correo de verificación y recuperación | `email.js` | `email.test.js`, `server.test.js` |
+
+`html/server.test.js` cubre integración de rutas y flujos HTTP. Los módulos con sufijo `.test.js` junto al código cubren lógica más acotada.
+
+## Fuentes de comportamiento y persistencia
+
+- `comportamiento-sesion-comidas.md`: contrato e instrucciones del agente para comidas.
+- `comportamiento-sesion-entrenamientos.md`: contrato e instrucciones del análisis de entrenamientos.
+- `comportamiento-sesion-plan.md`: generación y refinamiento de planes; fuente canónica del prompt enviado a OpenCode.
+- `comportamiento-sesion-chef.md`: comportamiento del chat del chef.
+- `esquema-bd.md`: esquema y semántica documentada de tablas.
+- `mysql/migrations/`: cambios persistentes; las migraciones aplicadas son inmutables.
+- `AGENTS.md`: reglas de trabajo del proyecto.
+- `log.md`: bitácora de cambios.
+
+## Si no sabes por dónde empezar
+
+- Una interacción o control visible: busca el selector/ID en `dashboard_nutricional.html` y `onboarding-flow.js`.
+- Un endpoint: busca la ruta `/api/...` en `html/server.js` y sigue la llamada al módulo API.
+- Una consulta SQL o regla de negocio: busca el nombre de tabla/campo en `html/api/` y `esquema-bd.md`.
+- Un comportamiento de IA: identifica el flujo en `html/api/` y lee su `comportamiento-sesion-*.md` antes de tocar el prompt.
+- Una regresión: empieza por la prueba del módulo; usa `html/server.test.js` para el recorrido de extremo a extremo por API.
+
+Actualiza este mapa cuando se agreguen, eliminen o reubiquen puntos de entrada o módulos principales.
