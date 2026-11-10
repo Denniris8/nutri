@@ -13,8 +13,8 @@ const { syncGarminTraining } = require('./api/garmin-training-sync.js');
 const { readBiometrics, saveBiometric } = require('./api/biometrics.js');
 const { readPlicometrics, savePlicometric } = require('./api/plicometrics.js');
 const { clearFoodChatHistory, deleteFoodEntry, getFoodEntryProgress, readFoodEntries, readPendingFoodDraft, saveFoodEntry } = require('./api/food-entries.js');
-const { readCalendarTimezone } = require('./api/calendar-day.js');
-const { deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError } = require('./api/opencode-food.js');
+const { calendarDayRange, readCalendarTimezone } = require('./api/calendar-day.js');
+const { deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, recordFoodError, withFoodOperationLock } = require('./api/opencode-food.js');
 const { buildChefNutritionContext, deleteChefSession, sendChefMessage } = require('./api/chef-chat.js');
 const { recordApplicationError } = require('./api/application-errors.js');
 const { sendPasswordRecoveryEmail: defaultSendPasswordRecoveryEmail, sendVerificationEmail: defaultSendVerificationEmail } = require('./api/email.js');
@@ -228,19 +228,6 @@ function createServer({ dbQuery = mysql, jwtSecret = process.env.DASHBOARD_JWT_S
     return userId === claims.sub ? claims : null;
   }
 
-  const progressAuth = new Map();
-  async function authenticatedForProgress(request) {
-    const token = cookieValue(request);
-    const hit = token && progressAuth.get(token);
-    if (hit && hit.until > Date.now()) return hit.claims;
-    const claims = await authenticated(request);
-    if (claims && token) {
-      progressAuth.set(token, { claims, until: Date.now() + 5000 });
-      if (progressAuth.size > 200) progressAuth.delete(progressAuth.keys().next().value);
-    }
-    return claims;
-  }
-
   async function reserveLoginAttempt(request, email) {
     const ip = clientIp(request);
     const keys = [
@@ -327,6 +314,15 @@ SELECT attempts,GREATEST(1,TIMESTAMPDIFF(SECOND,UTC_TIMESTAMP(3),DATE_ADD(window
 
     if (pathname === '/healthz') {
       response.writeHead(request.method === 'GET' ? 200 : 405).end();
+      return;
+    }
+
+    if (pathname === '/readyz') {
+      if (request.method !== 'GET') { response.writeHead(405, { Allow: 'GET', 'Cache-Control': 'no-store' }).end(); return; }
+      try {
+        const result = await dbQuery('SELECT 1;');
+        json(response, result === '1' ? 200 : 503, { ready: result === '1' });
+      } catch { json(response, 503, { ready: false }); }
       return;
     }
 
@@ -549,8 +545,10 @@ COMMIT;`);
           const [saltHex, hashHex, active] = row.split('\t');
           if (active !== '1' || !await passwordMatches(password, saltHex, hashHex)) { authError(response, 401, 'Contraseña incorrecta.'); return; }
           await deleteTrainingSession({ userId: claims.sub, requestOpenCode: openCodeRequest });
-          await deleteFoodOpenCodeSession({ userId: claims.sub, dbQuery, requestOpenCode: openCodeRequest });
-          const deleted = await dbQuery(`DELETE FROM usuarios WHERE id=${claims.sub}; SELECT ROW_COUNT();`);
+          const deleted = await withFoodOperationLock(claims.sub, async () => {
+            await deleteFoodOpenCodeSession({ userId: claims.sub, dbQuery, requestOpenCode: openCodeRequest });
+            return dbQuery(`DELETE FROM usuarios WHERE id=${claims.sub}; SELECT ROW_COUNT();`);
+          });
           if (deleted.split(/\s+/).at(-1) !== '1') { authError(response, 404, 'La cuenta ya no existe.'); return; }
           setCookie(response, '', 0, request);
           json(response, 200, { ok: true });
@@ -786,7 +784,7 @@ COMMIT;`);
     if (pathname === '/api/food-entries/progress') {
       if (request.method !== 'GET') { response.writeHead(405, { Allow: 'GET' }).end(); return; }
       let claims;
-      try { claims = await authenticatedForProgress(request); }
+      try { claims = await authenticated(request); }
       catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
       if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
       const requestId = new URL(request.url, 'http://localhost').searchParams.get('requestId') || '';
@@ -834,13 +832,35 @@ COMMIT;`);
       const periodOffset = days * 2 - 1;
       const currentStart = `DATE_SUB(${textSql(end)},INTERVAL ${startOffset} DAY)`;
       const previousStart = `DATE_SUB(${textSql(end)},INTERVAL ${periodOffset} DAY)`;
-      const currentDates = (column) => column.startsWith('DATE(')
-        ? `${column.slice(5, -1)}>=CONCAT(${currentStart},' 00:00:00') AND ${column.slice(5, -1)}<DATE_ADD(${textSql(end)},INTERVAL 1 DAY)`
-        : `${column} BETWEEN ${currentStart} AND ${textSql(end)}`;
-      const previousDates = (column) => column.startsWith('DATE(')
-        ? `${column.slice(5, -1)}>=CONCAT(${previousStart},' 00:00:00') AND ${column.slice(5, -1)}<CONCAT(${currentStart},' 00:00:00')`
-        : `${column} BETWEEN ${previousStart} AND DATE_SUB(${textSql(end)},INTERVAL ${days} DAY)`;
       try {
+        const timezone = await readCalendarTimezone(claims.sub, dbQuery, 'UTC');
+        const dateBefore = (offset) => {
+          const date = new Date(`${end}T00:00:00Z`);
+          date.setUTCDate(date.getUTCDate() - offset);
+          return date.toISOString().slice(0, 10);
+        };
+        const currentUtcStart = calendarDayRange(dateBefore(startOffset), timezone).start;
+        const previousUtcStart = calendarDayRange(dateBefore(periodOffset), timezone).start;
+        const utcEnd = calendarDayRange(end, timezone).end;
+        const activityDates = (start, finish) => `creado_en>=${textSql(start)} AND creado_en<${textSql(finish)}`;
+        const currentDates = (column) => column === 'DATE(creado_en)' ? activityDates(currentUtcStart, utcEnd)
+          : column.startsWith('DATE(') ? `${column.slice(5, -1)}>=CONCAT(${currentStart},' 00:00:00') AND ${column.slice(5, -1)}<DATE_ADD(${textSql(end)},INTERVAL 1 DAY)`
+            : `${column} BETWEEN ${currentStart} AND ${textSql(end)}`;
+        const previousDates = (column) => column === 'DATE(creado_en)' ? activityDates(previousUtcStart, currentUtcStart)
+          : column.startsWith('DATE(') ? `${column.slice(5, -1)}>=CONCAT(${previousStart},' 00:00:00') AND ${column.slice(5, -1)}<CONCAT(${currentStart},' 00:00:00')`
+            : `${column} BETWEEN ${previousStart} AND DATE_SUB(${textSql(end)},INTERVAL ${days} DAY)`;
+        const activitySummary = (dates) => `(SELECT JSON_OBJECT(
+          'stepDays',s.stepDays,'avgSteps',s.avgSteps,
+          'trainingSessions',COUNT(t.id),
+          'manualSessions',COUNT(CASE WHEN t.origen='manual' THEN t.id END),
+          'deviceSessions',COUNT(CASE WHEN t.origen<>'manual' THEN t.id END),
+          'manualMinutes',SUM(CASE WHEN t.origen='manual' THEN t.duracion_minutos END),
+          'deviceMinutes',SUM(CASE WHEN t.origen<>'manual' THEN t.duracion_minutos END),
+          'manualKcal',SUM(CASE WHEN t.origen='manual' THEN t.energia_kcal END),
+          'deviceKcal',SUM(CASE WHEN t.origen<>'manual' THEN t.energia_kcal END))
+          FROM (SELECT COUNT(*) AS stepDays,AVG(pasos) AS avgSteps FROM registros_pasos_diarios WHERE usuario_id=${claims.sub} AND ${dates('fecha')}) s
+          LEFT JOIN registros_entrenamientos t ON t.usuario_id=${claims.sub} AND ${dates('DATE(creado_en)')}
+          GROUP BY s.stepDays,s.avgSteps)`;
         const [result, body, activity, plicometric] = (await dbQuery(`WITH daily AS (
   SELECT fecha_consumo,COUNT(*) AS meals,
     COUNT(*)=COUNT(energia_kcal) AND COUNT(*)=COUNT(proteina_g) AND COUNT(*)=COUNT(carbohidratos_g) AND COUNT(*)=COUNT(grasa_g) AS complete,
@@ -863,14 +883,12 @@ SELECT JSON_OBJECT('days',${days},'current',JSON_OBJECT(
   'protein',AVG(CASE WHEN fecha_consumo<${currentStart} AND complete THEN protein END),
   'carbs',AVG(CASE WHEN fecha_consumo<${currentStart} AND complete THEN carbs END),
   'fat',AVG(CASE WHEN fecha_consumo<${currentStart} AND complete THEN fat END)),
-  'quality',JSON_OBJECT('currentPending',(SELECT COUNT(*) FROM registros_comidas WHERE usuario_id=${claims.sub} AND estado<>'completado' AND ${currentDates('fecha_consumo')}),'previousPending',(SELECT COUNT(*) FROM registros_comidas WHERE usuario_id=${claims.sub} AND estado<>'completado' AND ${previousDates('fecha_consumo')}),'macroSources',JSON_OBJECT('items',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')}),'usda',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.fuente_macros='usda_fdc'),'declared',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.fuente_macros='declarado_usuario'),'web',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.fuente_macros='webfetch'),'opencode',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.fuente_macros='opencode_estimado'),'estimated',(SELECT COUNT(*) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')} AND i.estado_macros='estimado'))),
+   'quality',JSON_OBJECT('currentPending',(SELECT COUNT(*) FROM registros_comidas WHERE usuario_id=${claims.sub} AND estado<>'completado' AND ${currentDates('fecha_consumo')}),'previousPending',(SELECT COUNT(*) FROM registros_comidas WHERE usuario_id=${claims.sub} AND estado<>'completado' AND ${previousDates('fecha_consumo')}),'macroSources',(SELECT JSON_OBJECT('items',COUNT(*),'usda',COALESCE(SUM(i.fuente_macros='usda_fdc'),0),'declared',COALESCE(SUM(i.fuente_macros='declarado_usuario'),0),'web',COALESCE(SUM(i.fuente_macros='webfetch'),0),'openfoodfacts',COALESCE(SUM(i.fuente_macros='openfoodfacts'),0),'websearch',COALESCE(SUM(i.fuente_macros='websearch'),0),'opencode',COALESCE(SUM(i.fuente_macros='opencode_estimado'),0),'estimated',COALESCE(SUM(i.estado_macros='estimado'),0)) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')})),
    'goals',(SELECT JSON_OBJECT('kcal',p.objetivo_calorias_kcal,'protein',p.objetivo_proteinas_g,'carbs',p.objetivo_carbohidratos_g,'fat',p.objetivo_grasas_g) FROM vigencias_planes_entrenamiento v JOIN planes_entrenamiento p ON p.id=v.plan_id AND p.usuario_id=v.usuario_id WHERE v.usuario_id=${claims.sub} AND v.fecha_inicio<=${currentStart} AND (v.fecha_fin IS NULL OR v.fecha_fin>=${textSql(end)}) ORDER BY v.fecha_inicio DESC,v.id DESC LIMIT 1)) FROM daily;
 SELECT JSON_OBJECT('current',JSON_OBJECT('measurements',(SELECT COUNT(*) FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')}),'firstKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1),'firstDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1)), 'previous',JSON_OBJECT('measurements',(SELECT COUNT(*) FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')}),'firstKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1),'firstDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1)));
-SELECT JSON_OBJECT('current',JSON_OBJECT('stepDays',(SELECT COUNT(*) FROM registros_pasos_diarios WHERE usuario_id=${claims.sub} AND ${currentDates('fecha')}),'avgSteps',(SELECT AVG(pasos) FROM registros_pasos_diarios WHERE usuario_id=${claims.sub} AND ${currentDates('fecha')}),'trainingSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(creado_en)')}),'manualSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${currentDates('DATE(creado_en)')}),'deviceSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${currentDates('DATE(creado_en)')}),'manualMinutes',(SELECT SUM(duracion_minutos) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${currentDates('DATE(creado_en)')}),'deviceMinutes',(SELECT SUM(duracion_minutos) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${currentDates('DATE(creado_en)')}),'manualKcal',(SELECT SUM(energia_kcal) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${currentDates('DATE(creado_en)')}),'deviceKcal',(SELECT SUM(energia_kcal) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${currentDates('DATE(creado_en)')})), 'previous',JSON_OBJECT('stepDays',(SELECT COUNT(*) FROM registros_pasos_diarios WHERE usuario_id=${claims.sub} AND ${previousDates('fecha')}),'avgSteps',(SELECT AVG(pasos) FROM registros_pasos_diarios WHERE usuario_id=${claims.sub} AND ${previousDates('fecha')}),'trainingSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(creado_en)')}),'manualSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${previousDates('DATE(creado_en)')}),'deviceSessions',(SELECT COUNT(*) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${previousDates('DATE(creado_en)')}),'manualMinutes',(SELECT SUM(duracion_minutos) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${previousDates('DATE(creado_en)')}),'deviceMinutes',(SELECT SUM(duracion_minutos) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${previousDates('DATE(creado_en)')}),'manualKcal',(SELECT SUM(energia_kcal) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen='manual' AND ${previousDates('DATE(creado_en)')}),'deviceKcal',(SELECT SUM(energia_kcal) FROM registros_entrenamientos WHERE usuario_id=${claims.sub} AND origen<>'manual' AND ${previousDates('DATE(creado_en)')})));
+SELECT JSON_OBJECT('current',${activitySummary(currentDates)},'previous',${activitySummary(previousDates)});
 SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE usuario_id=${claims.sub} AND ${currentDates('fecha')}),'previous',(SELECT COUNT(*) FROM registros_plicometro WHERE usuario_id=${claims.sub} AND ${previousDates('fecha')}));`)).split('\n');
-        const macroSourceCounts = await dbQuery(`SELECT JSON_OBJECT('openfoodfacts',COALESCE(SUM(i.fuente_macros='openfoodfacts'),0),'websearch',COALESCE(SUM(i.fuente_macros='websearch'),0)) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')};`);
         const nutrition = JSON.parse(result);
-        Object.assign(nutrition.quality.macroSources, JSON.parse(macroSourceCounts || '{}'));
         json(response, 200, { nutrition, body: JSON.parse(body), activity: JSON.parse(activity), plicometric: JSON.parse(plicometric) });
       } catch {
         const traceId = randomUUID();
@@ -897,8 +915,10 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
         }
         const trace = { id: randomUUID(), events: [] };
         try {
-          await deleteFoodOpenCodeSession({ userId: claims.sub, dbQuery, requestOpenCode: openCodeRequest });
-          await clearFoodChatHistory({ userId: claims.sub, requestId: closeContext.requestId, targetEntryId: closeContext.targetEntryId, dbQuery, textSql });
+          await withFoodOperationLock(claims.sub, async () => {
+            await deleteFoodOpenCodeSession({ userId: claims.sub, dbQuery, requestOpenCode: openCodeRequest });
+            await clearFoodChatHistory({ userId: claims.sub, requestId: closeContext.requestId, targetEntryId: closeContext.targetEntryId, dbQuery, textSql });
+          });
           json(response, 200, { ok: true });
         } catch (error) {
           try { await recordFoodError({ dbQuery, textSql, userId: claims.sub, trace, stage: 'cancel_session', error, httpStatus: 503, action: 'DELETE /api/food/session', route: '/api/food/session', method: 'DELETE' }); }
@@ -1003,7 +1023,7 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
     if (pathname === '/api/training-progress') {
       if (request.method !== 'GET') { response.writeHead(405, { Allow: 'GET' }).end(); return; }
       let claims;
-      try { claims = await authenticatedForProgress(request); }
+      try { claims = await authenticated(request); }
       catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
       if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
       const progressId = new URL(request.url, 'http://localhost').searchParams.get('progressId') || '';

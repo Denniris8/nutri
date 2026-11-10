@@ -4,22 +4,30 @@ const { foodItemIssues, normalizeFoodReply } = require('./food-entries.js');
 
 const item = (overrides = {}) => ({
   name: 'Alimento', sourceText: 'Alimento', macroBasis: 'per_portion', macroStatus: 'declarado', macroSource: 'declarado_usuario',
-  quantityGrams: 100, macros: { energyKcal: 185, proteinG: 15, carbohydrateG: 20, fatG: 5, fiberG: null },
+  quantityGrams: 100, macros: { energyKcal: 185, proteinG: 15, carbohydrateG: 20, fatG: 5 },
   ...overrides,
 });
 
-test('allows omitted fiber when validating otherwise complete macros', () => {
+test('validates energy, protein, carbohydrate and fat without additional nutrients', () => {
   assert.deepEqual(foodItemIssues(item()), []);
+});
+
+test('normalization retains only the four supported nutritional values', () => {
+  const [normalized] = normalizeFoodReply({ items: [item({ macros: {
+    energyKcal: 185, proteinG: 15, carbohydrateG: 20, fatG: 5, extraNutrientG: 9,
+  } })] }).items;
+  assert.deepEqual(normalized.macros, { energyKcal: 185, proteinG: 15, carbohydrateG: 20, fatG: 5 });
+  assert.deepEqual(foodItemIssues(normalized), []);
 });
 
 test('normalizes OpenCode estimated status and decimal-comma macros before validation', () => {
   const [normalized] = normalizeFoodReply({ items: [{
     name: 'Arroz', macroBasis: 'per_portion', macroStatus: 'opencode_estimado', macroSource: 'opencode_estimado',
-    macros: { energyKcal: '110,0', proteinG: '2,5', carbohydrateG: '24,0', fatG: '0,3', fiberG: null },
+    macros: { energyKcal: '110,0', proteinG: '2,5', carbohydrateG: '24,0', fatG: '0,3' },
   }] }).items;
 
   assert.equal(normalized.macroStatus, 'estimado');
-  assert.deepEqual(normalized.macros, { energyKcal: 110, proteinG: 2.5, carbohydrateG: 24, fatG: 0.3, fiberG: null });
+  assert.deepEqual(normalized.macros, { energyKcal: 110, proteinG: 2.5, carbohydrateG: 24, fatG: 0.3 });
   assert.deepEqual(foodItemIssues(normalized), []);
 });
 
@@ -27,7 +35,7 @@ test('stores websearch results as estimated and keeps their exact search citatio
   const [normalized] = normalizeFoodReply({ items: [{
     name: 'Cooked rice', sourceText: 'Cooked rice, 100 g', macroBasis: 'per_100g', macroStatus: 'declarado', macroSource: 'websearch',
     sourceName: 'Search result title', sourceUrl: 'https://example.org/rice', sourceQuote: 'Cooked rice: 130 kcal, 2.7 g protein, 28 g carbs, 0.3 g fat per 100 g.',
-    quantityGrams: 100, macros: { energyKcal: 130, proteinG: 2.7, carbohydrateG: 28, fatG: 0.3, fiberG: 0.4 },
+    quantityGrams: 100, macros: { energyKcal: 130, proteinG: 2.7, carbohydrateG: 28, fatG: 0.3 },
   }] }).items;
   assert.equal(normalized.macroStatus, 'estimado');
   assert.equal(normalized.macroSource, 'websearch');
@@ -48,7 +56,7 @@ test('preserves unresolved macros only as an invalid intermediate Open Food Fact
   const [candidate] = normalizeFoodReply({ items: [{
     name: 'Producto envasado', macroBasis: 'per_100g', macroStatus: 'pendiente', macroSource: 'pendiente',
     quantityGrams: null, quantityText: null,
-    macros: { energyKcal: null, proteinG: null, carbohydrateG: null, fatG: null, fiberG: null },
+    macros: { energyKcal: null, proteinG: null, carbohydrateG: null, fatG: null },
   }] }).items;
 
   assert.equal(candidate.macroSource, 'pendiente');
@@ -60,25 +68,25 @@ test('preserves unresolved macros only as an invalid intermediate Open Food Fact
 test('does not coerce non-decimal macro strings into valid numbers', () => {
   const [normalized] = normalizeFoodReply({ items: [{
     name: 'Alimento', macroBasis: 'per_portion', macroStatus: 'estimado', macroSource: 'opencode_estimado',
-    macros: { energyKcal: '0x10', proteinG: '2', carbohydrateG: '3', fatG: '1', fiberG: null },
+    macros: { energyKcal: '0x10', proteinG: '2', carbohydrateG: '3', fatG: '1' },
   }] }).items;
 
   assert.ok(foodItemIssues(normalized).includes('macros'));
 });
 
 test('rejects impossible macro mass for a portion', () => {
-  const issues = foodItemIssues(item({ macros: { energyKcal: 185, proteinG: 106, carbohydrateG: 20, fatG: 5, fiberG: null } }));
+  const issues = foodItemIssues(item({ macros: { energyKcal: 185, proteinG: 106, carbohydrateG: 20, fatG: 5 } }));
   assert.ok(issues.includes('macro_unit_bounds'));
 });
 
 test('scales per-100g macros by the stated portion before checking physical bounds', () => {
-  const valid = item({ macroBasis: 'per_100g', quantityGrams: 250, macros: { energyKcal: 200, proteinG: 40, carbohydrateG: 20, fatG: 5, fiberG: 2 } });
+  const valid = item({ macroBasis: 'per_100g', quantityGrams: 250, macros: { energyKcal: 200, proteinG: 40, carbohydrateG: 20, fatG: 5 } });
   const invalid = { ...valid, macros: { ...valid.macros, proteinG: 120 } };
   assert.ok(!foodItemIssues(valid).includes('macro_unit_bounds'));
   assert.ok(foodItemIssues(invalid).includes('macro_unit_bounds'));
 });
 
 test('checks energy density using the portion-scaled per-100g value', () => {
-  const value = item({ macroBasis: 'per_100g', quantityGrams: 200, macros: { energyKcal: 1000, proteinG: 0, carbohydrateG: 0, fatG: 0, fiberG: 0 } });
+  const value = item({ macroBasis: 'per_100g', quantityGrams: 200, macros: { energyKcal: 1000, proteinG: 0, carbohydrateG: 0, fatG: 0 } });
   assert.ok(foodItemIssues(value).includes('energy_unit_bounds'));
 });

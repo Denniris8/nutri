@@ -372,6 +372,7 @@ test('clarification applies multiple preview edits together in the reply compose
   await elements['#registerFoodButton'].dispatch('click');
   elements['#foodDescription'].value = 'pollo';
   await elements['#registerFoodForm'].dispatch('submit');
+  await settle();
   const preview = elements['#foodChatMessages'].children.find((child) => child.className === 'food-chat-preview');
   assert.ok(preview);
   const rows = preview.children.filter((child) => child.className === 'food-preview-row');
@@ -384,6 +385,7 @@ test('clarification applies multiple preview edits together in the reply compose
   assert.match(elements['#foodDescription'].value, /Arroz.*Arroz.*75 g/);
   assert.equal(elements['#foodDescription'].focused, true);
   await elements['#registerFoodForm'].dispatch('submit');
+  await settle();
   const sentEdits = JSON.parse(foodPosts[1].body).previewEdits;
   assert.equal(sentEdits.length, 2);
   assert.equal(sentEdits[0].name, 'Pollo asado');

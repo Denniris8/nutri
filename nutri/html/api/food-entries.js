@@ -1,7 +1,6 @@
 const { randomUUID } = require('node:crypto');
-const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, maxFoodResponseWaitMs, recordFoodError, requestFoodDescription, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock } = require('./opencode-food.js');
+const { deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, maxFoodResponseWaitMs, recordFoodError, requestFoodDescription, safeOpenCodeErrorCode, traceFoodSession, withFoodOperationLock, withFoodSessionLock } = require('./opencode-food.js');
 const { notificationInsertSql, resolveNotificationsSql } = require('./notifications.js');
-const { createAnalysisProgressRecorder } = require('./analysis-progress.js');
 const foodProgress = new Map();
 
 function getFoodEntryProgress(userId, requestId) {
@@ -11,13 +10,13 @@ function getFoodEntryProgress(userId, requestId) {
   return foodProgress.get(key) || null;
 }
 
-function reportFoodProgress(userId, requestId, event, details = {}, recordEvent) {
-  recordEvent?.(event);
+function reportFoodProgress(userId, requestId, event) {
   const labels = {
     save_received: 'Validando solicitud…', entry_saved: 'Borrador guardado; preparando análisis…',
     session_resolution_started: 'Preparando sesión de análisis…', session_ready: 'Separando alimentos y cantidades…',
     message_sent: 'Analizando los alimentos…', message_received: 'Respuesta recibida; revisando alimentos…',
     known_foods_reused: 'Reutilizando alimentos ya registrados…', web_resolution_started: 'Buscando resultados web…', reply_validation_retry: 'Validando macros; reintentando análisis…',
+    session_cleanup_started: 'Finalizando el registro…', session_cleanup_completed: 'Registro finalizado.',
     reply_validated: 'Macros validados; guardando comida…', items_saved: 'Alimentos guardados; verificando registro…',
     persistence_verified: 'Registro verificado.', save_failed: 'El análisis se detuvo; se conserva el borrador.',
   };
@@ -84,7 +83,7 @@ function applyFoodMacroReferences(items, referenceItems) {
   return items.map((item) => {
     const sameName = (value) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase();
     const matches = referenceItems.filter((candidate) => sameName(candidate.name) === sameName(item.name));
-    const signature = (candidate) => JSON.stringify(['quantityGrams', 'energyKcal', 'proteinG', 'carbohydrateG', 'fatG', 'fiberG', 'macroStatus', 'macroSource', 'sourceName', 'sourceUrl', 'sourceQuote'].map((key) => candidate[key] ?? null));
+    const signature = (candidate) => JSON.stringify(['quantityGrams', 'energyKcal', 'proteinG', 'carbohydrateG', 'fatG', 'macroStatus', 'macroSource', 'sourceName', 'sourceUrl', 'sourceQuote'].map((key) => candidate[key] ?? null));
     const ambiguousSource = matches.length > 1 && matches.some((candidate) => signature(candidate) !== signature(matches[0]));
     const source = ambiguousSource ? null : item.referenceItemId == null ? matches[0]
       : matches.find((candidate) => String(candidate.itemId ?? candidate.targetItemId) === String(item.referenceItemId));
@@ -100,7 +99,7 @@ function applyFoodMacroReferences(items, referenceItems) {
       name: source.name, macroBasis: 'per_portion', macroStatus: source.macroStatus,
       macroSource: source.macroSource, sourceName: source.sourceName, sourceUrl: source.sourceUrl,
       sourceQuote: source.sourceQuote,
-      macros: Object.fromEntries(['energyKcal', 'proteinG', 'carbohydrateG', 'fatG', 'fiberG'].map((key) => [key, source[key] == null ? null : Math.round((Number(source[key]) * factor + Number.EPSILON) * 100) / 100])),
+      macros: Object.fromEntries(['energyKcal', 'proteinG', 'carbohydrateG', 'fatG'].map((key) => [key, source[key] == null ? null : Math.round((Number(source[key]) * factor + Number.EPSILON) * 100) / 100])),
     };
   });
 }
@@ -196,7 +195,7 @@ async function readFoodEntries({ userId, fecha, dbQuery, textSql }) {
 SELECT 'records';
 SELECT JSON_OBJECT('id',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d'),'createdAt',DATE_FORMAT(e.creado_en,'%Y-%m-%dT%H:%i:%sZ'),'state',e.estado,'description',e.descripcion_original) FROM registros_comidas e WHERE e.usuario_id=${userId} AND e.fecha_consumo=${textSql(date)} AND e.estado<>'borrador_chat' ORDER BY e.creado_en,e.id;
 SELECT 'items';
-SELECT JSON_OBJECT('entryId',i.registro_comida_id,'itemId',CAST(i.id AS CHAR),'sourceText',i.fragmento_original,'name',i.nombre_alimento,'quantity',i.cantidad_texto,'quantityGrams',i.cantidad_g,'basis',i.base_macros,'energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g,'fiberG',i.fibra_g,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.fecha_consumo=${textSql(date)} ORDER BY e.creado_en,e.id,i.id;
+SELECT JSON_OBJECT('entryId',i.registro_comida_id,'itemId',CAST(i.id AS CHAR),'sourceText',i.fragmento_original,'name',i.nombre_alimento,'quantity',i.cantidad_texto,'quantityGrams',i.cantidad_g,'basis',i.base_macros,'energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.fecha_consumo=${textSql(date)} ORDER BY e.creado_en,e.id,i.id;
 SELECT 'clarifications';
 SELECT JSON_OBJECT('entryId',i.registro_comida_id,'content',i.contenido) FROM registros_comida_interacciones i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.fecha_consumo=${textSql(date)} AND e.estado='completado' AND i.role='user' AND i.id>(SELECT MIN(firstTurn.id) FROM registros_comida_interacciones firstTurn WHERE firstTurn.registro_comida_id=i.registro_comida_id AND firstTurn.role='user') ORDER BY i.registro_comida_id,i.id;`);
   const sections = { records: [], items: [], clarifications: [] };
@@ -279,7 +278,7 @@ function isGenericEstimatePermissionQuestion(question) {
 }
 
 async function readDraftFoodItems({ entryId, userId, dbQuery }) {
-  const rows = await dbQuery(`SELECT JSON_OBJECT('sourceText',i.fragmento_original,'name',i.nombre_alimento,'quantityText',i.cantidad_texto,'quantityGrams',i.cantidad_g,'macroBasis',i.base_macros,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente,'macros',JSON_OBJECT('energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g,'fiberG',i.fibra_g)) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.id=${entryId} AND e.usuario_id=${userId} AND e.estado='borrador_chat' ORDER BY i.id;`);
+  const rows = await dbQuery(`SELECT JSON_OBJECT('sourceText',i.fragmento_original,'name',i.nombre_alimento,'quantityText',i.cantidad_texto,'quantityGrams',i.cantidad_g,'macroBasis',i.base_macros,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente,'macros',JSON_OBJECT('energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g)) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.id=${entryId} AND e.usuario_id=${userId} AND e.estado='borrador_chat' ORDER BY i.id;`);
   return rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [];
 }
 
@@ -290,7 +289,7 @@ async function saveFoodInteraction({ dbQuery, textSql, entryId, role, content })
 
 async function deleteFoodEntry({ userId, entryId, dbQuery }) {
   if (!/^\d+$/.test(String(userId)) || !/^[1-9]\d*$/.test(String(entryId))) throw Object.assign(new Error('Registro no válido.'), { status: 400 });
-  const result = await dbQuery(`DELETE FROM registros_comidas WHERE id=${entryId} AND usuario_id=${userId}; SELECT ROW_COUNT();`);
+  const result = await withFoodOperationLock(userId, () => dbQuery(`DELETE FROM registros_comidas WHERE id=${entryId} AND usuario_id=${userId}; SELECT ROW_COUNT();`));
   return result.split(/\s+/).at(-1) === '1';
 }
 
@@ -364,7 +363,7 @@ function normalizeFoodReply(reply) {
       sourceName: ['usda_fdc', 'openfoodfacts', 'webfetch', 'websearch'].includes(macroSource) ? sourceName : null,
       sourceUrl: ['usda_fdc', 'openfoodfacts', 'webfetch', 'websearch'].includes(macroSource) ? sourceUrl : null,
       sourceQuote: ['usda_fdc', 'openfoodfacts', 'webfetch', 'websearch'].includes(macroSource) ? sourceQuote : null,
-      macros: item?.macros && Object.fromEntries(['energyKcal', 'proteinG', 'carbohydrateG', 'fatG', 'fiberG'].map((key) => [key, number(item.macros[key])])),
+      macros: item?.macros && Object.fromEntries(['energyKcal', 'proteinG', 'carbohydrateG', 'fatG'].map((key) => [key, number(item.macros[key])])),
     };
   }), action, targetEntryId: target == null ? null : String(target) };
 }
@@ -377,19 +376,18 @@ function foodItemIssues(item) {
   if (!['estimado', 'declarado'].includes(item?.macroStatus)) issues.push('macroStatus');
   if (!['declarado_usuario', 'usda_fdc', 'openfoodfacts', 'webfetch', 'websearch', 'opencode_estimado'].includes(item?.macroSource)) issues.push('macroSource');
   const macros = item?.macros;
-  if (!macros || !['energyKcal', 'proteinG', 'carbohydrateG', 'fatG'].every((key) => Number.isFinite(macros[key]) && macros[key] >= 0 && macros[key] <= 99999999.99)
-      || macros.fiberG != null && (!Number.isFinite(macros.fiberG) || macros.fiberG < 0 || macros.fiberG > 99999999.99)) issues.push('macros');
+  if (!macros || !['energyKcal', 'proteinG', 'carbohydrateG', 'fatG'].every((key) => Number.isFinite(macros[key]) && macros[key] >= 0 && macros[key] <= 99999999.99)) issues.push('macros');
   if (item?.quantityGrams != null && (!Number.isFinite(item.quantityGrams) || item.quantityGrams <= 0 || item.quantityGrams > 9999999.999)) issues.push('quantityGrams');
   if (item?.quantityText != null && (typeof item.quantityText !== 'string' || item.quantityText.length > 100)) issues.push('quantityText');
   if (hasExplicitVolume(item) && item.macroBasis !== 'per_portion') issues.push('volume_requires_per_portion');
   const referenceGrams = Number.isFinite(item?.quantityGrams) && item.quantityGrams > 0 ? item.quantityGrams : item?.macroBasis === 'per_100g' ? 100 : null;
   if (macros && referenceGrams != null
-      && ['proteinG', 'carbohydrateG', 'fatG', 'fiberG'].some((key) => macros[key] != null
+      && ['proteinG', 'carbohydrateG', 'fatG'].some((key) => macros[key] != null
         && macros[key] * (item.macroBasis === 'per_100g' && Number.isFinite(item.quantityGrams) ? item.quantityGrams / 100 : 1) > referenceGrams * 1.05)) issues.push('macro_unit_bounds');
   const factor = item?.macroBasis === 'per_100g' && Number.isFinite(item.quantityGrams) ? item.quantityGrams / 100 : 1;
   const energy = macros?.energyKcal * factor;
   if (referenceGrams != null && Number.isFinite(energy) && energy > referenceGrams * 9.5) issues.push('energy_unit_bounds');
-  const storedMacros = macros && ['energyKcal', 'proteinG', 'carbohydrateG', 'fatG', 'fiberG']
+  const storedMacros = macros && ['energyKcal', 'proteinG', 'carbohydrateG', 'fatG']
     .map((key) => macros[key] == null ? null : macros[key] * factor);
   if (storedMacros?.some((value) => value != null && roundFoodDecimal(value) > 99999999.99)
       || macros && roundFoodDecimal((4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG) * factor) > 99999999.99) {
@@ -398,7 +396,7 @@ function foodItemIssues(item) {
   if (macros && Number.isFinite(macros.energyKcal)
       && ['proteinG', 'carbohydrateG', 'fatG'].every((key) => Number.isFinite(macros[key]))) {
     const expected = (4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG) * factor;
-    if (Math.abs(energy - expected) > Math.max(25, energy * 0.25, macros.fiberG * factor * 2)) issues.push('energy_4_4_9_mismatch');
+    if (Math.abs(energy - expected) > Math.max(25, energy * 0.25)) issues.push('energy_4_4_9_mismatch');
   }
   if (item?.targetItemId != null && !/^[1-9]\d*$/.test(String(item.targetItemId))) issues.push('targetItemId');
   if (['usda_fdc', 'openfoodfacts', 'webfetch', 'websearch'].includes(item?.macroSource)) {
@@ -423,19 +421,18 @@ function parseDeclaredFoodLine(description) {
     const match = parts[index]?.match(new RegExp(`^${number}\\s*(?:g\\s*)?${label}$`, 'i'));
     return match ? Number(match[1].replace(',', '.')) : null;
   };
-  if (extra.length || !name || name.length > 150 || !quantity || parts.length < 4 || parts.length > 5) return null;
+  if (extra.length || !name || name.length > 150 || !quantity || parts.length !== 4) return null;
   const grams = Number(quantity[1].replace(',', '.'));
   const energyKcal = read(0, 'kcal');
   const proteinG = read(1, '(?:g\\s*)?(?:prote[ií]nas?|protein)');
   const carbohydrateG = read(2, '(?:g\\s*)?(?:carbohidratos?|hidratos(?:\\s+de\\s+carbono)?|carbs?)');
   const fatG = read(3, '(?:g\\s*)?(?:grasas?|fat)');
-  const fiberG = parts.length === 5 ? read(4, '(?:g\\s*)?(?:fibras?|fiber)') : null;
-  if (![grams, energyKcal, proteinG, carbohydrateG, fatG].every(Number.isFinite) || grams <= 0 || grams > 9999999.999 || parts.length === 5 && fiberG == null) return null;
+  if (![grams, energyKcal, proteinG, carbohydrateG, fatG].every(Number.isFinite) || grams <= 0 || grams > 9999999.999) return null;
   const item = {
     sourceText: `${quantity[1]} g de ${name}`, name, quantityGrams: grams, quantityText: `${grams} g`,
     macroBasis: 'per_portion', macroStatus: 'declarado', macroSource: 'declarado_usuario',
     sourceName: null, sourceUrl: null, sourceQuote: null,
-    macros: { energyKcal, proteinG, carbohydrateG, fatG, fiberG },
+    macros: { energyKcal, proteinG, carbohydrateG, fatG },
   };
   return foodItemIssues(item).length ? null : item;
 }
@@ -580,13 +577,13 @@ function isQuantityQuestion(text) {
 const roundFoodDecimal = (value, scale = 2) => value == null ? null : Number(Number(value).toFixed(scale));
 
 function pendingFoodItemSql(entryId, item, textSql) {
-  const macros = Object.fromEntries(['energyKcal', 'proteinG', 'carbohydrateG', 'fatG', 'fiberG'].map((key) => [key, roundFoodDecimal(item.macros[key])]));
+  const macros = Object.fromEntries(['energyKcal', 'proteinG', 'carbohydrateG', 'fatG'].map((key) => [key, roundFoodDecimal(item.macros[key])]));
   const value = (field) => field == null ? 'NULL' : textSql(field);
   const energy449 = roundFoodDecimal(4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG);
   const method = item.macroSource === 'usda_fdc' ? 'usda' : ['openfoodfacts', 'webfetch', 'websearch'].includes(item.macroSource) ? item.macroSource : item.macroSource === 'opencode_estimado' ? 'opencode_estimado' : 'declarado_usuario';
   const number = (field) => field == null ? 'NULL' : field;
-  const fields = [entryId, textSql(item.sourceText), textSql(item.name.trim()), value(item.sourceName), value(item.sourceUrl), value(item.sourceQuote), value(item.quantityText), number(item.quantityGrams == null ? null : roundFoodDecimal(item.quantityGrams, 3)), textSql(item.macroSource), textSql(method), textSql(item.macroBasis), textSql(item.macroStatus), number(macros.energyKcal), number(energy449), number(macros.proteinG), number(macros.carbohydrateG), number(macros.fatG), number(macros.fiberG)];
-  return `INSERT INTO registros_comida_items(registro_comida_id,fragmento_original,nombre_alimento,nombre_fuente_web,url_fuente_web,cita_fuente,cantidad_texto,cantidad_g,fuente_macros,metodo_energia,base_macros,estado_macros,energia_kcal,energia_449_kcal,proteina_g,carbohidratos_g,grasa_g,fibra_g) VALUES (${fields.join(',')})`;
+  const fields = [entryId, textSql(item.sourceText), textSql(item.name.trim()), value(item.sourceName), value(item.sourceUrl), value(item.sourceQuote), value(item.quantityText), number(item.quantityGrams == null ? null : roundFoodDecimal(item.quantityGrams, 3)), textSql(item.macroSource), textSql(method), textSql(item.macroBasis), textSql(item.macroStatus), number(macros.energyKcal), number(energy449), number(macros.proteinG), number(macros.carbohydrateG), number(macros.fatG)];
+  return `INSERT INTO registros_comida_items(registro_comida_id,fragmento_original,nombre_alimento,nombre_fuente_web,url_fuente_web,cita_fuente,cantidad_texto,cantidad_g,fuente_macros,metodo_energia,base_macros,estado_macros,energia_kcal,energia_449_kcal,proteina_g,carbohidratos_g,grasa_g) VALUES (${fields.join(',')})`;
 }
 
 const foodKey = (value) => String(value || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[‐‑‒–—]/g, '-').replace(/[’‘]/g, "'").trim().toLowerCase().replace(/\s+/g, ' ');
@@ -595,7 +592,7 @@ async function readKnownFoods({ userId, names, dbQuery, textSql }) {
   const unique = [...new Set((names || []).map((name) => String(name || '').trim()).filter((name) => name && name.length <= 150))].slice(0, 12);
   const known = new Map();
   if (!unique.length) return known;
-  const rows = await dbQuery(`SELECT JSON_OBJECT('name',i.nombre_alimento,'grams',i.cantidad_g,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente,'energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g,'fiberG',i.fibra_g) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.estado='completado' AND e.creado_en >= UTC_TIMESTAMP() - INTERVAL 7 DAY AND i.base_macros='per_portion' AND i.cantidad_g>0 AND i.energia_kcal IS NOT NULL AND i.nombre_alimento IN (${unique.map(textSql).join(',')}) ORDER BY e.creado_en DESC,i.id DESC LIMIT 200;`);
+  const rows = await dbQuery(`SELECT JSON_OBJECT('name',i.nombre_alimento,'grams',i.cantidad_g,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente,'energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.estado='completado' AND e.creado_en >= UTC_TIMESTAMP() - INTERVAL 7 DAY AND i.base_macros='per_portion' AND i.cantidad_g>0 AND i.energia_kcal IS NOT NULL AND i.nombre_alimento IN (${unique.map(textSql).join(',')}) ORDER BY e.creado_en DESC,i.id DESC LIMIT 200;`);
   for (const row of rows ? rows.split(/\r?\n/).filter(Boolean) : []) {
     let food;
     try { food = JSON.parse(row); } catch { continue; }
@@ -606,7 +603,7 @@ async function readKnownFoods({ userId, names, dbQuery, textSql }) {
     known.set(key, {
       name: food.name, grams, macroStatus: food.macroStatus, macroSource: food.macroSource,
       sourceName: food.sourceName, sourceUrl: food.sourceUrl, sourceQuote: food.sourceQuote,
-      macros: { energyKcal: value(food.energyKcal), proteinG: value(food.proteinG), carbohydrateG: value(food.carbohydrateG), fatG: value(food.fatG), fiberG: value(food.fiberG) },
+      macros: { energyKcal: value(food.energyKcal), proteinG: value(food.proteinG), carbohydrateG: value(food.carbohydrateG), fatG: value(food.fatG) },
     });
   }
   return known;
@@ -651,12 +648,16 @@ function repairEstimatedEnergy(items) {
     const macros = item?.macros;
     if (item?.macroSource !== 'opencode_estimado' || !macros || !['proteinG', 'carbohydrateG', 'fatG'].every((key) => Number.isFinite(macros[key]) && macros[key] >= 0)) return item;
     const expected = Math.round((4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG) * 10) / 10;
-    const consistent = Number.isFinite(macros.energyKcal) && Math.abs(macros.energyKcal - expected) <= Math.max(25, macros.energyKcal * 0.25, (macros.fiberG || 0) * 2);
+    const consistent = Number.isFinite(macros.energyKcal) && Math.abs(macros.energyKcal - expected) <= Math.max(25, macros.energyKcal * 0.25);
     return consistent ? item : { ...item, macros: { ...macros, energyKcal: expected } };
   });
 }
 
-async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, requestOpenCode, now = () => new Date() }) {
+function saveFoodEntry(args) {
+  return withFoodOperationLock(args.userId, () => saveFoodEntryUnlocked(args));
+}
+
+async function saveFoodEntryUnlocked({ response, data, userId, dbQuery, textSql, json, requestOpenCode, now = () => new Date() }) {
   const suppressNotification = data?.suppressNotification === true;
   if (!/^\d+$/.test(String(userId))) { json(response, 400, { error: 'Cuenta no válida.' }); return; }
   let entry;
@@ -664,8 +665,7 @@ async function saveFoodEntry({ response, data, userId, dbQuery, textSql, json, r
   catch (error) { json(response, error.status || 400, { error: error.message }); return; }
 
   const trace = { id: randomUUID(), events: [] };
-  const progressRecorder = createAnalysisProgressRecorder({ dbQuery, textSql, userId, flow: 'comida', operationId: entry.requestId });
-  trace.onEvent = (event, details) => reportFoodProgress(userId, entry.requestId, event, details, progressRecorder.record);
+  trace.onEvent = (event) => reportFoodProgress(userId, entry.requestId, event);
   traceFoodSession(trace, 'save_received');
   let entryId;
   let committed = false;
@@ -690,7 +690,6 @@ SELECT JSON_OBJECT('entryId',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d'
     if (existingDraftDate) entry.fecha = existingDraftDate;
     if (appended) {
       const prior = JSON.parse(appended);
-      await progressRecorder.flush();
       json(response, 200, { state: 'completado', entryId: prior.entryId, requestId: entry.requestId, fecha: prior.fecha, records: await readFoodEntries({ userId, fecha: prior.fecha, dbQuery, textSql }), message: 'Los alimentos ya se habían añadido a esa comida.' });
       return;
     }
@@ -743,7 +742,6 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     if (asksSelectedDateConfirmation && !selectedDateAnswer?.confirmed) {
       if (selectedDateAnswer?.declined) {
         await dbQuery(`DELETE FROM registros_comidas WHERE id=${entryId} AND usuario_id=${userId} AND estado='borrador_chat';`);
-        await progressRecorder.flush();
         json(response, 200, { state: 'cancelado', entryId, requestId: entry.requestId, message: 'Registro cancelado; no se guardó la comida.' });
         return;
       }
@@ -766,7 +764,8 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     let modelDescription = asksSelectedDateConfirmation && selectedDateAnswer?.confirmed ? saved.description : entry.descripcion;
     let conversationMessages;
     const readConversation = () => conversationMessages ??= readFoodConversationMessages({ entryId, dbQuery });
-    const multipleExplicitMasses = !saved.question && !parseDeclaredFoodShortcut(modelDescription)
+    const declaredReply = parseDeclaredFoodShortcut(modelDescription);
+    const multipleExplicitMasses = !saved.question && !declaredReply
       && explicitFoodMasses(modelDescription).length >= 2;
     const genericEstimateApproved = multipleExplicitMasses
       || hasGenericEstimateApproval(await readConversation(), saved.question, entry.descripcion);
@@ -778,11 +777,11 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     const asksAddition = /\b(agrega|agregar|añade|añadir|incorpora|incorporar)\b/i.test(entry.descripcion);
     const reuseAsNewMeal = Boolean(foodReference) && !correctionIntent && !asksAddition;
     const conversation = await readFoodConversationText({ entryId, dbQuery, fallback: '', excludeLatestUser: true, messages: await readConversation() });
-    const fastPathAllowed = !saved.question && !conversation && !genericEstimateApproved && !reuseAsNewMeal
+    const fastPathAllowed = !saved.question && !conversation && !reuseAsNewMeal
       && !correctionIntent && !asksAddition && entry.targetEntryId == null && !requestedTime && !foodReference
       && !isEarlyNutritionHour(localClockMinutes);
     const directFastPath = fastPathAllowed
-      ? parseDeclaredFoodShortcut(modelDescription) || await knownFoodsShortcut({ description: modelDescription, userId, dbQuery, textSql })
+      ? declaredReply || await knownFoodsShortcut({ description: modelDescription, userId, dbQuery, textSql })
       : null;
     const dayMeals = directFastPath ? [] : numberVisibleFoodMeals(await readFoodEntries({ userId, fecha: entry.fecha, dbQuery, textSql })).filter((record) => record.state === 'completado').map((record) => {
       const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: entry.timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date(record.createdAt)).map(({ type, value }) => [type, value]));
@@ -790,7 +789,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
         id: String(record.id), numeroComida: record.numeroComida, hora: new Intl.DateTimeFormat('es-MX', { timeZone: entry.timezone, hour: '2-digit', minute: '2-digit' }).format(new Date(record.createdAt)),
         hour24: Number(parts.hour), minute: Number(parts.minute),
         alimentos: record.items.map((item) => `${item.name}${item.quantity ? ` (${item.quantity})` : ''}`),
-        items: record.items.map(({ itemId, sourceText, name, quantity, quantityGrams, basis, energyKcal, proteinG, carbohydrateG, fatG, fiberG, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote }) => ({ targetItemId: String(itemId), sourceText, name, quantity, quantityGrams, basis, energyKcal, proteinG, carbohydrateG, fatG, fiberG, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote })),
+        items: record.items.map(({ itemId, sourceText, name, quantity, quantityGrams, basis, energyKcal, proteinG, carbohydrateG, fatG, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote }) => ({ targetItemId: String(itemId), sourceText, name, quantity, quantityGrams, basis, energyKcal, proteinG, carbohydrateG, fatG, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote })),
         ...(record.items.length ? {} : { descripcion: record.description }),
       };
     });
@@ -862,7 +861,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
         name, macroBasis, macroStatus, macroSource, sourceName, sourceUrl, sourceQuote, macros,
       }));
     if (directReply) {
-      traceFoodSession(trace, 'declared_food_fast_path', { itemCount: directReply.items.length });
+      traceFoodSession(trace, declaredReply ? 'declared_food_fast_path' : 'known_foods_reused', { itemCount: directReply.items.length });
     } else {
       if (identityRefusal) {
         await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode, forgetOnError: true });
@@ -1089,7 +1088,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       const destination = clarificationTargetId == null ? 'NULL' : clarificationTargetId;
       const createdAtUpdate = createdAt ? `,creado_en=${textSql(createdAt)}` : '';
       const candidates = items.filter((item) => !foodItemIssues(item).length);
-      const statements = ["SET time_zone='+00:00'", 'START TRANSACTION', `DELETE FROM registros_comida_items WHERE registro_comida_id=${entryId}`, `UPDATE registros_comidas SET estado='borrador_chat',registro_comida_destino_id=${destination},pregunta_pendiente=${textSql(question)}${createdAtUpdate},energia_kcal=NULL,energia_449_kcal=NULL,proteina_g=NULL,carbohidratos_g=NULL,grasa_g=NULL,fibra_g=NULL WHERE id=${entryId} AND usuario_id=${userId}`];
+      const statements = ["SET time_zone='+00:00'", 'START TRANSACTION', `DELETE FROM registros_comida_items WHERE registro_comida_id=${entryId}`, `UPDATE registros_comidas SET estado='borrador_chat',registro_comida_destino_id=${destination},pregunta_pendiente=${textSql(question)}${createdAtUpdate},energia_kcal=NULL,energia_449_kcal=NULL,proteina_g=NULL,carbohidratos_g=NULL,grasa_g=NULL WHERE id=${entryId} AND usuario_id=${userId}`];
       for (const message of assistantMessages) if (message !== question) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(message)})`);
       if (!assistantMessages.includes(question)) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(question)})`);
       statements.push(...candidates.map((item) => pendingFoodItemSql(entryId, item, textSql)));
@@ -1131,18 +1130,20 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       const webName = hasSource ? textSql(item.sourceName) : 'NULL';
       const webUrl = hasSource ? textSql(item.sourceUrl) : 'NULL';
       const webQuote = hasSource ? textSql(item.sourceQuote) : 'NULL';
-      const values = `${textSql(item.sourceText)},${textSql(item.name.trim())},${webName},${webUrl},${webQuote},${textSql(quantityText)},${quantity},${textSql(source)},${textSql(method)},'per_portion',${textSql(item.macroStatus)},${m.energyKcal},${energy449},${m.proteinG},${m.carbohydrateG},${m.fatG},${m.fiberG}`;
-      if (updating && item.targetItemId != null) statements.push(`UPDATE registros_comida_items SET fragmento_original=${textSql(item.sourceText)},nombre_alimento=${textSql(item.name.trim())},nombre_fuente_web=${webName},url_fuente_web=${webUrl},cita_fuente=${webQuote},cantidad_texto=${textSql(quantityText)},cantidad_g=${quantity},fuente_macros=${textSql(source)},metodo_energia=${textSql(method)},base_macros='per_portion',estado_macros=${textSql(item.macroStatus)},energia_kcal=${m.energyKcal},energia_449_kcal=${energy449},proteina_g=${m.proteinG},carbohidratos_g=${m.carbohydrateG},grasa_g=${m.fatG},fibra_g=${m.fiberG} WHERE id=${item.targetItemId} AND registro_comida_id=${destinationId}`);
-      else statements.push(`INSERT INTO registros_comida_items(registro_comida_id,fragmento_original,nombre_alimento,nombre_fuente_web,url_fuente_web,cita_fuente,cantidad_texto,cantidad_g,fuente_macros,metodo_energia,base_macros,estado_macros,energia_kcal,energia_449_kcal,proteina_g,carbohidratos_g,grasa_g,fibra_g) VALUES (${destinationId},${values})`);
+      const values = `${textSql(item.sourceText)},${textSql(item.name.trim())},${webName},${webUrl},${webQuote},${textSql(quantityText)},${quantity},${textSql(source)},${textSql(method)},'per_portion',${textSql(item.macroStatus)},${m.energyKcal},${energy449},${m.proteinG},${m.carbohydrateG},${m.fatG}`;
+      if (updating && item.targetItemId != null) statements.push(`UPDATE registros_comida_items SET fragmento_original=${textSql(item.sourceText)},nombre_alimento=${textSql(item.name.trim())},nombre_fuente_web=${webName},url_fuente_web=${webUrl},cita_fuente=${webQuote},cantidad_texto=${textSql(quantityText)},cantidad_g=${quantity},fuente_macros=${textSql(source)},metodo_energia=${textSql(method)},base_macros='per_portion',estado_macros=${textSql(item.macroStatus)},energia_kcal=${m.energyKcal},energia_449_kcal=${energy449},proteina_g=${m.proteinG},carbohidratos_g=${m.carbohydrateG},grasa_g=${m.fatG} WHERE id=${item.targetItemId} AND registro_comida_id=${destinationId}`);
+      else statements.push(`INSERT INTO registros_comida_items(registro_comida_id,fragmento_original,nombre_alimento,nombre_fuente_web,url_fuente_web,cita_fuente,cantidad_texto,cantidad_g,fuente_macros,metodo_energia,base_macros,estado_macros,energia_kcal,energia_449_kcal,proteina_g,carbohidratos_g,grasa_g) VALUES (${destinationId},${values})`);
     }
-    const total = (column) => `(SELECT IF(COUNT(*)=SUM(base_macros='per_portion'),SUM(${column}),NULL) FROM registros_comida_items WHERE registro_comida_id=${destinationId})`;
+    const totalColumns = ['energia_kcal', 'energia_449_kcal', 'proteina_g', 'carbohidratos_g', 'grasa_g'];
+    const total = (column) => `@food_${column}`;
+    statements.push(`SELECT ${totalColumns.map((column) => `IF(COUNT(*)=SUM(base_macros='per_portion') AND COUNT(*)=COUNT(${column}),SUM(${column}),NULL)`).join(',')} INTO ${totalColumns.map(total).join(',')} FROM registros_comida_items WHERE registro_comida_id=${destinationId}`);
     if (append || updating) {
       for (const message of draftMessages) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${destinationId},${textSql(message.role)},${textSql(message.content)})`);
       for (const message of assistantMessages) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${destinationId},'assistant',${textSql(message)})`);
-      statements.push(`UPDATE registros_comidas SET estado='completado',pregunta_pendiente=NULL,energia_kcal=${total('energia_kcal')},energia_449_kcal=${total('energia_449_kcal')},proteina_g=${total('proteina_g')},carbohidratos_g=${total('carbohidratos_g')},grasa_g=${total('grasa_g')},fibra_g=${total('fibra_g')} WHERE id=${destinationId} AND usuario_id=${userId}`, `INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido,request_id) VALUES (${destinationId},'assistant',${textSql(confirmation)},${textSql(entry.requestId)})`, `DELETE FROM registros_comidas WHERE id=${entryId} AND usuario_id=${userId}`);
+      statements.push(`UPDATE registros_comidas SET estado='completado',pregunta_pendiente=NULL,energia_kcal=${total('energia_kcal')},energia_449_kcal=${total('energia_449_kcal')},proteina_g=${total('proteina_g')},carbohidratos_g=${total('carbohidratos_g')},grasa_g=${total('grasa_g')} WHERE id=${destinationId} AND usuario_id=${userId}`, `INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido,request_id) VALUES (${destinationId},'assistant',${textSql(confirmation)},${textSql(entry.requestId)})`, `DELETE FROM registros_comidas WHERE id=${entryId} AND usuario_id=${userId}`);
     } else {
       for (const message of assistantMessages) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(message)})`);
-      statements.push(`UPDATE registros_comidas SET estado='completado',registro_comida_destino_id=NULL,pregunta_pendiente=NULL,fecha_consumo=${textSql(savedDate)},descripcion_original=${textSql(savedDescription)}${createdAt ? `,creado_en=${textSql(createdAt)}` : ''},energia_kcal=${total('energia_kcal')},energia_449_kcal=${total('energia_449_kcal')},proteina_g=${total('proteina_g')},carbohidratos_g=${total('carbohidratos_g')},grasa_g=${total('grasa_g')},fibra_g=${total('fibra_g')} WHERE id=${entryId} AND usuario_id=${userId}`, `INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(confirmation)})`);
+      statements.push(`UPDATE registros_comidas SET estado='completado',registro_comida_destino_id=NULL,pregunta_pendiente=NULL,fecha_consumo=${textSql(savedDate)},descripcion_original=${textSql(savedDescription)}${createdAt ? `,creado_en=${textSql(createdAt)}` : ''},energia_kcal=${total('energia_kcal')},energia_449_kcal=${total('energia_449_kcal')},proteina_g=${total('proteina_g')},carbohidratos_g=${total('carbohidratos_g')},grasa_g=${total('grasa_g')} WHERE id=${entryId} AND usuario_id=${userId}`, `INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(confirmation)})`);
     }
     statements.push(resolveNotificationsSql({ userId, category: 'comida', textSql }));
     if (!suppressNotification) statements.push(notificationInsertSql({ userId, category: 'comida', state: 'guardado', title: 'Comida guardada', message: confirmation, referenceId: append || updating ? destinationId : entryId, textSql }));
@@ -1154,10 +1155,16 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     committedConfirmation = confirmation;
     traceFoodSession(trace, 'items_saved', { itemCount: items.length, appended: append });
     stage = 'verification';
-    const [messages, records] = await Promise.all([
-      dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${append || updating ? destinationId : entryId} ORDER BY id;`).then((rows) => rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : []),
-      readFoodEntries({ userId, fecha: savedDate, dbQuery, textSql }),
-    ]);
+    let messages = [];
+    const readbackQuery = async (sql) => {
+      const rows = await dbQuery(`${sql}\nSELECT 'messages';\nSELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${destinationId} ORDER BY id;`);
+      const lines = rows.split(/\r?\n/);
+      const marker = lines.indexOf('messages');
+      if (marker < 0) throw new Error('food_readback_messages_missing');
+      messages = lines.slice(marker + 1).filter(Boolean).map((row) => JSON.parse(row));
+      return lines.slice(0, marker).join('\n');
+    };
+    const records = await readFoodEntries({ userId, fecha: savedDate, dbQuery: readbackQuery, textSql });
     const persisted = records.find((record) => String(record.id) === String(destinationId) && record.state === 'completado');
     const expectedItemCount = append ? (target?.items.length || 0) + items.length
       : updating ? (target?.items.length || 0) + items.filter((item) => item.targetItemId == null).length : items.length;
@@ -1167,19 +1174,22 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       throw Object.assign(new Error('food_entry_readback_mismatch'), { code: 'FOOD_PERSISTENCE_VERIFY_FAILED' });
     }
     traceFoodSession(trace, 'persistence_verified', { entryId: destinationId, itemCount: persisted.items.length });
-    try { await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode }); }
+    const cleanupStartedAt = Date.now();
+    traceFoodSession(trace, 'session_cleanup_started', { stage: 'after_food_saved' });
+    try {
+      await deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode });
+      traceFoodSession(trace, 'session_cleanup_completed', { stage: 'after_food_saved', durationMs: Date.now() - cleanupStartedAt });
+    }
     catch (error) {
-      traceFoodSession(trace, 'session_cleanup_failed', { stage: 'after_food_saved', errorCode: safeOpenCodeErrorCode(error) });
+      traceFoodSession(trace, 'session_cleanup_failed', { stage: 'after_food_saved', durationMs: Date.now() - cleanupStartedAt, errorCode: safeOpenCodeErrorCode(error) });
       try { await recordFoodError({ dbQuery, textSql, userId, trace, stage: 'after_food_saved', error, httpStatus: 200, action: 'DELETE /api/session/{id}' }); }
       catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed', trace_id: trace.id })); }
     }
-    await progressRecorder.flush();
     json(response, 200, { state: 'completado', entryId: append || updating ? destinationId : entryId, fecha: savedDate, requestId: entry.requestId, appended: append, updated: updating, records, messages: Array.isArray(messages) ? messages : [], message: confirmation });
   } catch (error) {
     traceFoodSession(trace, 'save_failed', { entryId: entryId || null, stage, errorCode: safeOpenCodeErrorCode(error) });
     try { await recordFoodError({ dbQuery, textSql, userId, trace, stage, error, httpStatus: entryId ? 502 : 503 }); }
     catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed' })); }
-    await progressRecorder.flush();
     if (committed) {
       json(response, 503, { state: 'completado', entryId: committedEntryId, requestId: entry.requestId, message: `${committedConfirmation} No pude verificar la lectura actualizada. Actualiza el día antes de volver a enviar la solicitud.` });
       return;
@@ -1196,14 +1206,10 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
                     : 'El borrador quedó guardado, pero el asistente no completó el análisis. Puedes intentarlo de nuevo.';
       try { await saveFoodInteraction({ dbQuery, textSql, entryId, role: 'assistant', content: `[ERROR_REGISTRO] ${message}` }); } catch {}
       if (!suppressNotification) try { await dbQuery(`${notificationInsertSql({ userId, category: 'comida', state: 'error', title: 'No se pudo completar el registro de comida', message, referenceId: entryId, textSql })};`); } catch {}
-      await progressRecorder.flush();
       json(response, 502, { entryId, requestId: entry.requestId, message });
       return;
     }
-    await progressRecorder.flush();
     json(response, 503, { error: 'No se pudo iniciar el registro de comida.' });
-  } finally {
-    await progressRecorder.flush();
   }
 }
 

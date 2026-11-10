@@ -99,7 +99,7 @@ async function lookupOpenFoodFactsProduct(name, options = {}) {
       normalizeOffName(candidate.product_name) === normalizeOffName(name)
       && /^\d{8,14}$/.test(String(candidate.code || ''))
       && ['energy-kcal_100g', 'proteins_100g', 'carbohydrates_100g', 'fat_100g'].every((key) => isNumber(candidate.nutriments?.[key])));
-    const signature = (candidate) => JSON.stringify([normalizeOffName(candidate.brands), ...['energy-kcal_100g', 'proteins_100g', 'carbohydrates_100g', 'fat_100g', 'fiber_100g'].map((key) => candidate.nutriments?.[key] ?? null)]);
+    const signature = (candidate) => JSON.stringify([normalizeOffName(candidate.brands), ...['energy-kcal_100g', 'proteins_100g', 'carbohydrates_100g', 'fat_100g'].map((key) => candidate.nutriments?.[key] ?? null)]);
     if (matches.length > 1 && matches.some((candidate) => signature(candidate) !== signature(matches[0]))) return null;
     const product = matches[0];
     if (!product) {
@@ -111,15 +111,14 @@ async function lookupOpenFoodFactsProduct(name, options = {}) {
     const macros = {
       energyKcal: Number(nutriments['energy-kcal_100g']), proteinG: Number(nutriments.proteins_100g),
       carbohydrateG: Number(nutriments.carbohydrates_100g), fatG: Number(nutriments.fat_100g),
-      fiberG: nutriments.fiber_100g != null && Number.isFinite(Number(nutriments.fiber_100g)) ? Number(nutriments.fiber_100g) : null,
     };
     if (Object.values(macros).some((value) => value != null && (value < 0 || value > 99999999.99))) return null;
     const expectedEnergy = 4 * macros.proteinG + 4 * macros.carbohydrateG + 9 * macros.fatG;
-    if (macros.energyKcal > 950 || Math.abs(macros.energyKcal - expectedEnergy) > Math.max(25, macros.energyKcal * 0.25, (macros.fiberG || 0) * 2)) return null;
+    if (macros.energyKcal > 950 || Math.abs(macros.energyKcal - expectedEnergy) > Math.max(25, macros.energyKcal * 0.25)) return null;
     const result = {
       name: name.trim(), sourceName: 'Open Food Facts (dato colaborativo)',
       sourceUrl: `https://world.openfoodfacts.org/product/${product.code}`,
-      sourceQuote: `Valores por 100 g: ${macros.energyKcal} kcal, proteína ${macros.proteinG} g, carbohidratos ${macros.carbohydrateG} g, grasa ${macros.fatG} g${macros.fiberG == null ? '' : `, fibra ${macros.fiberG} g`}.`,
+      sourceQuote: `Valores por 100 g: ${macros.energyKcal} kcal, proteína ${macros.proteinG} g, carbohidratos ${macros.carbohydrateG} g, grasa ${macros.fatG} g.`,
       macroBasis: 'per_100g', macroStatus: 'declarado', macroSource: 'openfoodfacts', macros,
     };
     openFoodFactsCache.set(cacheKey, { product: result, expiresAt: Date.now() + 900000 });
@@ -170,7 +169,7 @@ async function findUsdaFood(name, options = {}) {
     const matches = (Array.isArray(data.foods) ? data.foods : []).filter((food) => normalize(food.description) === normalize(name));
     const macrosFor = (food) => {
       const nutrients = new Map((food.foodNutrients || []).map((nutrient) => [Number(nutrient.nutrientId), Number(nutrient.value)]));
-      const result = { energyKcal: nutrients.get(1008), proteinG: nutrients.get(1003), carbohydrateG: nutrients.get(1005), fatG: nutrients.get(1004), fiberG: nutrients.get(1079) ?? null };
+      const result = { energyKcal: nutrients.get(1008), proteinG: nutrients.get(1003), carbohydrateG: nutrients.get(1005), fatG: nutrients.get(1004) };
       return [result, [1008, 1003, 1005, 1004].every((id) => Number.isFinite(nutrients.get(id)))];
     };
     const valid = matches.map((food) => ({ food, ...macrosFor(food) })).filter((entry) => entry[1]);
@@ -182,7 +181,7 @@ async function findUsdaFood(name, options = {}) {
     return remember({
       name: name.trim(), sourceName: 'USDA FoodData Central',
       sourceUrl: `https://fdc.nal.usda.gov/food/${encodeURIComponent(food.fdcId)}`,
-      sourceQuote: `Valores por 100 g: ${macros.energyKcal} kcal, proteína ${macros.proteinG} g, carbohidratos ${macros.carbohydrateG} g, grasa ${macros.fatG} g${macros.fiberG == null ? '' : `, fibra ${macros.fiberG} g`}.`,
+      sourceQuote: `Valores por 100 g: ${macros.energyKcal} kcal, proteína ${macros.proteinG} g, carbohidratos ${macros.carbohydrateG} g, grasa ${macros.fatG} g.`,
       macroBasis: 'per_100g', macroStatus: 'declarado', macroSource: 'usda_fdc', macros,
     }, 900000);
   } catch { if (guarded) breakerRecord('usda', false); return null; }
@@ -417,11 +416,14 @@ function withUserLock(userId, run) {
 
 function withFoodSessionLock(userId, run) { return withUserLock(String(userId), run); }
 
+// ponytail: bloqueo local al proceso; varias réplicas requerirían coordinación compartida.
+function withFoodOperationLock(userId, run) { return withUserLock(`operation:${userId}`, run); }
+
 async function ensureFoodOpenCodeSession({ userId, dbQuery, textSql, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig, trace, returnMetadata = false }) {
   const id = String(userId);
   if (!/^\d+$/.test(id)) throw new Error('Cuenta autenticada no válida.');
   const config = await readConfig();
-  const configFingerprint = createHash('sha256').update(JSON.stringify({ userId: id, sessionScope: 'food-conversation', model: config.model, agent: config.agent, variant: config.variant })).digest('hex');
+  const configFingerprint = createHash('sha256').update(JSON.stringify({ userId: id, sessionScope: 'food-conversation', contract: 'four-macros-v1', model: config.model, agent: config.agent, variant: config.variant })).digest('hex');
   traceFoodSession(trace, 'session_resolution_started');
   const result = (sessionId, reused) => returnMetadata ? { sessionId, reused } : sessionId;
   return withUserLock(id, async () => {
@@ -553,5 +555,5 @@ async function requestFoodDescription({ sessionId, description, initialDescripti
 
 module.exports = {
   deleteFoodOpenCodeSession, ensureFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, forgetFoodSessionCache, openCodeRequest, recordFoodError, requestFoodDescription,
-  getFoodSessionDefaults, maxFoodResponseWaitMs, readFoodSessionConfig, safeOpenCodeErrorCode, traceFoodSession, withFoodSessionLock,
+  getFoodSessionDefaults, maxFoodResponseWaitMs, readFoodSessionConfig, safeOpenCodeErrorCode, traceFoodSession, withFoodOperationLock, withFoodSessionLock,
 };

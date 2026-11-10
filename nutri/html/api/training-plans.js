@@ -142,13 +142,13 @@ function validateTrainingPlan({ userId, requestId, goals, plan, macros, disclosu
 
 async function saveTrainingPlan({ userId, requestId, goals, plan, macros, disclosure, context, dbQuery, textSql }) {
   const entry = validateTrainingPlan({ userId, requestId, goals, plan, macros, disclosure, context });
-  const macroSql = (key, decimals) => entry.macros[key] === null ? 'NULL' : entry.macros[key].toFixed(decimals);
+  const macroSql = (key, decimals = key === 'calorias_kcal' ? 1 : 2) => entry.macros[key] === null ? 'NULL' : entry.macros[key].toFixed(decimals);
   const saved = await dbQuery(`INSERT INTO planes_entrenamiento(usuario_id,request_id,objetivos,contenido,objetivo_proteinas_g,objetivo_carbohidratos_g,objetivo_grasas_g,objetivo_calorias_kcal,creado_en) VALUES (${entry.id},${textSql(entry.requestId)},${textSql(entry.objectives)},${textSql(entry.content)},${macroSql('proteinas_g', 2)},${macroSql('carbohidratos_g', 2)},${macroSql('grasas_g', 2)},${macroSql('calorias_kcal', 1)},UTC_TIMESTAMP(3)) AS incoming ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id);
 SELECT JSON_OBJECT('id',id,'requestId',request_id,'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ'),'goals',objetivos,'plan',contenido,'macros',JSON_OBJECT('proteinas_g',objetivo_proteinas_g,'carbohidratos_g',objetivo_carbohidratos_g,'grasas_g',objetivo_grasas_g,'calorias_kcal',objetivo_calorias_kcal),'inserted',ROW_COUNT()=1) FROM planes_entrenamiento WHERE id=LAST_INSERT_ID() AND usuario_id=${entry.id} LIMIT 1;`);
   if (!saved) throw new Error('No se pudo recuperar el plan guardado.');
   const persisted = JSON.parse(saved);
   if (persisted.requestId !== entry.requestId || persisted.goals !== entry.objectives || persisted.plan !== entry.content
-    || macroFields.some((key) => (persisted.macros[key] == null ? null : Number(persisted.macros[key])) !== entry.macros[key])) {
+    || macroFields.some((key) => (persisted.macros[key] == null ? null : Number(persisted.macros[key])) !== Number(macroSql(key)))) {
     throw Object.assign(new Error('La clave de guardado ya corresponde a otro plan.'), { status: 409 });
   }
   return { id: persisted.id, requestId: persisted.requestId, createdAt: persisted.createdAt, inserted: persisted.inserted === true };

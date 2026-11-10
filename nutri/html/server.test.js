@@ -42,6 +42,35 @@ const post = (url, data, headers = {}) => fetch(url, {
   body: JSON.stringify(data),
 });
 
+test('readiness checks MySQL without exposing failures and liveness remains independent', async () => {
+  let state = 'available';
+  let reads = 0;
+  await withServer(async (sql) => {
+    assert.equal(sql, 'SELECT 1;');
+    reads += 1;
+    if (state === 'unavailable') throw new Error('private database connection details');
+    return state === 'available' ? '1' : '';
+  }, async (base) => {
+    const ready = await fetch(base + '/readyz');
+    assert.equal(ready.status, 200);
+    assert.equal(ready.headers.get('cache-control'), 'no-store');
+    assert.deepEqual(await ready.json(), { ready: true });
+    for (state of ['unexpected', 'unavailable']) {
+      const failed = await fetch(base + '/readyz');
+      assert.equal(failed.status, 503);
+      assert.deepEqual(await failed.json(), { ready: false });
+    }
+    const live = await fetch(base + '/healthz');
+    assert.equal(live.status, 200);
+    await live.text();
+    const invalidMethod = await post(base + '/readyz', {});
+    assert.equal(invalidMethod.status, 405);
+    assert.equal(invalidMethod.headers.get('allow'), 'GET');
+    await invalidMethod.text();
+    assert.equal(reads, 3);
+  });
+});
+
 test('progress nutrition endpoint returns account-scoped nutrition, body, activity and coverage', async () => {
   const queries = [];
   const nutrition = { days: 7, current: { loggedDays: 1, completeDays: 1, incompleteDays: 0, kcal: 1800, protein: 100, carbs: 200, fat: 60 }, previous: { loggedDays: 0, completeDays: 0, incompleteDays: 0, kcal: null, protein: null, carbs: null, fat: null }, quality: { currentPending: 0, previousPending: 0, macroSources: { items: 1, usda: 1, openfoodfacts: 0, declared: 0, web: 0, websearch: 0, opencode: 0, estimated: 0 } }, goals: null };
@@ -50,8 +79,8 @@ test('progress nutrition endpoint returns account-scoped nutrition, body, activi
   await withServer(async (sql) => {
     queries.push(sql);
     if (sql.includes('SELECT s.usuario_id')) return '27';
+    if (sql.includes('SELECT zona_horaria FROM preferencias_usuario')) return 'America/Mexico_City';
     if (sql.includes('WITH daily AS')) return [nutrition, body, activity, { current: 1, previous: 0 }].map(JSON.stringify).join('\n');
-    if (sql.includes("JSON_OBJECT('openfoodfacts'")) return JSON.stringify({ openfoodfacts: 0, websearch: 0 });
     throw new Error('unexpected_query');
   }, async (base) => {
     const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
@@ -61,6 +90,64 @@ test('progress nutrition endpoint returns account-scoped nutrition, body, activi
   });
   assert.equal(queries.filter((sql) => !sql.includes('SELECT s.usuario_id') && sql.includes('usuario_id=27')).length, 2);
   assert.match(queries.find((sql) => sql.includes('WITH daily AS')), /estado='completado'.{0,120}fecha_consumo/);
+  const summarySql = queries.find((sql) => sql.includes('WITH daily AS'));
+  assert.equal((summarySql.match(/JOIN registros_comida_items i/g) || []).length, 1, 'Las fuentes deben contarse en una única agregación');
+  assert.equal((summarySql.match(/LEFT JOIN registros_entrenamientos t/g) || []).length, 2, 'Una agregación de actividad por periodo');
+  assert.ok(summarySql.includes("'manualMinutes',SUM(CASE WHEN t.origen='manual' THEN t.duracion_minutos END)"), 'Sin sesiones debe conservar NULL, no cero');
+  const sqlText = (value) => `CONVERT(0x${Buffer.from(value).toString('hex')} USING utf8mb4)`;
+  assert.ok(summarySql.includes(`creado_en>=${sqlText('2026-10-15 06:00:00')} AND creado_en<${sqlText('2026-10-22 06:00:00')}`));
+  assert.ok(summarySql.includes(`creado_en>=${sqlText('2026-10-08 06:00:00')} AND creado_en<${sqlText('2026-10-15 06:00:00')}`));
+});
+
+test('progress activity uses account timezone across daylight-saving changes', async () => {
+  let summarySql;
+  await withServer(async (sql) => {
+    if (sql.includes('SELECT s.usuario_id')) return '27';
+    if (sql.includes('SELECT zona_horaria FROM preferencias_usuario')) return 'America/New_York';
+    if (sql.includes('WITH daily AS')) {
+      summarySql = sql;
+      return [{ quality: { macroSources: {} } }, {}, {}, {}].map(JSON.stringify).join('\n');
+    }
+    throw new Error('unexpected_query');
+  }, async (base) => {
+    const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
+    const response = await fetch(`${base}/api/progress/nutrition?dias=7&hasta=2026-11-03`, { headers: { Cookie: cookie } });
+    assert.equal(response.status, 200);
+    await response.json();
+  });
+  const sqlText = (value) => `CONVERT(0x${Buffer.from(value).toString('hex')} USING utf8mb4)`;
+  assert.ok(summarySql.includes(`creado_en>=${sqlText('2026-10-28 04:00:00')} AND creado_en<${sqlText('2026-11-04 05:00:00')}`));
+  assert.ok(summarySql.includes(`creado_en>=${sqlText('2026-10-21 04:00:00')} AND creado_en<${sqlText('2026-10-28 04:00:00')}`));
+});
+
+test('progress endpoints revalidate sessions immediately after revocation and reject database failures', async () => {
+  const id = '123e4567-e89b-42d3-a456-426614174000';
+  const cookie = `nutri_session=${signJwt('27', id, 'test-jwt-secret-must-be-at-least-32-bytes')}`;
+  for (const route of [`/api/food-entries/progress?requestId=${id}`, `/api/training-progress?progressId=${id}`]) {
+    let sessionActive = true;
+    let databaseUnavailable = false;
+    let authReads = 0;
+    await withServer(async (sql) => {
+      assert.match(sql, /s\.revoked_at IS NULL.*s\.expires_at > UTC_TIMESTAMP\(\).*u\.activo=1/);
+      authReads += 1;
+      if (databaseUnavailable) throw new Error('database_unavailable');
+      return sessionActive ? '27' : '';
+    }, async (base) => {
+      const getProgress = () => fetch(base + route, { headers: { Cookie: cookie } });
+      const active = await getProgress();
+      assert.equal(active.status, 200);
+      await active.json();
+      sessionActive = false;
+      const revoked = await getProgress();
+      assert.equal(revoked.status, 401);
+      await revoked.json();
+      databaseUnavailable = true;
+      const unavailable = await getProgress();
+      assert.equal(unavailable.status, 503);
+      await unavailable.json();
+      assert.equal(authReads, 3);
+    });
+  }
 });
 
 test('biometric range query validates dates and reads only the selected period', async () => {
@@ -248,7 +335,7 @@ test.skip('retired macro-resolution flow: food macro resolution uses the MySQL l
   const result = await resolveFoodMacros({
     items: [{ sourceText: 'Arroz 150 g cocido', name: 'Arroz cocido', quantityText: '150 g', quantityGrams: 150, preparation: 'cocido', macros: null }],
     sessionId: 'ses_private_food', textSql: (value) => `CONVERT(0x${Buffer.from(value).toString('hex')} USING utf8mb4)`,
-    dbQuery: async () => JSON.stringify({ id: 8, fdcId: 991, sourceName: 'Rice, cooked', energyKcal: 130, proteinG: 2.7, carbohydrateG: 28.2, fatG: 0.3, fiberG: 0.4 }),
+    dbQuery: async () => JSON.stringify({ id: 8, fdcId: 991, sourceName: 'Rice, cooked', energyKcal: 130, proteinG: 2.7, carbohydrateG: 28.2, fatG: 0.3 }),
     requestOpenCode: async () => { throw new Error('cache hit must not require candidate selection'); },
     apiKey: 'test-only', fetchImpl: async () => { usdaCalls += 1; throw new Error('cache hit must not query USDA'); },
   });
@@ -298,8 +385,8 @@ test.skip('retired macro-resolution flow: USDA miss falls back to OpenCode webfe
       assert.ok(body.system.includes('webfetch'));
       const fallback = {
         found: true, sourceUrl: 'https://nutrition.example/tofu', sourceName: 'Nutrition reference',
-        sourceQuote: 'Per 100 g: Calories 144, protein 17.3 g, carbohydrates 2.8 g, fat 8.7 g, fiber 2.3 g.',
-        macros: { energyKcal: 144, proteinG: 17.3, carbohydrateG: 2.8, fatG: 8.7, fiberG: 2.3 },
+        sourceQuote: 'Per 100 g: Calories 144, protein 17.3 g, carbohydrates 2.8 g, fat 8.7 g.',
+        macros: { energyKcal: 144, proteinG: 17.3, carbohydrateG: 2.8, fatG: 8.7 },
       };
       return { status: 200, data: { parts: [structuredOutputPart(fallback)] } };
     },
@@ -315,8 +402,8 @@ test.skip('retired macro-resolution flow: food save parses first, checks USDA, t
   const order = [];
   const foodSource = {
     found: true, sourceUrl: 'https://nutrition.example/tofu', sourceName: 'Nutrition reference',
-    sourceQuote: 'Per 100 g: Calories 144, protein 17.3 g, carbohydrates 2.8 g, fat 8.7 g, fiber 2.3 g.',
-    macros: { energyKcal: 144, proteinG: 17.3, carbohydrateG: 2.8, fatG: 8.7, fiberG: 2.3 },
+    sourceQuote: 'Per 100 g: Calories 144, protein 17.3 g, carbohydrates 2.8 g, fat 8.7 g.',
+    macros: { energyKcal: 144, proteinG: 17.3, carbohydrateG: 2.8, fatG: 8.7 },
   };
   let savedSql = '';
   let outcome;
@@ -371,7 +458,7 @@ test.skip('retired macro-resolution flow: webfetch fallback rejects macros witho
     dbQuery: async () => '',
     requestOpenCode: async () => ({ status: 200, data: { parts: [structuredOutputPart({
       found: true, sourceUrl: 'https://nutrition.example/tofu', sourceName: 'Nutrition reference', sourceQuote: 'Per serving: protein 17 g, carbohydrates 3 g, fat 9 g.',
-      macros: { energyKcal: 144, proteinG: 17, carbohydrateG: 3, fatG: 9, fiberG: 2 },
+      macros: { energyKcal: 144, proteinG: 17, carbohydrateG: 3, fatG: 9 },
     })] } }),
     apiKey: 'test-only', fetchImpl: async () => ({ ok: true, json: async () => ({ foods: [] }) }),
   });
@@ -400,7 +487,7 @@ test.skip('retired macro-resolution flow: food parser accepts reordered grounded
   assert.deepEqual(reordered.items.map(({ quantityGrams }) => quantityGrams), [150, 100]);
   const mismatched = validateParsedItems({ items: [{
     sourceText: 'Avena: proteína 8 g, carbohidratos 40 g, grasa 4 g', name: 'Avena', macroBasis: 'per_portion', quantityText: null,
-    macros: { energyKcal: null, proteinG: 18, carbohydrateG: 40, fatG: 4, fiberG: null },
+    macros: { energyKcal: null, proteinG: 18, carbohydrateG: 40, fatG: 4 },
   }] }, 'Avena: proteína 8 g, carbohidratos 40 g, grasa 4 g');
   assert.match(mismatched.question, /Confirma los macros/);
 });
@@ -503,7 +590,7 @@ test.skip('retired clarification flow: same-description save reprocesses an item
       if (sql.includes('FROM registros_comida_interacciones')) return JSON.stringify(history);
       if (sql.includes("UPDATE registros_comidas SET estado='pendiente',pregunta_pendiente=NULL")) { state = 'pendiente'; return ''; }
       if (sql.includes('SELECT session_id FROM sesiones_comidas_opencode')) return 'ses_legacy_food';
-      if (sql.includes('SELECT JSON_OBJECT(\'id\',f.id')) return JSON.stringify({ id: 5, fdcId: 111, sourceName: 'Beans, black, cooked', energyKcal: 132, energyMethod: 'usda', proteinG: 8.9, carbohydrateG: 23.7, fatG: 0.5, fiberG: 8.7 });
+      if (sql.includes('SELECT JSON_OBJECT(\'id\',f.id')) return JSON.stringify({ id: 5, fdcId: 111, sourceName: 'Beans, black, cooked', energyKcal: 132, energyMethod: 'usda', proteinG: 8.9, carbohydrateG: 23.7, fatG: 0.5 });
       return '';
     },
     requestOpenCode: async (method, route, body) => {
@@ -810,7 +897,7 @@ test.skip('retired clarification flow: editing the same food description resolve
   const queries = [];
   const original = 'Pollo';
   const corrected = 'Pollo cocido 150 g: 248 kcal, proteína 46 g, carbohidratos 0 g, grasa 5.4 g';
-  const parsed = { items: [{ sourceText: corrected, name: 'Pollo cocido', quantityText: '150 g', preparation: 'cocido', macroBasis: 'per_portion', macros: { energyKcal: 248, proteinG: 46, carbohydrateG: 0, fatG: 5.4, fiberG: null } }], clarificationQuestion: null };
+  const parsed = { items: [{ sourceText: corrected, name: 'Pollo cocido', quantityText: '150 g', preparation: 'cocido', macroBasis: 'per_portion', macros: { energyKcal: 248, proteinG: 46, carbohydrateG: 0, fatG: 5.4 } }], clarificationQuestion: null };
   let estado = 'requiere_aclaracion';
   let history = [{ role: 'assistant', content: '¿Cuántos gramos de pollo consumiste?' }];
   let itemInsert = '';

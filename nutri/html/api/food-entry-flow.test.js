@@ -1,7 +1,51 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { applyExplicitQuantities, applyFoodMacroReferences, foodItemIssues, normalizeFoodReply, parseFoodReferenceTime, parseFoodReply, pendingFoodItemSql, readFoodEntries, saveFoodEntry } = require('./food-entries.js');
-const { deleteFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, openCodeRequest } = require('./opencode-food.js');
+const { performance } = require('node:perf_hooks');
+const { applyFoodMacroReferences, foodItemIssues, normalizeFoodReply, parseFoodReferenceTime, parseFoodReply, pendingFoodItemSql, readFoodEntries, saveFoodEntry } = require('./food-entries.js');
+const { deleteFoodOpenCodeSession, findOpenFoodFactsProduct, findUsdaFood, openCodeRequest, requestFoodDescription, withFoodOperationLock, withFoodSessionLock } = require('./opencode-food.js');
+
+const sausageEggDescription = '30g salchicha d recreo kit, 100g tortillas d maíz 5 tortillas, 235g huevo revuelto cocido menos el peso de la salchicha 6 claras 2 yemas';
+
+function insertedFoodRows(sql) {
+  // Solo INSERT del servidor con texto hexadecimal y escalares; no es un intérprete SQL.
+  return [...sql.matchAll(/INSERT INTO registros_comida_items\(([^)]+)\) VALUES \(([^;]+)\)/g)].map((match) => {
+    const columns = match[1].split(',');
+    const values = match[2].split(',');
+    assert.equal(values.length, columns.length);
+    return Object.fromEntries(columns.map((column, i) => {
+      const value = values[i];
+      const hex = value.match(/^CONVERT\(0x([a-f\d]*) USING utf8mb4\)$/i);
+      if (hex) return [column, Buffer.from(hex[1], 'hex').toString()];
+      if (/^null$/i.test(value)) return [column, null];
+      if (/^'[^']*'$/.test(value)) return [column, value.slice(1, -1)];
+      assert.ok(value.trim() && Number.isFinite(Number(value)), `Escalar SQL inesperado en ${column}`);
+      return [column, Number(value)];
+    }));
+  });
+}
+
+test('el registro completo espera las operaciones de su cuenta sin bloquear otras cuentas ni el bloqueo interno de sesión', async () => {
+  const events = [];
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const first = withFoodOperationLock('999993', async () => {
+    events.push('first');
+    await gate;
+    await withFoodSessionLock('999993', async () => { events.push('session'); });
+  });
+  const second = saveFoodEntry({ userId: '999993', data: {}, response: {}, json: () => { events.push('second'); } });
+  try {
+    await withFoodOperationLock('999994', async () => { events.push('other'); });
+    assert.deepEqual(events, ['first', 'other']);
+  } finally {
+    release();
+    await Promise.all([first, second]);
+  }
+  assert.deepEqual(events, ['first', 'other', 'session', 'second']);
+  await assert.rejects(withFoodOperationLock('999993', async () => { throw new Error('expected'); }), /expected/);
+  await withFoodOperationLock('999993', async () => { events.push('recovered'); });
+  assert.equal(events.at(-1), 'recovered');
+});
 
 test('la lectura diaria de comidas no trunca registros después de 100', async () => {
   let query = '';
@@ -13,7 +57,7 @@ test('rechaza energía 4-4-9 que excede DECIMAL(10,2) aunque cada macro quepa', 
   const item = {
     name: 'Alimento', sourceText: 'Alimento', quantityGrams: null, quantityText: null,
     macroBasis: 'per_portion', macroStatus: 'declarado', macroSource: 'declarado_usuario',
-    macros: { energyKcal: 1, proteinG: 30000000, carbohydrateG: 30000000, fatG: 30000000, fiberG: 0 },
+    macros: { energyKcal: 1, proteinG: 30000000, carbohydrateG: 30000000, fatG: 30000000 },
   };
 
   assert.ok(foodItemIssues(item).includes('stored_macro_bounds'));
@@ -23,10 +67,10 @@ test('redondea valores al guardar según la precisión decimal de MySQL', () => 
   const sql = pendingFoodItemSql(1, {
     sourceText: 'Alimento', name: 'Alimento', quantityText: '10.1239 g', quantityGrams: 10.1239,
     macroBasis: 'per_portion', macroStatus: 'declarado', macroSource: 'declarado_usuario',
-    macros: { energyKcal: 1.235, proteinG: 1.235, carbohydrateG: 0.116, fatG: 0.05, fiberG: 0.014 },
+    macros: { energyKcal: 1.235, proteinG: 1.235, carbohydrateG: 0.116, fatG: 0.05 },
   }, (value) => value == null ? 'NULL' : `'${String(value)}'`);
 
-  assert.match(sql, /,10\.124,'declarado_usuario','declarado_usuario','per_portion','declarado',1\.24,5\.89,1\.24,0\.12,0\.05,0\.01\)$/);
+  assert.match(sql, /,10\.124,'declarado_usuario','declarado_usuario','per_portion','declarado',1\.24,5\.89,1\.24,0\.12,0\.05\)$/);
 });
 
 test('cancela la confirmación de fecha sin consultar comidas ni abrir OpenCode', async () => {
@@ -36,7 +80,7 @@ test('cancela la confirmación de fecha sin consultar comidas ni abrir OpenCode'
     statements.push(sql);
     if (sql.includes("SELECT 'timezone';")) return 'timezone\nUTC\ndraftDate\nprior';
     if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return `501\n${JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-29', description: 'Avena', question, targetEntryId: null })}`;
-    if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)')) return '';
+    if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)') && !sql.includes("SELECT 'records';")) return '';
     return '';
   };
   let openCodeCalls = 0;
@@ -56,8 +100,8 @@ test('cancela la confirmación de fecha sin consultar comidas ni abrir OpenCode'
 test('registra leche y whey con cantidades del mensaje tras respuesta inválida inicial', async () => {
   const description = '250 ml de leche Alpura Pro baja en grasa deslactosada y 31 g de proteína Gold Standard Whey chocolate el 2026-10-22';
   const savedItems = [
-    { itemId: '1', name: 'Leche Alpura Pro baja en grasa deslactosada', quantity: '250 ml', quantityGrams: null, basis: 'per_portion', energyKcal: 111, proteinG: 9, carbohydrateG: 12, fatG: 3, fiberG: null, macroStatus: 'estimado', macroSource: 'opencode_estimado' },
-    { itemId: '2', name: 'Gold Standard Whey chocolate', quantity: '31 g', quantityGrams: 31, basis: 'per_portion', energyKcal: 117, proteinG: 24, carbohydrateG: 3, fatG: 1, fiberG: 0, macroStatus: 'estimado', macroSource: 'opencode_estimado' },
+    { itemId: '1', name: 'Leche Alpura Pro baja en grasa deslactosada', quantity: '250 ml', quantityGrams: null, basis: 'per_portion', energyKcal: 111, proteinG: 9, carbohydrateG: 12, fatG: 3, macroStatus: 'estimado', macroSource: 'opencode_estimado' },
+    { itemId: '2', name: 'Gold Standard Whey chocolate', quantity: '31 g', quantityGrams: 31, basis: 'per_portion', energyKcal: 117, proteinG: 24, carbohydrateG: 3, fatG: 1, macroStatus: 'estimado', macroSource: 'opencode_estimado' },
   ];
   const statements = [];
   let committed = false;
@@ -66,10 +110,10 @@ test('registra leche y whey con cantidades del mensaje tras respuesta inválida 
     if (sql.includes("SELECT 'timezone';")) return 'timezone\nUTC\ndraftDate\nprior';
     if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return `501\n${JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-22', description, question: null, targetEntryId: null })}`;
     if (sql.includes('SELECT session_id FROM sesiones_comidas_opencode')) return '';
-    if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)')) return '';
+    if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)') && !sql.includes("SELECT 'records';")) return '';
     if (sql.includes("SELECT 'records';")) return committed ? [
       'records', JSON.stringify({ id: '501', fecha: '2026-10-22', createdAt: '2026-10-22T12:00:00Z', state: 'completado', description }),
-      'items', ...savedItems.map((item) => JSON.stringify({ entryId: '501', ...item })), 'clarifications',
+      'items', ...savedItems.map((item) => JSON.stringify({ entryId: '501', ...item })), 'clarifications', 'messages',
     ].join('\n') : 'records\nitems\nclarifications';
     if (sql.includes('COMMIT')) { committed = true; return ''; }
     return '';
@@ -79,8 +123,8 @@ test('registra leche y whey con cantidades del mensaje tras respuesta inválida 
     [{ type: 'text', text: JSON.stringify({
       action: 'new', targetEntryId: null, clarificationQuestion: null,
       items: [
-        { sourceText: 'Leche Alpura Pro baja en grasa deslactosada', name: 'Leche Alpura Pro baja en grasa deslactosada', quantityGrams: null, quantityText: null, macroBasis: 'per_portion', macroStatus: 'estimado', macroSource: 'opencode_estimado', macros: { energyKcal: 111, proteinG: 9, carbohydrateG: 12, fatG: 3, fiberG: null } },
-        { sourceText: 'Gold Standard Whey chocolate', name: 'Gold Standard Whey chocolate', quantityGrams: null, quantityText: null, macroBasis: 'per_portion', macroStatus: 'estimado', macroSource: 'opencode_estimado', macros: { energyKcal: 117, proteinG: 24, carbohydrateG: 3, fatG: 1, fiberG: 0 } },
+        { sourceText: 'Leche Alpura Pro baja en grasa deslactosada', name: 'Leche Alpura Pro baja en grasa deslactosada', quantityGrams: null, quantityText: null, macroBasis: 'per_portion', macroStatus: 'estimado', macroSource: 'opencode_estimado', macros: { energyKcal: 111, proteinG: 9, carbohydrateG: 12, fatG: 3 } },
+        { sourceText: 'Gold Standard Whey chocolate', name: 'Gold Standard Whey chocolate', quantityGrams: null, quantityText: null, macroBasis: 'per_portion', macroStatus: 'estimado', macroSource: 'opencode_estimado', macros: { energyKcal: 117, proteinG: 24, carbohydrateG: 3, fatG: 1 } },
       ],
     }) }],
   ];
@@ -111,85 +155,200 @@ test('registra leche y whey con cantidades del mensaje tras respuesta inválida 
   const insert = statements.find((sql) => sql.includes('INSERT INTO registros_comida_items('));
   assert.match(insert, /'250 ml',null/i);
   assert.match(insert, /'31 g',31/i);
-  assert.match(insert, /111,111,9,12,3,null\)/i);
+  assert.match(insert, /111,111,9,12,3\)/i);
 });
 
-test('registra atún, sopa instantánea y mini wontons con un solo análisis y cantidades exactas', async () => {
-  const description = '100 g atún Tunny en agua con aceite (1 lata), Maruchan Instant Lunch de res de 90 g, 44 g mini wontons';
+test('orquesta el registro simulado de salchicha, tortillas y huevo y comprueba cantidades escritas en SQL', async () => {
+  const description = sausageEggDescription;
+  // Macros en cero: valores sintéticos para probar el flujo, no datos nutricionales.
   const itemSpecs = [
-    ['Atún Tunny en agua con aceite', '100 g', 100, 180, 24, 0, 9],
-    ['Maruchan Instant Lunch de res', '90 g', 90, 410, 9, 55, 16],
-    ['Mini wontons', '44 g', 44, 90, 4, 12, 3],
+    ['Salchicha Recreo Kit', '30 g', 30, 0, 0, 0, 0],
+    ['Tortillas de maíz', '100 g (5 tortillas)', 100, 0, 0, 0, 0],
+    ['Huevo revuelto cocido (6 claras, 2 yemas)', '205 g', 205, 0, 0, 0, 0],
   ];
-  const savedItems = itemSpecs.map(([name, quantity, quantityGrams, energyKcal, proteinG, carbohydrateG, fatG], index) => ({
-    itemId: String(index + 1), name, quantity, quantityGrams, basis: 'per_portion', energyKcal, proteinG, carbohydrateG, fatG, fiberG: null,
-    macroStatus: 'estimado', macroSource: 'opencode_estimado',
-  }));
+  let savedItems = [];
   const statements = [];
+  const measurements = { db: [], openCode: [] };
+  const elapsedMs = (startedAt) => Number((performance.now() - startedAt).toFixed(2));
   let committed = false;
   const dbQuery = async (sql) => {
-    statements.push(sql);
-    if (sql.includes("SELECT 'timezone';")) return 'timezone\nUTC\ndraftDate\nprior';
-    if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return `550\n${JSON.stringify({ state: 'borrador_chat', fecha: '2026-11-04', description, question: null, targetEntryId: null })}`;
-    if (sql.includes('SELECT session_id FROM sesiones_comidas_opencode')) return '';
-    if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)')) return '';
-    if (sql.includes("SELECT 'records';")) return committed ? [
-      'records', JSON.stringify({ id: '550', fecha: '2026-11-04', createdAt: '2026-11-04T12:00:00Z', state: 'completado', description }),
-      'items', ...savedItems.map((item) => JSON.stringify({ entryId: '550', ...item })), 'clarifications',
-    ].join('\n') : 'records\nitems\nclarifications';
-    if (sql.includes('COMMIT')) { committed = true; return ''; }
-    return '';
+    const startedAt = performance.now();
+    const category = sql.includes("SELECT 'timezone';") ? 'initial' : sql.includes("SELECT 'records';") ? 'readback'
+      : sql.includes('INSERT INTO registros_comidas(usuario_id') ? 'draft_write' : sql.includes('COMMIT') ? 'commit' : 'other';
+    try {
+      statements.push(sql);
+      if (sql.includes("SELECT 'timezone';")) return 'timezone\nUTC\ndraftDate\nprior';
+      if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return `550\n${JSON.stringify({ state: 'borrador_chat', fecha: '2026-11-04', description, question: null, targetEntryId: null })}`;
+      if (sql.includes('SELECT session_id FROM sesiones_comidas_opencode')) return '';
+      if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)') && !sql.includes("SELECT 'records';")) return '';
+      if (sql.includes("SELECT 'records';")) return committed ? [
+        'records', JSON.stringify({ id: '550', fecha: '2026-11-04', createdAt: '2026-11-04T12:00:00Z', state: 'completado', description }),
+        'items', ...savedItems.map((item) => JSON.stringify({ entryId: '550', ...item })), 'clarifications', 'messages',
+      ].join('\n') : 'records\nitems\nclarifications';
+      if (sql.includes('COMMIT')) {
+        savedItems = insertedFoodRows(sql).map((row, index) => {
+          return { itemId: String(index + 1), name: row.nombre_alimento, quantity: row.cantidad_texto,
+            quantityGrams: row.cantidad_g, basis: row.base_macros, energyKcal: row.energia_kcal,
+            proteinG: row.proteina_g, carbohydrateG: row.carbohidratos_g, fatG: row.grasa_g,
+            macroStatus: row.estado_macros, macroSource: row.fuente_macros };
+        });
+        committed = true;
+        return '';
+      }
+      return '';
+    } finally {
+      measurements.db.push({ category, durationMs: elapsedMs(startedAt) });
+    }
   };
   let analysisCalls = 0;
   const requestOpenCode = async (method, path, body) => {
-    if (method === 'POST' && path === '/session') return { status: 200, data: { id: 'ses_foodQuickEntryTest' } };
-    if (method === 'POST' && path.endsWith('/message')) {
-      analysisCalls += 1;
-      const context = JSON.parse(body.parts[0].text);
-      assert.equal(context.foodIdentificationFirstPass, undefined);
-      assert.equal(context.genericEstimateApproved, true);
-      assert.equal(body.tools.websearch, undefined);
-      return { status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({
-        action: 'new', targetEntryId: null, clarificationQuestion: null,
-        items: itemSpecs.map(([name, quantity, quantityGrams, energyKcal, proteinG, carbohydrateG, fatG]) => ({
-          sourceText: name, name, quantityText: quantity, quantityGrams, macroBasis: 'per_portion', macroStatus: 'estimado', macroSource: 'opencode_estimado',
-          sourceName: null, sourceUrl: null, sourceQuote: null,
-          macros: { energyKcal, proteinG, carbohydrateG, fatG, fiberG: null },
-        })),
-      }) }] } };
+    const startedAt = performance.now();
+    try {
+      if (method === 'POST' && path === '/session') return { status: 200, data: { id: 'ses_foodQuickEntryTest' } };
+      if (method === 'POST' && path.endsWith('/message')) {
+        analysisCalls += 1;
+        const context = JSON.parse(body.parts[0].text);
+        assert.equal(context.description, sausageEggDescription);
+        assert.equal(context.foodIdentificationFirstPass, undefined);
+        assert.equal(context.genericEstimateApproved, true);
+        assert.equal(body.tools.websearch, undefined);
+        return { status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({
+          action: 'new', targetEntryId: null, clarificationQuestion: null,
+          items: itemSpecs.map(([name, quantity, quantityGrams, energyKcal, proteinG, carbohydrateG, fatG]) => ({
+            sourceText: name, name, quantityText: quantity, quantityGrams, macroBasis: 'per_portion', macroStatus: 'estimado', macroSource: 'opencode_estimado',
+            sourceName: null, sourceUrl: null, sourceQuote: null,
+            macros: { energyKcal, proteinG, carbohydrateG, fatG },
+          })),
+        }) }] } };
+      }
+      if (method === 'DELETE') return { status: 204, data: {} };
+      throw new Error(`Unexpected OpenCode request: ${method} ${path}`);
+    } finally {
+      measurements.openCode.push({ method, path, durationMs: elapsedMs(startedAt) });
     }
-    if (method === 'DELETE') return { status: 204, data: {} };
-    throw new Error(`Unexpected OpenCode request: ${method} ${path}`);
   };
+  const flowStartedAt = performance.now();
   const responseBody = await new Promise((resolve) => saveFoodEntry({
     response: {}, data: { fecha: '2026-11-04', descripcion: description, requestId: '8e4d53e9-4268-4b45-8b12-1b510e8db230', timezone: 'UTC' },
-    userId: 999991, dbQuery, textSql: (value) => value == null ? 'NULL' : `'${String(value).replace(/'/g, "''")}'`, json: (_response, _status, body) => resolve(body), now: () => new Date('2026-11-04T12:00:00Z'),
+    userId: 999991, dbQuery, textSql: (value) => value == null ? 'NULL' : `CONVERT(0x${Buffer.from(String(value)).toString('hex')} USING utf8mb4)`, json: (_response, _status, body) => resolve(body), now: () => new Date('2026-11-04T12:00:00Z'),
     requestOpenCode,
   }));
 
   assert.equal(responseBody.state, 'completado');
   assert.equal(analysisCalls, 1);
   assert.equal(responseBody.records[0].items.length, 3);
-  assert.deepEqual(responseBody.records[0].items.map(({ quantity, quantityGrams }) => [quantity, quantityGrams]), [['100 g', 100], ['90 g', 90], ['44 g', 44]]);
+  assert.deepEqual(responseBody.records[0].items.map(({ name, quantityGrams }) => [name, quantityGrams]), [
+    ['Salchicha Recreo Kit', 30], ['Tortillas de maíz', 100], ['Huevo revuelto cocido (6 claras, 2 yemas)', 205],
+  ]);
   assert.ok(statements.some((sql) => sql.includes('INSERT INTO registros_comida_items(')));
+  assert.deepEqual(Object.keys(responseBody.records[0].items[0]).filter((key) => /Kcal$|G$/.test(key)).sort(), ['carbohydrateG', 'energyKcal', 'fatG', 'proteinG']);
+  assert.ok(statements.every((sql) => !sql.includes('analisis_progreso_eventos')), 'El progreso de comidas debe permanecer en memoria, sin escrituras MySQL');
+  assert.ok(measurements.db.some(({ category }) => category === 'commit'));
+  assert.ok(measurements.db.some(({ category }) => category === 'readback'));
+  console.log(JSON.stringify({
+    measurement: 'food-entry-mocked-flow', totalMs: elapsedMs(flowStartedAt),
+    db: { calls: measurements.db.length, totalMs: Number(measurements.db.reduce((total, call) => total + call.durationMs, 0).toFixed(2)), callsByStage: measurements.db },
+    openCode: { calls: measurements.openCode.length, prompts: analysisCalls, totalMs: Number(measurements.openCode.reduce((total, call) => total + call.durationMs, 0).toFixed(2)), callsByOperation: measurements.openCode },
+    note: 'DB/OpenCode simulados; las duraciones no representan latencia de producción.',
+  }));
+});
+
+test('reutiliza varios alimentos exactos antes del modelo y agrupa totales y lectura posterior', async () => {
+  const description = 'Pollo 200 g; Arroz 100 g';
+  const statements = [];
+  const known = [
+    { name: 'Pollo', grams: 100, energyKcal: 160, proteinG: 20, carbohydrateG: 20, fatG: 0 },
+    { name: 'Arroz', grams: 100, energyKcal: 130, proteinG: 2, carbohydrateG: 26, fatG: 2 },
+  ].map((food) => ({ ...food, macroStatus: 'declarado', macroSource: 'declarado_usuario' }));
+  let savedItems = [];
+  let completed = false;
+  let modelCalls = 0;
+  let result;
+  await saveFoodEntry({
+    userId: '999995', response: {},
+    data: { descripcion: description, fecha: '2026-11-10', timezone: 'UTC', requestId: '123e4567-e89b-42d3-a456-426614174005' },
+    now: () => new Date('2026-11-10T12:00:00Z'),
+    textSql: (value) => value == null ? 'NULL' : `CONVERT(0x${Buffer.from(String(value)).toString('hex')} USING utf8mb4)`,
+    json: (_response, status, body) => { result = { status, ...body }; },
+    requestOpenCode: async () => { modelCalls += 1; throw new Error('No debe llamarse al modelo para coincidencias completas'); },
+    dbQuery: async (sql) => {
+      statements.push(sql);
+      if (sql.includes("SELECT 'timezone';")) return 'timezone\nUTC\ndraftDate\nprior';
+      if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return `555\n${JSON.stringify({ state: 'borrador_chat', fecha: '2026-11-10', description, question: null, targetEntryId: null })}`;
+      if (sql.includes("JSON_OBJECT('name',i.nombre_alimento,'grams'")) return known.map((food) => JSON.stringify(food)).join('\n');
+      if (sql.includes("SELECT 'records';")) {
+        assert.ok(completed, 'El atajo no necesita consultar las comidas del día antes de guardar');
+        return ['records', JSON.stringify({ id: '555', state: 'completado', fecha: '2026-11-10' }),
+          'items', ...savedItems.map((item) => JSON.stringify(item)), 'clarifications', 'messages',
+          JSON.stringify({ role: 'assistant', content: 'Guardado' })].join('\n');
+      }
+      if (sql.includes('COMMIT')) {
+        completed = true;
+        savedItems = insertedFoodRows(sql).map((row, i) => ({ entryId: '555', itemId: String(i + 1), name: row.nombre_alimento,
+          quantityGrams: row.cantidad_g, energyKcal: row.energia_kcal, proteinG: row.proteina_g,
+          carbohydrateG: row.carbohidratos_g, fatG: row.grasa_g }));
+      }
+      return '';
+    },
+  });
+  assert.equal(result.status, 200);
+  assert.equal(result.state, 'completado');
+  assert.equal(modelCalls, 0);
+  assert.deepEqual(result.records[0].items.map(({ quantityGrams, energyKcal }) => [quantityGrams, energyKcal]), [[200, 320], [100, 130]]);
+  assert.deepEqual(result.messages, [{ role: 'assistant', content: 'Guardado' }]);
+  assert.equal(statements.filter((sql) => sql.includes("SELECT 'records';")).length, 1);
+  const commit = statements.find((sql) => sql.includes('COMMIT'));
+  assert.match(commit, /INTO @food_energia_kcal,@food_energia_449_kcal,@food_proteina_g,@food_carbohidratos_g,@food_grasa_g FROM registros_comida_items/);
+  assert.equal((commit.match(/FROM registros_comida_items WHERE registro_comida_id=555/g) || []).length, 2, 'Un borrado y una lectura agregada de los alimentos');
+});
+
+test('analiza salchicha, tortillas y huevo con OpenCode real sin guardar comidas', {
+  skip: process.env.NUTRI_TEST_REAL_EGG_ANALYSIS !== '1', timeout: 660000,
+}, async () => {
+  const created = await openCodeRequest('POST', '/session', {
+    title: 'Diagnóstico de análisis de comida, sin registro',
+    permission: [{ permission: '*', pattern: '*', action: 'deny' }],
+    metadata: { diagnosticOnly: true },
+  });
+  assert.ok(created.status >= 200 && created.status < 300);
+  const sessionId = created.data?.id;
+  assert.match(sessionId || '', /^ses_[A-Za-z0-9_-]{4,120}$/);
+  const startedAt = performance.now();
+  try {
+    const parts = await requestFoodDescription({ sessionId, description: sausageEggDescription, genericEstimateApproved: true });
+    const reply = parseFoodReply(parts);
+    console.log(JSON.stringify({ measurement: 'food-analysis-real-opencode', description: sausageEggDescription,
+      durationMs: Number((performance.now() - startedAt).toFixed(2)), response: reply,
+      note: 'Análisis real; sin conexión MySQL ni guardado de comida. Macros no verificados independientemente.' }));
+    const items = normalizeFoodReply(reply).items;
+    const egg = items.find((item) => /huevo/i.test(item.name));
+    assert.ok(egg, 'La respuesta debe identificar el huevo; revisar la respuesta real si pidió aclaración');
+    assert.equal(egg.quantityGrams, 235 - 30, 'El modelo debe restar la salchicha sin recibir el resultado en el mensaje');
+    assert.equal(items.find((item) => /salchicha/i.test(item.name))?.quantityGrams, 30);
+    assert.equal(items.find((item) => /tortilla/i.test(item.name))?.quantityGrams, 100);
+    if (!reply.clarificationQuestion) for (const item of items) assert.deepEqual(foodItemIssues(item), []);
+  } finally {
+    const deleted = await openCodeRequest('DELETE', `/session/${encodeURIComponent(sessionId)}`);
+    assert.ok((deleted.status >= 200 && deleted.status < 300) || deleted.status === 404, 'No se pudo limpiar la sesión de diagnóstico');
+  }
 });
 
 test('guarda el formato completo declarado sin crear ni consultar una sesión OpenCode', async () => {
-  const description = 'Yogur natural | cantidad consumida: 150 g | 135 kcal; 15 g proteína; 9 g carbohidratos; 4 g grasa; 0 g fibra';
+  const description = 'Yogur natural | cantidad consumida: 150 g | 135 kcal; 15 g proteína; 9 g carbohidratos; 4 g grasa';
   const statements = [];
   let committed = false;
   const dbQuery = async (sql) => {
     statements.push(sql);
     if (sql.includes("SELECT 'timezone';")) return 'timezone\nUTC\ndraftDate\nprior';
     if (sql.includes('INSERT INTO registros_comidas(usuario_id')) return `502\n${JSON.stringify({ state: 'borrador_chat', fecha: '2026-10-22', description, question: null, targetEntryId: null })}`;
-    if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)')) return '';
+    if (sql.includes('SELECT JSON_OBJECT(\'role\',role,\'content\',contenido)') && !sql.includes("SELECT 'records';")) return '';
     if (sql.includes("SELECT 'records';")) return committed ? [
       'records', JSON.stringify({ id: '502', fecha: '2026-10-22', createdAt: '2026-10-22T12:00:00Z', state: 'completado', description }),
       'items', JSON.stringify({
       entryId: '502', itemId: '900', sourceText: '150 g de Yogur natural', name: 'Yogur natural', quantity: '150 g', quantityGrams: 150,
-      basis: 'per_portion', energyKcal: 135, proteinG: 15, carbohydrateG: 9, fatG: 4, fiberG: 0,
+      basis: 'per_portion', energyKcal: 135, proteinG: 15, carbohydrateG: 9, fatG: 4,
       macroStatus: 'declarado', macroSource: 'declarado_usuario', sourceName: null, sourceUrl: null, sourceQuote: null,
-      }), 'clarifications',
+       }), 'clarifications', 'messages',
     ].join('\n') : 'records\nitems\nclarifications';
     if (sql.includes('COMMIT')) { committed = true; return ''; }
     return '';
@@ -206,9 +365,9 @@ test('guarda el formato completo declarado sin crear ni consultar una sesión Op
 
 test('reutiliza macros del alimento referenciado y los escala a la cantidad nueva', () => {
   const item = { name: 'Pollo asado', quantityGrams: 60, quantityText: '60 g', macroBasis: 'per_portion', macros: {} };
-  const source = { itemId: '41', name: 'Pollo asado', quantityGrams: 100, energyKcal: 165, proteinG: 31, carbohydrateG: 0, fatG: 3.6, fiberG: null, macroStatus: 'declarado', macroSource: 'webfetch', sourceName: 'USDA', sourceUrl: 'https://fdc.nal.usda.gov/food/1', sourceQuote: 'Datos por porción.' };
+  const source = { itemId: '41', name: 'Pollo asado', quantityGrams: 100, energyKcal: 165, proteinG: 31, carbohydrateG: 0, fatG: 3.6, macroStatus: 'declarado', macroSource: 'webfetch', sourceName: 'USDA', sourceUrl: 'https://fdc.nal.usda.gov/food/1', sourceQuote: 'Datos por porción.' };
   const [reused] = applyFoodMacroReferences([item], [source]);
-  assert.deepEqual(reused.macros, { energyKcal: 99, proteinG: 18.6, carbohydrateG: 0, fatG: 2.16, fiberG: null });
+  assert.deepEqual(reused.macros, { energyKcal: 99, proteinG: 18.6, carbohydrateG: 0, fatG: 2.16 });
   assert.equal(reused.macroSource, 'webfetch');
   assert.equal(reused.sourceUrl, source.sourceUrl);
   assert.equal(reused.referenceMacrosReused, true);
@@ -228,7 +387,7 @@ test('usa Open Food Facts solo para producto exacto con macros por 100 g complet
       requested = { url, options };
       return { ok: true, json: async () => ({ hits: [{
         code: '12345678', product_name: 'Yogur Griego Natural', nutriments: {
-          'energy-kcal_100g': 89, proteins_100g: 9, carbohydrates_100g: 4, fat_100g: 3, fiber_100g: null,
+          'energy-kcal_100g': 89, proteins_100g: 9, carbohydrates_100g: 4, fat_100g: 3,
         },
       }] }) };
     },
@@ -240,7 +399,7 @@ test('usa Open Food Facts solo para producto exacto con macros por 100 g complet
   assert.equal(product.sourceName, 'Open Food Facts (dato colaborativo)');
   assert.equal(product.macroSource, 'openfoodfacts');
   assert.equal(product.macroBasis, 'per_100g');
-  assert.deepEqual(product.macros, { energyKcal: 89, proteinG: 9, carbohydrateG: 4, fatG: 3, fiberG: null });
+  assert.deepEqual(product.macros, { energyKcal: 89, proteinG: 9, carbohydrateG: 4, fatG: 3 });
   assert.equal(await findOpenFoodFactsProduct('Kefir Natural', {
     fetchImpl: async () => ({ ok: true, json: async () => ({ hits: [
       { code: '12345678', product_name: 'Kefir Natural', brands: 'Marca A', nutriments: { 'energy-kcal_100g': 89, proteins_100g: 9, carbohydrates_100g: 4, fat_100g: 3 } },
@@ -275,7 +434,7 @@ test('comparte una consulta Open Food Facts concurrente para el mismo alimento',
 test('usa USDA para una coincidencia genérica exacta y rechaza variantes ambiguas', async () => {
   const food = { fdcId: 123, description: 'Cooked rice', foodNutrients: [
     { nutrientId: 1008, value: 130 }, { nutrientId: 1003, value: 2.7 },
-    { nutrientId: 1005, value: 28 }, { nutrientId: 1004, value: 0.3 }, { nutrientId: 1079, value: 0.4 },
+    { nutrientId: 1005, value: 28 }, { nutrientId: 1004, value: 0.3 },
   ] };
   let requestedUrl;
   const found = await findUsdaFood('Cooked rice', {
@@ -289,7 +448,7 @@ test('usa USDA para una coincidencia genérica exacta y rechaza variantes ambigu
   assert.equal(found.sourceName, 'USDA FoodData Central');
   assert.equal(found.macroSource, 'usda_fdc');
   assert.equal(found.macroBasis, 'per_100g');
-  assert.deepEqual(found.macros, { energyKcal: 130, proteinG: 2.7, carbohydrateG: 28, fatG: 0.3, fiberG: 0.4 });
+  assert.deepEqual(found.macros, { energyKcal: 130, proteinG: 2.7, carbohydrateG: 28, fatG: 0.3 });
   assert.equal(await findUsdaFood('Cooked rice', {
     apiKey: 'test-only', fetchImpl: async () => ({ ok: true, json: async () => ({ foods: [food, { ...food, fdcId: 456, foodNutrients: food.foodNutrients.map((nutrient) => nutrient.nutrientId === 1008 ? { ...nutrient, value: 140 } : nutrient) }] }) }),
   }), null);
@@ -365,7 +524,7 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
         ? `Confirmo 250 ml de leche Alpura Pro y 31 g de proteína Optimum Nutrition Gold Standard 100% Whey (ON).`
         : `Son 100 g de ${packaged} y 100 g de ${generic}${index === 5 ? ' y 50 g de huevo cocido' : ''}.`;
       if (/(preparacion|coccion|crudo|cocido)/.test(question)) return `${generic} esta cocido; ${packaged} es un producto envasado.`;
-      if (/(etiqueta|macro|caloria|fibra|nutriente)/.test(question)) return milkWheyCase
+      if (/(etiqueta|macro|caloria|nutriente)/.test(question)) return milkWheyCase
         ? 'No tengo una foto ni datos de etiqueta, ni se indicó variante o sabor. Usa una fuente que coincida con el producto; si no hay una, estima y etiqueta los macros como estimados.'
         : `La etiqueta de ${packaged} es sintetica para esta prueba: ${energy} kcal, ${protein} g de proteina, ${carbohydrate} g de carbohidratos y ${fat} g de grasa por 100 g.`;
       if (/(marca|variante|producto|identifica|sabor)/.test(question)) return milkWheyCase
@@ -376,10 +535,16 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
         : `Es ${meal}: 100 g de ${packaged} con la etiqueta sintetica indicada y 100 g de ${generic} cocido${index === 5 ? ' y 50 g de huevo cocido' : ''}. No tengo otros datos; estima solo lo que sea razonable y marca la estimacion.`;
     };
     const interactions = [];
-    let draftExists = false, draftDate = '2026-10-22', question = null, completed = false, storedSession = '', currentSession = '', liveParts = [];
+    let draftExists = false, draftDate = '2026-10-22', question = null, completed = false, storedSession = '', currentSession = '';
+    let storedItems = [];
     const textSql = (value) => value == null ? 'NULL' : `CONVERT(0x${Buffer.from(String(value)).toString('hex')} USING utf8mb4)`;
     const dbQuery = async (sql) => {
-      for (const match of sql.matchAll(/INSERT INTO registros_comida_interacciones\(registro_comida_id,role,contenido\) VALUES \((\d+),CONVERT\(0x([a-f\d]*) USING utf8mb4\),CONVERT\(0x([a-f\d]*) USING utf8mb4\)\)/gi)) {
+      if (sql.includes("SELECT 'timezone';")) return ['timezone', 'UTC', 'draftDate', draftExists ? draftDate : '', 'prior'].join('\n');
+      if (sql.includes('INSERT INTO registros_comidas(usuario_id')) {
+        draftExists = true;
+        return `${entryId}\n${JSON.stringify({ state: completed ? 'completado' : 'borrador_chat', fecha: draftDate, description, question, targetEntryId: null })}`;
+      }
+      for (const match of sql.matchAll(/INSERT INTO registros_comida_interacciones\(registro_comida_id,role,contenido\) (?:VALUES \(|SELECT )(\d+),CONVERT\(0x([a-f\d]*) USING utf8mb4\),CONVERT\(0x([a-f\d]*) USING utf8mb4\)/gi)) {
         interactions.push({ role: Buffer.from(match[2], 'hex').toString(), content: Buffer.from(match[3], 'hex').toString() });
       }
       const pendingQuestion = sql.match(/pregunta_pendiente=CONVERT\(0x([a-f\d]+) USING utf8mb4\)/i);
@@ -387,10 +552,28 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
       const changedDate = sql.match(/UPDATE registros_comidas SET fecha_consumo=CONVERT\(0x([a-f\d]+) USING utf8mb4\)/i);
       if (changedDate) draftDate = Buffer.from(changedDate[1], 'hex').toString();
       if (/UPDATE registros_comidas SET estado='completado'/.test(sql)) { completed = true; question = null; }
+      if (sql.includes('DELETE FROM registros_comida_items')) storedItems = insertedFoodRows(sql);
+      const savedItems = storedItems.map((row, index) => ({
+        entryId, itemId: String(index + 1), sourceText: row.fragmento_original, name: row.nombre_alimento,
+        quantity: row.cantidad_texto, quantityGrams: row.cantidad_g, basis: row.base_macros,
+        energyKcal: row.energia_kcal, proteinG: row.proteina_g, carbohydrateG: row.carbohidratos_g,
+        fatG: row.grasa_g, macroStatus: row.estado_macros, macroSource: row.fuente_macros,
+        sourceName: row.nombre_fuente_web, sourceUrl: row.url_fuente_web, sourceQuote: row.cita_fuente,
+      }));
+      if (sql.includes("SELECT 'records';")) return [
+        'records', ...(completed ? [JSON.stringify({ id: entryId, fecha: draftDate, createdAt: `${draftDate}T12:00:00Z`, state: 'completado', description })] : []),
+        'items', ...(completed ? savedItems.map((item) => JSON.stringify(item)) : []), 'clarifications',
+        ...(sql.includes("SELECT 'messages';") ? ['messages', ...interactions.map((message) => JSON.stringify(message))] : []),
+      ].join('\n');
+      if (sql.includes("JSON_OBJECT('sourceText',i.fragmento_original")) return savedItems.map((item) => JSON.stringify({
+        sourceText: item.sourceText, name: item.name, quantityText: item.quantity, quantityGrams: item.quantityGrams,
+        macroBasis: item.basis, macroStatus: item.macroStatus, macroSource: item.macroSource,
+        sourceName: item.sourceName, sourceUrl: item.sourceUrl, sourceQuote: item.sourceQuote,
+        macros: { energyKcal: item.energyKcal, proteinG: item.proteinG, carbohydrateG: item.carbohydrateG, fatG: item.fatG },
+      })).join('\n');
       if (sql.includes('SELECT zona_horaria')) return 'UTC';
       if (sql.includes('SELECT DATE_FORMAT(fecha_consumo')) return draftExists ? draftDate : '';
       if (sql.includes("SELECT JSON_OBJECT('entryId',e.id")) return '';
-      if (sql.includes('INSERT INTO registros_comidas(usuario_id')) { draftExists = true; return entryId; }
       if (sql.includes("SELECT JSON_OBJECT('state',estado")) return JSON.stringify({ state: completed ? 'completado' : 'borrador_chat', fecha: draftDate, description, question, targetEntryId: null });
       if (sql.includes('SELECT session_id FROM sesiones_comidas_opencode')) return storedSession;
       if (sql.includes('INSERT INTO sesiones_comidas_opencode')) { storedSession = currentSession; return ''; }
@@ -401,22 +584,6 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
       }
       if (sql.includes("JSON_OBJECT('content',contenido)")) return interactions.filter(({ role }) => role === 'user').map(({ content }) => JSON.stringify({ content })).join('\n');
       if (sql.includes('COMMIT')) return '';
-      if (sql.includes("SET time_zone='+00:00'; SELECT JSON_OBJECT('id',e.id")) return completed
-        ? JSON.stringify({ id: entryId, fecha: draftDate, createdAt: `${draftDate}T12:00:00Z`, state: 'completado', description }) : '';
-      if (sql.includes("SELECT JSON_OBJECT('entryId',i.registro_comida_id")) {
-        if (!completed) return '';
-        const items = applyExplicitQuantities(normalizeFoodReply(parseFoodReply(liveParts)).items, description);
-        return items.map((item, itemIndex) => {
-          const factor = item.macroBasis === 'per_100g' ? item.quantityGrams / 100 : 1;
-          return JSON.stringify({ entryId, itemId: String(itemIndex + 1), sourceText: item.sourceText, name: item.name,
-            quantity: item.quantityText || `${item.quantityGrams} g`, quantityGrams: item.quantityGrams, basis: 'per_portion',
-            energyKcal: item.macros.energyKcal * factor, proteinG: item.macros.proteinG * factor,
-            carbohydrateG: item.macros.carbohydrateG * factor, fatG: item.macros.fatG * factor,
-            fiberG: item.macros.fiberG == null ? null : item.macros.fiberG * factor,
-            macroStatus: item.macroStatus, macroSource: item.macroSource,
-            sourceName: item.sourceName, sourceUrl: item.sourceUrl, sourceQuote: item.sourceQuote });
-        }).join('\n');
-      }
       return '';
     };
     const requestOpenCode = async (...args) => {
@@ -429,7 +596,6 @@ test('registra comidas con respuestas reales de OpenCode y MySQL simulado', { sk
         if (realMessageCalls >= messageLimit) throw new Error(`Se alcanzó el límite autorizado de ${messageLimit} mensajes reales a OpenCode.`);
         realMessageCalls += 1;
         const result = await openCodeRequest(...args);
-        liveParts = result.data?.parts || [];
         return result;
       }
       return openCodeRequest(...args);

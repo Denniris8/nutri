@@ -15,6 +15,7 @@
 | Necesidad | Punto de entrada |
 |---|---|
 | Servidor HTTP, autenticación, rutas API y archivos servidos | `html/server.js` |
+| Salud del proceso (`/healthz`) y disponibilidad MySQL (`/readyz`) | `html/server.js`; healthcheck en `docker-compose.yml`; pruebas en `html/server.test.js` |
 | Dashboard y estructura de pantallas | `html/dashboard_nutricional.html` |
 | Flujos de dashboard, formularios, chat de comidas/planes y eventos de UI | `html/onboarding-flow.js` |
 | Estilos principales del dashboard y componentes | `html/dashboard_nutricional.css` |
@@ -49,14 +50,18 @@
 
 `html/server.test.js` cubre integración de rutas y flujos HTTP. Los módulos con sufijo `.test.js` junto al código cubren lógica más acotada.
 
+`html/api/food-entry-flow.test.js` distingue la orquestación simulada de la prueba optativa de análisis real de salchicha/tortillas/huevo (`NUTRI_TEST_REAL_EGG_ANALYSIS=1`). Esta última envía el texto original, imprime la respuesta y usa una sesión temporal de diagnóstico sin cuenta ni escrituras MySQL; no prueba autenticación ni persistencia real. Requiere autorización antes de ejecutarla y consume una solicitud real al modelo configurado.
+
 ## Fuentes de comportamiento y persistencia
 
 - `comportamiento-sesion-comidas.md`: contrato e instrucciones del agente para comidas.
+- El contrato activo de comidas utiliza solo energía, proteína, carbohidratos y grasa. Retirada física de columnas obsoletas preparada en `mysql/migrations/0015_remove_unused_nutrient.sql`; revisar despliegue/recuperación en `esquema-bd.md` antes de aplicarla.
 - `comportamiento-sesion-entrenamientos.md`: contrato e instrucciones del análisis de entrenamientos.
 - `comportamiento-sesion-plan.md`: generación y refinamiento de planes; fuente canónica del prompt enviado a OpenCode.
 - `comportamiento-sesion-chef.md`: comportamiento del chat del chef.
 - `esquema-bd.md`: esquema y semántica documentada de tablas.
 - `mysql/migrations/`: cambios persistentes; las migraciones aplicadas son inmutables.
+- `mysql/migrate.sh` → `mysql/migrate.js`: runner con bloqueo MySQL por base y conexión única; pruebas en `mysql/migrate.test.js`.
 - `AGENTS.md`: reglas de trabajo del proyecto.
 - `log.md`: bitácora de cambios.
 

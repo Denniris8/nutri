@@ -38,6 +38,30 @@ test('saved training plan is owned by the authenticated user and records its UTC
   assert.deepEqual(result, { id: 5, requestId, createdAt: '2026-10-15T12:00:00Z', inserted: true });
 });
 
+test('saving and retrying decimal plan targets compares the exact precision written to MySQL', async () => {
+  const macros = { proteinas_g: 140.126, carbohidratos_g: 220.123, grasas_g: 65.128, calorias_kcal: 2025.257 };
+  const content = planFor(macros);
+  const persistedMacros = { proteinas_g: 140.13, carbohidratos_g: 220.12, grasas_g: 65.13, calorias_kcal: 2025.3 };
+  let sql;
+  for (const inserted of [true, false]) {
+    const result = await saveTrainingPlan({
+      userId: '27', requestId, goals: 'Ganar fuerza', plan: content, macros, disclosure,
+      textSql: (value) => `CONVERT(0x${Buffer.from(value).toString('hex')} USING utf8mb4)`,
+      dbQuery: async (query) => {
+        sql = query;
+        return JSON.stringify({ id: 5, requestId, createdAt: '2026-10-15T12:00:00Z', goals: 'Ganar fuerza', plan: content, macros: persistedMacros, inserted });
+      },
+    });
+    assert.equal(result.inserted, inserted);
+    assert.match(sql, /,140\.13,220\.12,65\.13,2025\.3,UTC_TIMESTAMP/);
+  }
+  await assert.rejects(saveTrainingPlan({
+    userId: '27', requestId, goals: 'Ganar fuerza', plan: content, macros, disclosure,
+    textSql: (value) => `CONVERT(0x${Buffer.from(value).toString('hex')} USING utf8mb4)`,
+    dbQuery: async () => JSON.stringify({ requestId, goals: 'Ganar fuerza', plan: content, macros: { ...persistedMacros, proteinas_g: 140.14 } }),
+  }), { status: 409 });
+});
+
 test('reusing an idempotency key with a different plan is rejected', async () => {
   const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
   await assert.rejects(saveTrainingPlan({
@@ -92,7 +116,11 @@ test('activation allows same-day training and closes the prior plan at the prece
 
 test('active plan lookup is scoped to user and calendar date', async () => {
   let sql;
-  const active = { id: 5, vigencyId: 9, goals: 'Ganar fuerza' };
+  const active = {
+    id: 5, vigencyId: 9, goals: 'Ganar fuerza', plan,
+    macros: { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 },
+    startDate: '2026-10-24', endDate: null,
+  };
   const result = await readTrainingPlanForDate({
     userId: '27', date: '2026-10-24', textSql: (value) => `'${value}'`,
     dbQuery: async (query) => { sql = query; return JSON.stringify(active); },
