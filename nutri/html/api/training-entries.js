@@ -305,11 +305,11 @@ async function saveTrainingEntry({ response, data, userId, dbQuery, textSql, jso
 SELECT id INTO @locked_user FROM usuarios WHERE id=${userId} FOR UPDATE;
 INSERT INTO registros_entrenamientos(usuario_id,plan_vigencia_id,origen,external_activity_id,request_id,descripcion,actividad,duracion_minutos,peso_kg,met,energia_kcal,garmin_incluido_en_active,creado_en) VALUES (${userId},${vigencySql},'manual',NULL,${textSql(entry.requestId)},${textSql(entry.description)},${textSql(entry.activity)},${entry.durationMinutes},${entry.weightKg},${entry.met},${entry.caloriesKcal},${garminIncluded ? 1 : 0},${createdAt ? textSql(createdAt) : 'UTC_TIMESTAMP(3)'}) AS incoming ON DUPLICATE KEY UPDATE id=LAST_INSERT_ID(id);
 SELECT LAST_INSERT_ID();
-COMMIT;`);
-    const entryId = inserted.split(/\s+/).at(-1);
+COMMIT;
+SELECT JSON_OBJECT('id',id,'requestId',request_id,'description',descripcion,'activity',actividad,'durationMinutes',duracion_minutos,'weightKg',peso_kg,'met',met,'caloriesKcal',energia_kcal,'garminIncluded',garmin_incluido_en_active,'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ')) FROM registros_entrenamientos WHERE id=LAST_INSERT_ID() AND usuario_id=${userId} LIMIT 1;`);
+    const [entryId, saved] = inserted.split(/\r?\n/);
     if (!/^\d+$/.test(entryId || '')) throw new Error('training_insert_failed');
     stage = 'verification';
-    const saved = await dbQuery(`SELECT JSON_OBJECT('id',id,'requestId',request_id,'description',descripcion,'activity',actividad,'durationMinutes',duracion_minutos,'weightKg',peso_kg,'met',met,'caloriesKcal',energia_kcal,'garminIncluded',garmin_incluido_en_active,'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ')) FROM registros_entrenamientos WHERE id=${entryId} AND usuario_id=${userId} LIMIT 1;`);
     if (!saved) throw Object.assign(new Error('training_readback_missing'), { code: 'TRAINING_PERSISTENCE_VERIFY_FAILED' });
     const persisted = JSON.parse(saved);
     const explicitTime = entry.savedAt || parseTrainingSavedTime(entry.description).value;

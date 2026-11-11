@@ -1398,16 +1398,16 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
         const url = new URL(request.url, 'http://localhost');
         const date = url.searchParams.get('fecha');
         try {
-          const [records, dailyActivity] = await Promise.all([
+          const [records, dailyActivity, preferences, activePlan] = await Promise.all([
             readTrainingEntries({ userId: claims.sub, dbQuery, ...(date ? { date, timezone: request.headers['x-client-timezone'] } : {}) }),
             date ? readDailyStepData({ userId: claims.sub, date, dbQuery, textSql }) : Promise.resolve(null),
+            readPreferences({ userId: claims.sub, dbQuery }).catch(() => null),
+            date ? readTrainingPlanForDate({ userId: claims.sub, date, dbQuery, textSql }) : Promise.resolve(null),
           ]);
-          let preferences = null;
-          try { preferences = await readPreferences({ userId: claims.sub, dbQuery }); } catch {}
           const garminEnabled = preferences?.deviceMode === 'garmin' && preferences.garminConnected === true;
           const visibleRecords = visibleTrainingEntries(records, preferences);
           const energyRecords = dailyActivity?.energyMethod === 'garmin_active' ? records : visibleRecords;
-          json(response, 200, { records: visibleRecords, garminEnabled, ...(date ? { dailyActivity, exercise: calculateTrainingEnergy(energyRecords, dailyActivity), activePlan: await readTrainingPlanForDate({ userId: claims.sub, date, dbQuery, textSql }) } : {}) });
+          json(response, 200, { records: visibleRecords, garminEnabled, ...(date ? { dailyActivity, exercise: calculateTrainingEnergy(energyRecords, dailyActivity), activePlan } : {}) });
         }
         catch (error) { authError(response, error.status || 503, error.status ? error.message : 'No se pudieron cargar los entrenamientos.'); }
         return;

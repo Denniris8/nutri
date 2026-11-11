@@ -160,12 +160,40 @@ test('pending food draft returns saved candidate items for its preview', async (
   const draft = JSON.stringify({ id: 12, requestId: 'request', fecha: '2026-11-04', description: 'pollo', question: '¿Cuántos gramos?', state: 'borrador_chat' });
   const item = JSON.stringify({ sourceText: 'pollo asado', name: 'Pollo', quantityText: '150 g', quantityGrams: 150, macroBasis: 'per_100g', macroStatus: 'estimado', macroSource: 'websearch', sourceName: 'Ficha', sourceUrl: 'https://example.com/pollo', sourceQuote: 'Datos nutricionales', macros: { energyKcal: 200 } });
   let call = 0;
-  const result = await readPendingFoodDraft({ userId: 7, dbQuery: async () => (++call === 1 ? draft : call === 2 ? '' : item) });
+  let query;
+  const result = await readPendingFoodDraft({ userId: 7, dbQuery: async (sql) => {
+    call += 1;
+    query = sql;
+    return `draft\n${draft}\nmessages\nitems\n${item}`;
+  } });
+  assert.equal(call, 1);
+  assert.match(query, /START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY/);
+  assert.match(query, /usuario_id=7 AND estado='borrador_chat'/);
+  assert.match(query, /registro_comida_id=@food_draft_id ORDER BY id/);
+  assert.match(query, /COMMIT;/);
+  assert.deepEqual(result.messages.map(({ role }) => role), ['user', 'assistant']);
   assert.equal(result.previewItems[0].name, 'Pollo');
   assert.equal(result.previewItems[0].quantityText, '150 g');
   assert.equal(result.previewItems[0].sourceText, 'pollo asado');
   assert.equal(result.previewItems[0].macroSource, 'websearch');
   assert.equal(result.previewItems[0].macroBasis, 'per_100g');
+});
+
+test('pending draft batch preserves message order and filters legacy identity failures', async () => {
+  const draft = { id: 12, description: 'Pollo', question: null };
+  const messages = [
+    { role: 'user', content: '150 g de pollo' },
+    { role: 'assistant', content: 'No me proporciona la identidad autenticada.' },
+    { role: 'assistant', content: '¿Crudo o cocido?' },
+    { role: 'user', content: 'Cocido' },
+  ];
+  const result = await readPendingFoodDraft({ userId: 7, dbQuery: async () => `draft\n${JSON.stringify(draft)}\nmessages\n${messages.map((message) => JSON.stringify(message)).join('\n')}\nitems` });
+  assert.deepEqual(result.messages, [messages[0], messages[2], messages[3]]);
+  assert.deepEqual(result.previewItems, []);
+  assert.equal(await readPendingFoodDraft({ userId: 7, dbQuery: async () => 'draft\nmessages\nitems' }), null);
+  let queried = false;
+  await assert.rejects(readPendingFoodDraft({ userId: '7 OR 1=1', dbQuery: async () => { queried = true; } }), { status: 400 });
+  assert.equal(queried, false);
 });
 
 test('preview quantity edits scale saved portion macros and preserve source metadata', () => {

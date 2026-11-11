@@ -45,13 +45,15 @@
 | Validación, guardado, activación y lectura de planes | `training-plans.js` | `training-plans.test.js`, `server.test.js` |
 | Fechas y zona horaria del calendario | `calendar-day.js` | `calendar-day.test.js` |
 | Notificaciones | `notifications.js` | `notifications.test.js`, `server.test.js` |
-| Eventos de progreso de análisis | `analysis-progress.js` | `analysis-progress.test.js` |
+| Eventos de progreso de análisis: lotes de hasta 20, hora UTC capturada por evento | `analysis-progress.js` | `analysis-progress.test.js` |
 | Registro de errores | `application-errors.js`; errores de OpenCode de comidas en `opencode-food.js` | `application-errors.test.js` |
 | Correo de verificación y recuperación | `email.js` | `email.test.js`, `server.test.js` |
 
 `html/server.test.js` cubre integración de rutas y flujos HTTP. Los módulos con sufijo `.test.js` junto al código cubren lógica más acotada.
 
 Los reintentos de guardado de entrenamientos reutilizan el payload completo en `savePendingTraining()` sin volver a analizar. Su respaldo y el de planes viven en `sessionStorage`, separados por cuenta mediante un ámbito opaco insertado por el servidor en el dashboard; no son registros definitivos ni se trasladan entre navegadores. El respaldo de planes incluye firma, propiedad y vencimiento; no expone IDs de sesión OpenCode. Cambiar la clave JWT invalida estos respaldos.
+
+El borrador de comida se recupera con sus mensajes/candidatos en una ejecución MySQL con snapshot de solo lectura (`readPendingFoodDraft`). El entrenamiento se verifica después de `COMMIT` en la misma ejecución que lo guarda; las lecturas independientes de su vista diaria se lanzan en paralelo en `server.js`. El sondeo compartido de entrenamientos/planes (`startTrainingProgress`) adapta su intervalo entre 1 y 5 segundos y termina ante HTTP 401. Se conserva la petición independiente de pasos diarios.
 
 `html/api/food-entry-flow.test.js` distingue la orquestación simulada de la prueba optativa de análisis real de salchicha/tortillas/huevo (`NUTRI_TEST_REAL_EGG_ANALYSIS=1`). Esta última envía el texto original, imprime la respuesta y usa una sesión temporal de diagnóstico sin cuenta ni escrituras MySQL; no prueba autenticación ni persistencia real. Requiere autorización antes de ejecutarla y consume una solicitud real al modelo configurado.
 

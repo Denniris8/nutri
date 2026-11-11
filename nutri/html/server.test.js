@@ -42,6 +42,34 @@ const post = (url, data, headers = {}) => fetch(url, {
   body: JSON.stringify(data),
 });
 
+test('training day starts preferences, steps and active-plan reads without waiting for training records', { timeout: 5000 }, async () => {
+  let releaseRecords;
+  const records = new Promise((resolve) => { releaseRecords = resolve; });
+  const started = new Set();
+  const mark = (name) => { started.add(name); if (started.size === 3) releaseRecords(''); };
+  await withServer(async (sql) => {
+    if (sql.includes('SELECT s.usuario_id')) return '27';
+    if (sql.includes('SELECT zona_horaria')) return 'UTC';
+    if (sql.includes('FROM registros_entrenamientos e')) return records;
+    if (sql.includes('FROM registros_pasos_diarios')) { mark('steps'); return JSON.stringify({ stepsCount: 100, source: 'manual', caloriesKcal: 5, energyMethod: 'pasos_estimados' }); }
+    if (sql.includes('FROM preferencias_usuario p')) { mark('preferences'); return JSON.stringify({ deviceMode: 'ninguno', garminConnected: false }); }
+    if (sql.includes('FROM vigencias_planes_entrenamiento v JOIN planes_entrenamiento')) { mark('plan'); return ''; }
+    return '';
+  }, async (base) => {
+    const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
+    try {
+      const response = await fetch(`${base}/api/training-entries?fecha=2026-11-10`, { headers: { Cookie: cookie, 'X-Client-Timezone': 'UTC' }, signal: AbortSignal.timeout(2000) });
+      assert.equal(response.status, 200);
+      const result = await response.json();
+      assert.equal(started.size, 3);
+      assert.deepEqual(result.records, []);
+      assert.equal(result.dailyActivity.stepsCount, 100);
+      assert.equal(result.activePlan, null);
+      assert.equal(result.exercise.adjustmentKcal, 5);
+    } finally { releaseRecords(''); }
+  });
+});
+
 test('plan restore authenticates the account and rejects invalid, expired and cross-account backups', async () => {
   const { issueTrainingPlanDraft } = require('./api/training-analysis.js');
   const secret = 'test-jwt-secret-must-be-at-least-32-bytes';

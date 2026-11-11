@@ -220,12 +220,27 @@ SELECT JSON_OBJECT('entryId',i.registro_comida_id,'content',i.contenido) FROM re
 }
 
 async function readPendingFoodDraft({ userId, dbQuery }) {
-  const row = await dbQuery(`SELECT JSON_OBJECT('id',e.id,'requestId',e.request_id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d'),'description',e.descripcion_original,'question',e.pregunta_pendiente,'state',e.estado) FROM registros_comidas e WHERE e.usuario_id=${userId} AND e.estado='borrador_chat' ORDER BY e.actualizado_en DESC,e.id DESC LIMIT 1;`);
-  if (!row) return null;
-  const draft = JSON.parse(row);
-  const messages = await dbQuery(`SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=${draft.id} ORDER BY id;`);
-  draft.messages = messages ? messages.split(/\r?\n/).map((message) => JSON.parse(message)).filter((message) => !isLegacyFoodNameError(message) && !isFoodIdentityRefusal(message)) : [];
-  draft.previewItems = await readDraftFoodItems({ entryId: draft.id, userId, dbQuery });
+  if (!/^\d+$/.test(String(userId))) throw Object.assign(new Error('Cuenta no válida.'), { status: 400 });
+  const rows = await dbQuery(`SET TRANSACTION ISOLATION LEVEL REPEATABLE READ;
+START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY;
+SET @food_draft_id=(SELECT id FROM registros_comidas WHERE usuario_id=${userId} AND estado='borrador_chat' ORDER BY actualizado_en DESC,id DESC LIMIT 1);
+SELECT 'draft';
+SELECT JSON_OBJECT('id',e.id,'requestId',e.request_id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d'),'description',e.descripcion_original,'question',e.pregunta_pendiente,'state',e.estado) FROM registros_comidas e WHERE e.id=@food_draft_id AND e.usuario_id=${userId};
+SELECT 'messages';
+SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=@food_draft_id ORDER BY id;
+SELECT 'items';
+${draftFoodItemsSql('@food_draft_id', userId)}
+COMMIT;`);
+  const sections = { draft: [], messages: [], items: [] };
+  let section = '';
+  for (const row of rows.split(/\r?\n/).filter(Boolean)) {
+    if (Object.hasOwn(sections, row)) section = row;
+    else if (section) sections[section].push(row);
+  }
+  if (!sections.draft.length) return null;
+  const draft = JSON.parse(sections.draft[0]);
+  draft.messages = sections.messages.map((message) => JSON.parse(message)).filter((message) => !isLegacyFoodNameError(message) && !isFoodIdentityRefusal(message));
+  draft.previewItems = sections.items.map((item) => JSON.parse(item));
   if (isLegacyFoodNameError({ role: 'assistant', content: draft.question }) || isFoodIdentityRefusal({ role: 'assistant', content: draft.question })) draft.question = null;
   if (!draft.messages.length && draft.question) draft.messages = [{ role: 'user', content: draft.description }, { role: 'assistant', content: draft.question }];
   return draft;
@@ -277,8 +292,12 @@ function isGenericEstimatePermissionQuestion(question) {
   return /(?:autoriz(?:as|a|ar)|permiso|aceptas|puedo|quieres que).{0,100}(?:estim|macros? gen[eé]ric|gen[eé]ric)/i.test(String(question || ''));
 }
 
+function draftFoodItemsSql(entryId, userId) {
+  return `SELECT JSON_OBJECT('sourceText',i.fragmento_original,'name',i.nombre_alimento,'quantityText',i.cantidad_texto,'quantityGrams',i.cantidad_g,'macroBasis',i.base_macros,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente,'macros',JSON_OBJECT('energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g)) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.id=${entryId} AND e.usuario_id=${userId} AND e.estado='borrador_chat' ORDER BY i.id;`;
+}
+
 async function readDraftFoodItems({ entryId, userId, dbQuery }) {
-  const rows = await dbQuery(`SELECT JSON_OBJECT('sourceText',i.fragmento_original,'name',i.nombre_alimento,'quantityText',i.cantidad_texto,'quantityGrams',i.cantidad_g,'macroBasis',i.base_macros,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente,'macros',JSON_OBJECT('energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g)) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.id=${entryId} AND e.usuario_id=${userId} AND e.estado='borrador_chat' ORDER BY i.id;`);
+  const rows = await dbQuery(draftFoodItemsSql(entryId, userId));
   return rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [];
 }
 

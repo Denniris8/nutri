@@ -32,8 +32,7 @@ test('manual training registration persists and verifies the calculated session'
     dbQuery: async (sql) => {
       queries.push(sql);
       if (sql.includes('SELECT zona_horaria')) return 'UTC';
-      if (sql.includes('INSERT INTO registros_entrenamientos')) return '41';
-      if (sql.includes('SELECT JSON_OBJECT')) return JSON.stringify(persisted);
+      if (sql.includes('INSERT INTO registros_entrenamientos')) return `41\n${JSON.stringify(persisted)}`;
       return '';
     },
   });
@@ -44,6 +43,8 @@ test('manual training registration persists and verifies the calculated session'
   assert.match(queries.find((sql) => sql.includes('INSERT INTO registros_entrenamientos')), /FROM vigencias_planes_entrenamiento/);
   assert.match(queries.find((sql) => sql.includes('INSERT INTO registros_entrenamientos')), /'123e4567-e89b-42d3-a456-426614174000'/);
   assert.ok(queries.some((sql) => sql.includes('SELECT JSON_OBJECT') && sql.includes('usuario_id=27')));
+  assert.equal(queries.length, 4, 'timezone, idempotency, save/readback and notification resolution');
+  assert.match(queries.find((sql) => sql.includes('INSERT INTO registros_entrenamientos')), /COMMIT;\s*SELECT JSON_OBJECT/);
 });
 
 test('manual training registration rejects incomplete measurements before persistence', async () => {
@@ -65,8 +66,7 @@ test('manual training registration rejects a requestId reused for different save
     textSql: (value) => `'${value}'`, json: trainingJson,
     dbQuery: async (sql) => {
       if (sql.includes('SELECT zona_horaria')) return 'UTC';
-      if (sql.includes('INSERT INTO registros_entrenamientos')) return '41';
-      if (sql.includes('SELECT JSON_OBJECT')) return JSON.stringify({ ...trainingRequest().analysis, id: '41', requestId: trainingRequest().requestId, description: trainingRequest().description, activity: 'Caminar', caloriesKcal: 257.3 });
+      if (sql.includes('INSERT INTO registros_entrenamientos')) return `41\n${JSON.stringify({ ...trainingRequest().analysis, id: '41', requestId: trainingRequest().requestId, description: trainingRequest().description, activity: 'Caminar', caloriesKcal: 257.3 })}`;
       return '';
     },
   });
@@ -82,12 +82,11 @@ test('training retries require the same calendar day and explicit time, includin
       textSql: (value) => `'${value}'`, json: trainingJson,
       dbQuery: async (sql) => {
         if (sql.includes('SELECT zona_horaria')) return 'America/Mexico_City';
-        if (sql.includes('INSERT INTO registros_entrenamientos')) return '41';
-        if (sql.includes('SELECT JSON_OBJECT')) return JSON.stringify({
+        if (sql.includes('INSERT INTO registros_entrenamientos')) return `41\n${JSON.stringify({
           ...trainingRequest().analysis, id: '41', requestId: trainingRequest().requestId,
           description: trainingRequest().description, caloriesKcal: 257.3,
           garminIncluded: 0, createdAt: '2026-10-22T17:00:00Z',
-        });
+        })}`;
         return '';
       },
     });
@@ -116,6 +115,25 @@ test('manual training registration reports persistence failures without exposing
   assert.match(response.body.error, /No se pudo guardar/);
   assert.ok(queries.some((sql) => sql.includes('INSERT INTO errores_aplicacion')));
   assert.ok(queries.every((sql) => !sql.includes('private database detail')));
+});
+
+test('a committed training with missing readback keeps its retry key and reports an unverifiable save', async () => {
+  const response = {};
+  const queries = [];
+  await saveTrainingEntry({
+    response, data: trainingRequest(), userId: '27', timezone: 'UTC', json: trainingJson,
+    textSql: (value) => `'${value}'`, dbQuery: async (sql) => {
+      queries.push(sql);
+      if (sql.includes('SELECT zona_horaria')) return 'UTC';
+      if (sql.includes('INSERT INTO registros_entrenamientos')) return '41';
+      return '';
+    },
+  });
+  assert.equal(response.status, 503);
+  assert.equal(response.body.requestId, trainingRequest().requestId);
+  assert.match(response.body.error, /no se pudo verificar.*misma solicitud/);
+  assert.equal(queries.filter((sql) => sql.includes('INSERT INTO registros_entrenamientos')).length, 1);
+  assert.ok(queries.some((sql) => sql.includes('TRAINING_PERSISTENCE_VERIFY_FAILED')));
 });
 
 test('distinct manual and Garmin sessions both contribute to the daily exercise adjustment', () => {
@@ -299,8 +317,7 @@ test('manual training matching one Garmin activity saves without an inclusion qu
         id: '90', origin: 'garmin', energyType: 'reportada_dispositivo', activity: 'running',
         durationMinutes: 30, createdAt: '2026-10-15T10:02:00Z', caloriesKcal: 250,
       });
-      if (sql.includes('INSERT INTO registros_entrenamientos')) { insert = sql; return '41'; }
-      if (sql.includes("'garminIncluded'")) return JSON.stringify(persisted);
+      if (sql.includes('INSERT INTO registros_entrenamientos')) { insert = sql; return `41\n${JSON.stringify(persisted)}`; }
       return '';
     },
   });

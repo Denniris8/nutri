@@ -96,7 +96,7 @@ function loadFlow(search = '', fetchOverride, options = {}) {
   const testIntl = options.intl || { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'America/Mexico_City' }) }) };
   const storage = options.storage || new Map();
   const sessionStorage = { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: (key) => storage.delete(key) };
-  const context = vm.createContext({ document, window, fetch, Intl: testIntl, sessionStorage, AbortController, URL, URLSearchParams, navigator: { wakeLock: null }, setTimeout: (callback, ms) => { if (ms <= 1500) setImmediate(callback); return 0; }, clearTimeout() {}, crypto: { randomUUID: () => '123e4567-e89b-42d3-a456-426614174000', getRandomValues: (bytes) => bytes.fill(1) } });
+  const context = vm.createContext({ document, window, fetch, Intl: testIntl, sessionStorage, AbortController, URL, URLSearchParams, navigator: { wakeLock: null }, setTimeout: options.setTimeout || ((callback, ms) => { if (ms <= 1500) setImmediate(callback); return 0; }), clearTimeout() {}, crypto: { randomUUID: () => '123e4567-e89b-42d3-a456-426614174000', getRandomValues: (bytes) => bytes.fill(1) } });
   vm.runInContext(source, context);
   return { elements, modeButtons, destinations, requests, storage, evaluate: (code) => vm.runInContext(code, context) };
 }
@@ -414,6 +414,31 @@ test('stopping training progress does not wait for a hung request', async () => 
   const progress = flow.evaluate("startTrainingProgress('test', () => document.createElement('div'))");
   await progress.stop('Terminado.');
   assert.equal(signal.aborted, true);
+});
+
+test('training and plan progress backs off on unchanged stages, resets on change and stops on 401', async () => {
+  const timers = [];
+  const labels = ['Generando', 'Generando', 'Generando', 'Generando', 'Generando', 'Validando'];
+  let requests = 0;
+  const flow = loadFlow('', async (url) => {
+    if (!url.startsWith('/api/training-progress?')) return { ok: true, json: async () => ({}) };
+    const label = labels[requests++];
+    return label ? { ok: true, status: 200, json: async () => ({ progress: { label } }) }
+      : { ok: false, status: 401, json: async () => ({}) };
+  }, { setTimeout: (callback, ms) => { timers.push({ callback, ms }); return 0; } });
+  await settle();
+  timers.length = 0;
+  const progress = flow.evaluate("startTrainingProgress('adaptive', () => document.createElement('div'))");
+  for (const delay of [1000, 2000, 4000, 5000, 5000, 1000]) {
+    await settle();
+    const timer = timers.shift();
+    assert.equal(timer?.ms, delay);
+    timer.callback();
+  }
+  await settle();
+  assert.equal(requests, 7);
+  assert.equal(timers.length, 0);
+  await progress.stop('Terminado.');
 });
 
 test('temporary drafts survive a reload, expire, and are isolated by account', () => {

@@ -240,6 +240,7 @@ function startTrainingProgress(progressId, appendMessage) {
   const completed = [];
   let active = true;
   let finalized = false;
+  let pollDelay = 1000;
   const controller = new AbortController();
   const finish = (resultLabel) => {
     if (finalized) return;
@@ -253,8 +254,15 @@ function startTrainingProgress(progressId, appendMessage) {
     while (active) {
       if (!document.hidden) try {
         const response = await fetch(`/api/training-progress?progressId=${encodeURIComponent(progressId)}`, { credentials: 'same-origin', signal: controller.signal });
+        if (response.status === 401) {
+          active = false;
+          finish('Sesión vencida; inicia sesión de nuevo.');
+          break;
+        }
         const { progress } = response.ok ? await response.json() : {};
-        if (active && progress?.label && progress.label !== currentLabel && text.isConnected) {
+        const changed = Boolean(progress?.label && progress.label !== currentLabel);
+        pollDelay = changed ? 1000 : Math.min(pollDelay * 2, 5000);
+        if (active && changed && text.isConnected) {
           const now = Date.now();
           completed.push(`✓ ${currentLabel} (${((now - currentAt) / 1000).toFixed(1)} s)`);
           currentLabel = progress.label;
@@ -262,8 +270,8 @@ function startTrainingProgress(progressId, appendMessage) {
           text.textContent = [...completed, `• ${currentLabel}`].join('\n');
           scrollChatToLatest(bubble.parentElement);
         }
-      } catch {}
-      if (active) await new Promise((resolve) => setTimeout(resolve, 1000));
+      } catch { pollDelay = Math.min(pollDelay * 2, 5000); }
+      if (active) await new Promise((resolve) => setTimeout(resolve, pollDelay));
     }
   })();
   return {
