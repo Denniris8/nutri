@@ -46,3 +46,7 @@ Devuelve solo `macros_objetivo` con cuatro campos numéricos: proteínas, carboh
 <!-- TRAINING_PLAN_OPENCODE_PROMPT_END -->
 
 Durante la generación, el chat muestra las etapas reales del servidor mediante `/api/training-progress`, autenticado y asociado al usuario y a un identificador temporal de operación. Los mensajes y duraciones observadas no se guardan en el historial ni en MySQL.
+
+El borrador no cambia las metas del dashboard: se utiliza únicamente el plan vigente para el día seleccionado. Guardar un plan tampoco lo activa.
+
+El navegador conserva un respaldo temporal firmado durante 24 horas desde la generación, aislado por cuenta en `sessionStorage`. Al reabrir el formulario tras una recarga, `/api/training-plan/restore` valida autenticación, firma, propiedad y vencimiento antes de mostrarlo. Si se perdió la sesión del servidor o de OpenCode, el refinamiento abre una nueva y reenvía el borrador y su contexto original firmado, sin aceptar IDs OpenCode del cliente. No se reconstruyen datos faltantes ni se recalculan mediciones. Guardar o cancelar retira el respaldo del navegador; cerrar la pestaña, vencer el plazo o cambiar la clave de firma impide su recuperación. Este respaldo no equivale a un plan guardado en MySQL.

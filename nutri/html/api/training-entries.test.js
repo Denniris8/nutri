@@ -74,6 +74,31 @@ test('manual training registration rejects a requestId reused for different save
   assert.match(response.body.error, /clave de reintento/);
 });
 
+test('training retries require the same calendar day and explicit time, including timezone conversion', async () => {
+  const run = async (date, savedAt) => {
+    const response = {};
+    await saveTrainingEntry({
+      response, data: trainingRequest({ date, savedAt }), userId: '27', timezone: 'America/Mexico_City',
+      textSql: (value) => `'${value}'`, json: trainingJson,
+      dbQuery: async (sql) => {
+        if (sql.includes('SELECT zona_horaria')) return 'America/Mexico_City';
+        if (sql.includes('INSERT INTO registros_entrenamientos')) return '41';
+        if (sql.includes('SELECT JSON_OBJECT')) return JSON.stringify({
+          ...trainingRequest().analysis, id: '41', requestId: trainingRequest().requestId,
+          description: trainingRequest().description, caloriesKcal: 257.3,
+          garminIncluded: 0, createdAt: '2026-10-22T17:00:00Z',
+        });
+        return '';
+      },
+    });
+    return response;
+  };
+  assert.equal((await run('2026-10-22', '11:00')).status, 201);
+  assert.equal((await run('2026-10-23', '11:00')).status, 409);
+  assert.equal((await run('2026-10-22', '12:00')).status, 409);
+  assert.equal((await run('2026-10-23', null)).status, 409);
+});
+
 test('manual training registration reports persistence failures without exposing database details', async () => {
   const response = {};
   const queries = [];

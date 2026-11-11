@@ -42,6 +42,29 @@ const post = (url, data, headers = {}) => fetch(url, {
   body: JSON.stringify(data),
 });
 
+test('plan restore authenticates the account and rejects invalid, expired and cross-account backups', async () => {
+  const { issueTrainingPlanDraft } = require('./api/training-analysis.js');
+  const secret = 'test-jwt-secret-must-be-at-least-32-bytes';
+  const pending = { runId: '123e4567-e89b-42d3-a456-426614174000', goals: 'Fuerza', plan: 'Borrador', macros: {}, context: {}, expiresAt: Date.now() + 60000 };
+  let upstreamCalls = 0;
+  await withServer(async (sql) => sql.includes('dashboard_sessions') ? '27' : '', async (base) => {
+    const endpoint = `${base}/api/training-plan/restore`;
+    const cookie = `nutri_session=${signJwt('27', pending.runId, secret)}`;
+    const draftToken = issueTrainingPlanDraft('27', pending, secret);
+    assert.equal((await post(endpoint, { draftToken })).status, 401);
+    assert.equal((await post(endpoint, { draftToken }, { Cookie: cookie, Origin: 'https://other.example' })).status, 403);
+    const restored = await post(endpoint, { draftToken }, { Cookie: cookie });
+    assert.equal(restored.status, 200);
+    assert.deepEqual(await restored.json(), { runId: pending.runId, plan: pending.plan, goals: pending.goals, macros: pending.macros, expiresAt: pending.expiresAt });
+    for (const token of [
+      `${draftToken}x`,
+      issueTrainingPlanDraft('28', pending, secret),
+      issueTrainingPlanDraft('27', { ...pending, expiresAt: Date.now() - 1 }, secret),
+    ]) assert.equal((await post(endpoint, { draftToken: token }, { Cookie: cookie })).status, 409);
+    assert.equal(upstreamCalls, 0);
+  }, { openCodeRequest: async () => { upstreamCalls += 1; throw new Error('must not contact model'); } });
+});
+
 test('readiness checks MySQL without exposing failures and liveness remains independent', async () => {
   let state = 'available';
   let reads = 0;
@@ -504,7 +527,7 @@ test('food request sends the current description and returns OpenCode parts unch
       return { status: 200, data: { parts: [{ type: 'text', text: '{"items":[],"clarificationQuestion":"Aclara la cantidad."}' }] } };
     },
   });
-  assert.match(sent.system, /`macros` con `energyKcal`, `proteinG`, `carbohydrateG`, `fatG`/);
+  assert.match(sent.system, /`macros` con exactamente `energyKcal`, `proteinG`, `carbohydrateG`, `fatG`/);
   assert.match(sent.system, /macroStatus:"estimado"/);
   assert.equal(sent.format, undefined);
   assert.deepEqual(sent.tools, {});

@@ -115,6 +115,22 @@ let trainingPlanSessionReady = true;
 let trainingPlanGeneration = 0;
 let trainingPlanCancelPending = false;
 let trainingPlanSaving = false;
+let generatedTrainingDraftToken = null;
+
+function draftStorage(name, value) {
+  const scope = document.body?.dataset.draftStorageScope;
+  if (!/^[a-f0-9]{64}$/.test(scope || '')) return null;
+  const key = `nutriDraft:${scope}:${name}`;
+  try {
+    if (value === null) { sessionStorage.removeItem(key); return null; }
+    if (value !== undefined) { sessionStorage.setItem(key, JSON.stringify(value)); return value; }
+    const draft = JSON.parse(sessionStorage.getItem(key) || 'null');
+    if (draft && Number.isFinite(draft.expiresAt) && draft.expiresAt > Date.now()) return draft;
+    sessionStorage.removeItem(key);
+    if (draft) notifyApp(name === 'plan' ? 'El respaldo temporal del plan venció. Genera un plan nuevo.' : 'El respaldo temporal del entrenamiento venció. Revisa los registros antes de volver a enviarlo.', 'info');
+  } catch {}
+  return null;
+}
 
 const tmbExplanation = 'Tasa metabólica basal: energía estimada que el cuerpo utiliza en reposo. No equivale al gasto total diario ni a la meta de ingesta.';
 const mifflinExplanation = 'Mifflin-St Jeor es una ecuación que estima el metabolismo basal a partir de edad, sexo, estatura y peso compatibles; es una estimación, no una medición.';
@@ -224,6 +240,7 @@ function startTrainingProgress(progressId, appendMessage) {
   const completed = [];
   let active = true;
   let finalized = false;
+  const controller = new AbortController();
   const finish = (resultLabel) => {
     if (finalized) return;
     completed.push(`✓ ${currentLabel} (${((Date.now() - currentAt) / 1000).toFixed(1)} s)`);
@@ -232,12 +249,12 @@ function startTrainingProgress(progressId, appendMessage) {
     scrollChatToLatest(bubble.parentElement);
     finalized = true;
   };
-  const polling = (async () => {
+  void (async () => {
     while (active) {
       if (!document.hidden) try {
-        const response = await fetch(`/api/training-progress?progressId=${encodeURIComponent(progressId)}`, { credentials: 'same-origin' });
+        const response = await fetch(`/api/training-progress?progressId=${encodeURIComponent(progressId)}`, { credentials: 'same-origin', signal: controller.signal });
         const { progress } = response.ok ? await response.json() : {};
-        if (progress?.label && progress.label !== currentLabel && text.isConnected) {
+        if (active && progress?.label && progress.label !== currentLabel && text.isConnected) {
           const now = Date.now();
           completed.push(`✓ ${currentLabel} (${((now - currentAt) / 1000).toFixed(1)} s)`);
           currentLabel = progress.label;
@@ -253,7 +270,7 @@ function startTrainingProgress(progressId, appendMessage) {
     finish,
     async stop(resultLabel) {
       active = false;
-      await polling;
+      controller.abort();
       finish(resultLabel);
     },
   };
@@ -368,7 +385,39 @@ async function loadSavedTrainingPlans() {
 
 if (savedTrainingPlansList) void loadSavedTrainingPlans();
 
-trainingPlanTrigger?.addEventListener('click', () => {
+trainingPlanTrigger?.addEventListener('click', async () => {
+  if (trainingPlanTrigger.disabled) return;
+  const draft = !generatedTrainingPlan && draftStorage('plan');
+  if (draft) {
+    trainingPlanTrigger.disabled = true;
+    try {
+      const response = await fetch('/api/training-plan/restore', {
+        method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ draftToken: draft.draftToken }),
+      });
+      const result = await response.json();
+      if (!response.ok) {
+        if (response.status === 409) draftStorage('plan', null);
+        throw new Error(result.error || 'No se pudo recuperar el borrador. Inténtalo de nuevo.');
+      }
+      generatedTrainingPlan = result.plan;
+      generatedTrainingPlanRunId = result.runId;
+      generatedTrainingGoals = result.goals;
+      generatedTrainingMacros = result.macros;
+      generatedTrainingDraftToken = draft.draftToken;
+      trainingPlanSessionActive = true;
+      savedTrainingPlan = false;
+      appendTrainingPlanMessage('user', result.goals);
+      appendTrainingPlanMessage('assistant', result.plan);
+      trainingPlanGoalsLabel.textContent = '¿Qué quieres cambiar del borrador?';
+      trainingPlanSendButton.textContent = 'Aplicar cambios';
+      trainingPlanSaveButton.hidden = false;
+      trainingPlanSaveButton.disabled = false;
+      planSummaryText.textContent = 'Borrador recuperado · no guardado · caduca a las 24 horas';
+      notifyApp('Borrador recuperado. Puedes revisarlo, modificarlo o guardarlo.', 'success');
+    } catch (error) { notifyApp(error.message, 'error'); return; }
+    finally { trainingPlanTrigger.disabled = false; }
+  }
   if (!trainingPlanSessionReady) planSummaryText.textContent = 'Cuéntame tus objetivos y generaré un plan con tus datos registrados.';
   trainingPlanSessionReady = true;
   trainingPlanGoalsInput.disabled = false;
@@ -395,6 +444,9 @@ async function cancelTrainingPlan() {
     if (!response.ok) throw new Error(result.error || 'No se pudo eliminar la sesión del plan.');
     if (generation !== trainingPlanGeneration) return;
     generatedTrainingPlan = generatedTrainingPlanRunId = generatedTrainingGoals = generatedTrainingMacros = null;
+    generatedTrainingDraftToken = null;
+    draftStorage('plan', null);
+    planChatMessages.replaceChildren();
     trainingPlanGoalsLabel.textContent = 'Tus objetivos';
     trainingPlanGoalsInput.placeholder = 'Ej.: Quiero ganar fuerza y masa muscular, entrenar 4 días por semana y priorizar piernas. Tengo experiencia intermedia y dispongo de mancuernas y gimnasio.';
     trainingPlanSendButton.textContent = 'Enviar mensaje';
@@ -449,7 +501,7 @@ trainingPlanSendButton?.addEventListener('click', async () => {
   try {
     const response = await fetch(refining ? '/api/training-plan/refine' : '/api/training-plan', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(refining ? { runId: generatedTrainingPlanRunId, changes: goals, progressId } : { goals, progressId, suppressNotification: true }),
+      body: JSON.stringify(refining ? { runId: generatedTrainingPlanRunId, changes: goals, draftToken: generatedTrainingDraftToken, progressId } : { goals, progressId, suppressNotification: true }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo generar el plan.');
@@ -460,15 +512,16 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     generatedTrainingPlanRunId = result.runId;
     if (!refining) generatedTrainingGoals = goals;
     generatedTrainingMacros = result.macros;
-    setTrainingPlanTargets(generatedTrainingMacros);
+    generatedTrainingDraftToken = result.draftToken;
+    if (!draftStorage('plan', { draftToken: result.draftToken, expiresAt: result.expiresAt })) notifyApp('El borrador está disponible, pero no pudo respaldarse para una recarga.', 'info');
     trainingPlanGoalsLabel.textContent = '¿Qué quieres cambiar del borrador?';
     trainingPlanGoalsInput.placeholder = 'Ej.: cambia la rutina a 3 días y prioriza ejercicios con mancuernas.';
     trainingPlanSendButton.textContent = 'Aplicar cambios';
     trainingPlanSaveButton.hidden = false;
     trainingPlanSaveButton.disabled = false;
     trainingPlanSaveButton.title = '';
-    planSummaryText.textContent = refining ? 'Borrador actualizado · no guardado' : 'Plan generado · no guardado';
-    notifyApp(refining ? 'Cambios aplicados. El borrador sigue sin guardar.' : 'Plan generado. Solo aparece en esta vista y no se guarda.', 'success');
+    planSummaryText.textContent = `${refining ? 'Borrador actualizado' : 'Plan generado'} · no guardado · respaldo temporal de 24 horas`;
+    notifyApp(refining ? 'Cambios aplicados. El borrador sigue sin guardar.' : 'Plan generado. Revisa el borrador y pulsa Guardar para conservarlo como plan.', 'success');
     await notifyResultIfHidden(trainingPlanDialog, 'plan', 'generado', refining ? 'Borrador actualizado' : 'Plan generado, aún sin guardar', 'Tu plan está listo para revisar y guardar.');
   } catch (error) {
     if (generation !== trainingPlanGeneration) return;
@@ -506,10 +559,11 @@ trainingPlanSaveButton?.addEventListener('click', async () => {
     if (!response.ok) throw new Error(result.error || 'No se pudo guardar el plan.');
     const savedAt = new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(result.createdAt));
     savedTrainingPlan = true;
+    draftStorage('plan', null);
+    generatedTrainingDraftToken = null;
     trainingPlanSessionActive = false;
     generatedTrainingPlanRunId = null;
     trainingPlanSendButton.disabled = true;
-    setTrainingPlanTargets(generatedTrainingMacros);
     savedTrainingPlans = [{ id: result.id, createdAt: result.createdAt, goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros }, ...savedTrainingPlans.filter((plan) => plan.id !== result.id)].slice(0, 3);
     renderSavedTrainingPlans();
     void loadSavedTrainingPlans();
@@ -1518,13 +1572,7 @@ let trainingPending = false;
 let trainingSaving = false;
 let trainingSavedAt = null;
 let garminInclusionPending = false;
-const pendingTrainingSaveKey = 'nutriPendingTrainingSaveId';
-let pendingTrainingSave = (() => {
-  try {
-    const requestId = sessionStorage.getItem(pendingTrainingSaveKey);
-    return requestId ? { description: null, requestId } : null;
-  } catch { return null; }
-})();
+let pendingTrainingSave = draftStorage('training');
 let trainingGarminConnected = false;
 const trainingModeStorageKey = 'nutriTrainingMode';
 function savedTrainingMode() {
@@ -1532,12 +1580,13 @@ function savedTrainingMode() {
   catch { return 'description'; }
 }
 function updateTrainingMode() {
-  const useGarmin = trainingGarminConnected && document.querySelector('[name="trainingMode"]:checked')?.value === 'garmin';
+  const useGarmin = !pendingTrainingSave && trainingGarminConnected && document.querySelector('[name="trainingMode"]:checked')?.value === 'garmin';
   trainingAnalyzeButton.hidden = useGarmin;
+  trainingAnalyzeButton.textContent = pendingTrainingSave ? 'Reintentar guardado' : 'Enviar mensaje';
   syncGarminTrainingButton.hidden = !useGarmin;
   trainingDescriptionFields.hidden = useGarmin;
   const prompt = document.querySelector('#trainingInitialPrompt');
-  if (prompt) prompt.textContent = useGarmin
+  if (prompt) prompt.textContent = pendingTrainingSave ? 'Hay un guardado pendiente. Pulsa Reintentar guardado para reenviar los mismos datos, sin volver a analizar.' : useGarmin
     ? 'Cuéntame qué entrenamiento hiciste. Por ejemplo: actividad, tiempo, distancia e intensidad.'
     : 'Cuéntame qué entrenamiento hiciste. Por ejemplo: actividad, tiempo, distancia e intensidad. También puedes agregar los pasos totales dados hoy; si hay peso y estatura recientes, estimaré su gasto.';
 }
@@ -1563,17 +1612,18 @@ trainingTrigger?.addEventListener('click', () => {
   trainingOpenCodeSessionActive = false;
   trainingSavedAt = null;
   trainingInput.value = '';
-  trainingInput.disabled = false;
+  trainingInput.disabled = Boolean(pendingTrainingSave);
   trainingAnalyzeButton.disabled = false;
   trainingFeedback.classList.remove('food-session-error');
   trainingGarminConnected = false;
   document.querySelector(`[name="trainingMode"][value="${savedTrainingMode()}"]`).checked = true;
   updateTrainingMode();
-  trainingFeedback.textContent = '';
+  trainingFeedback.textContent = pendingTrainingSave ? `Hay un guardado pendiente para ${pendingTrainingSave.body.date}. Reinténtalo sin volver a analizar.` : '';
   trainingChatMessages.replaceChildren();
   appendTrainingMessage('assistant', 'Cuéntame qué entrenamiento hiciste. Por ejemplo: actividad, tiempo, distancia e intensidad.');
   document.querySelector('#trainingChatMessages .food-chat-message:first-child .food-chat-text').id = 'trainingInitialPrompt';
   updateTrainingMode();
+  if (pendingTrainingSave) appendTrainingMessage('user', pendingTrainingSave.body.description);
   trainingDialog?.showModal();
   void showGarminTrainingSync(generation);
   trainingInput.focus();
@@ -1645,7 +1695,7 @@ async function cancelTrainingDialog() {
     if (garminInclusionPending) {
       pendingTrainingSave = null;
       garminInclusionPending = false;
-      try { sessionStorage.removeItem(pendingTrainingSaveKey); } catch {}
+      draftStorage('training', null);
     }
     trainingDialog?.close();
     notifyApp('Sesión e historial del entrenamiento eliminados.', 'success');
@@ -1710,10 +1760,58 @@ function askGarminSessionInclusion(question) {
     yes.focus();
   });
 }
+async function savePendingTraining(generation) {
+  const pending = pendingTrainingSave;
+  const saveBody = pending.body;
+  trainingSaving = true;
+  trainingLoadingText.textContent = 'Guardando entrenamiento…';
+  trainingFeedback.textContent = 'Guardando el entrenamiento…';
+  const send = () => fetch('/api/training-entries', {
+    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Client-Timezone': pending.timezone },
+    body: JSON.stringify(saveBody),
+  });
+  let response = await send();
+  let saved = await response.json();
+  if (response.ok && saved.requiresGarminConfirmation) {
+    garminInclusionPending = true;
+    trainingSaving = false;
+    trainingLoading.hidden = true;
+    trainingFeedback.textContent = saved.question;
+    notifyApp(saved.question, 'info');
+    const included = await askGarminSessionInclusion(saved.question);
+    garminInclusionPending = false;
+    if (included == null || generation !== trainingOpenGeneration) return;
+    saveBody.garminIncluded = included;
+    draftStorage('training', pending);
+    trainingSaving = true;
+    trainingLoading.hidden = false;
+    response = await send();
+    saved = await response.json();
+    if (response.ok && saved.requiresGarminConfirmation) throw new Error('No se pudo confirmar si Garmin ya cuenta esta sesión.');
+  }
+  if (!response.ok) {
+    if (response.status === 409) { pendingTrainingSave = null; draftStorage('training', null); }
+    throw new Error(saved.error || 'No se pudo guardar el entrenamiento.');
+  }
+  pendingTrainingSave = null;
+  draftStorage('training', null);
+  trainingSavedAt = null;
+  trainingSaving = false;
+  trainingOpenCodeSessionActive = false;
+  trainingSessionReady = trainingSessionUiInitialized = false;
+  trainingDialog.close();
+  try { await loadTrainingEntries(saveBody.date); } catch {}
+  trainingFeedback.textContent = saved.savedAt ? `Entrenamiento guardado a las ${saved.savedAt}.` : 'Entrenamiento guardado.';
+  notifyApp(trainingFeedback.textContent, 'success');
+  await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'guardado', 'Entrenamiento guardado', trainingFeedback.textContent);
+}
+
 trainingAnalyzeButton?.addEventListener('click', async () => {
   const generation = trainingOpenGeneration;
   const description = trainingInput.value.trim();
-  if (!description || trainingAnalyzeButton.disabled || trainingPending) { if (!description) trainingFeedback.textContent = 'Describe el entrenamiento para continuar.'; return; }
+  const retrying = Boolean(pendingTrainingSave?.body);
+  if ((!description && !retrying) || trainingAnalyzeButton.disabled || trainingPending) { if (!description && !retrying) trainingFeedback.textContent = 'Describe el entrenamiento para continuar.'; return; }
+  const nutritionDate = dayInput?.value || localDate();
   trainingPending = true;
   trainingTrigger.setAttribute('aria-busy', 'true');
   document.querySelector('#trainingButtonLoading').hidden = false;
@@ -1723,12 +1821,13 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
   trainingLoadingText.textContent = 'Analizando entrenamiento…';
   trainingInput.disabled = true;
   trainingAnalyzeButton.disabled = true;
-  appendTrainingMessage('user', description);
+  if (!retrying) appendTrainingMessage('user', description);
   const progressId = createFoodRequestId();
   const progress = startTrainingProgress(progressId, appendTrainingMessage);
   trainingInput.value = '';
-  notifyApp('Analizando el entrenamiento.', 'info');
+  notifyApp(retrying ? 'Reintentando el mismo guardado, sin repetir el análisis.' : 'Analizando el entrenamiento.', 'info');
   try {
+    if (retrying) { await savePendingTraining(generation); return; }
     const response = await fetch('/api/training-analysis', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone },
       body: JSON.stringify({ description, progressId, userMessages: [...trainingChatMessages.querySelectorAll('.food-chat-message[data-role="user"] .food-chat-text')].map((node) => node.textContent.trim()).slice(-20), suppressNotification: true }),
@@ -1777,65 +1876,17 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
       await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'requiere_respuesta', 'Entrenamiento: falta una aclaración', trainingFeedback.textContent);
       return;
     }
-    trainingLoadingText.textContent = 'Guardando entrenamiento…';
-    trainingFeedback.textContent = 'Guardando el entrenamiento…';
-    trainingSaving = true;
-    const nutritionDate = dayInput?.value || localDate();
     const turns = [...trainingChatMessages.querySelectorAll('.food-chat-message[data-role="user"] .food-chat-text')].map((node) => node.textContent.trim()).filter(Boolean);
     const userTurns = turns.filter((turn, index) => !index || turn !== turns[index - 1]);
     const descriptionToSave = userTurns.join(' · ').length <= 1200 ? userTurns.join(' · ')
       : `${userTurns[0].slice(0, 550)} … ${userTurns.at(-1).slice(-600)}`;
-    if (pendingTrainingSave?.description && pendingTrainingSave.description !== descriptionToSave) throw new Error('Hay un guardado anterior pendiente de verificar. Reenvía la misma descripción antes de iniciar otro registro.');
-    if (!pendingTrainingSave) pendingTrainingSave = { description: descriptionToSave, requestId: createFoodRequestId() };
-    pendingTrainingSave.description = descriptionToSave;
-    try { sessionStorage.setItem(pendingTrainingSaveKey, pendingTrainingSave.requestId); } catch {}
-    const saveBody = { requestId: pendingTrainingSave.requestId, description: descriptionToSave, analysis, savedAt: trainingSavedAt, date: nutritionDate, suppressNotification: true,
-      ...(typeof pendingTrainingSave.garminIncluded === 'boolean' ? { garminIncluded: pendingTrainingSave.garminIncluded } : {}) };
-    const sendTrainingSave = () => fetch('/api/training-entries', {
-      method: 'POST', credentials: 'same-origin', headers: {
-        'Content-Type': 'application/json', 'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone,
-      },
-      body: JSON.stringify(saveBody),
-    });
-    let saveResponse = await sendTrainingSave();
-    let saved = await saveResponse.json();
-    if (saveResponse.ok && saved.requiresGarminConfirmation) {
-      garminInclusionPending = true;
-      trainingSaving = false;
-      trainingLoading.hidden = true;
-      trainingFeedback.textContent = saved.question;
-      notifyApp(saved.question, 'info');
-      const garminIncluded = await askGarminSessionInclusion(saved.question);
-      garminInclusionPending = false;
-      if (garminIncluded == null || generation !== trainingOpenGeneration) return;
-      pendingTrainingSave.garminIncluded = garminIncluded;
-      saveBody.garminIncluded = garminIncluded;
-      trainingSaving = true;
-      trainingLoading.hidden = false;
-      trainingLoadingText.textContent = 'Guardando el entrenamiento…';
-      trainingFeedback.textContent = 'Guardando el entrenamiento…';
-      saveResponse = await sendTrainingSave();
-      saved = await saveResponse.json();
-      if (saveResponse.ok && saved.requiresGarminConfirmation) throw new Error('No se pudo confirmar si Garmin ya cuenta esta sesión.');
-    }
-    if (!saveResponse.ok) {
-      if (saveResponse.status === 409) {
-        pendingTrainingSave = null;
-        try { sessionStorage.removeItem(pendingTrainingSaveKey); } catch {}
-      }
-      throw new Error(saved.error || 'No se pudo guardar el entrenamiento.');
-    }
-    trainingSaving = false;
-    trainingOpenCodeSessionActive = false;
-    trainingSessionReady = trainingSessionUiInitialized = false;
-    trainingDialog.close();
-    try { await loadTrainingEntries(nutritionDate); } catch {}
-    pendingTrainingSave = null;
-    try { sessionStorage.removeItem(pendingTrainingSaveKey); } catch {}
-    trainingSavedAt = null;
-    trainingFeedback.textContent = saved.savedAt ? `Entrenamiento analizado y guardado a las ${saved.savedAt}.` : 'Entrenamiento analizado y guardado.';
-    notifyApp(trainingFeedback.textContent, 'success');
-    await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'guardado', 'Entrenamiento guardado', trainingFeedback.textContent);
+    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const clock = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
+    pendingTrainingSave = { expiresAt: Date.now() + 24 * 60 * 60 * 1000, timezone, body: {
+      requestId: createFoodRequestId(), description: descriptionToSave, analysis, savedAt: trainingSavedAt || `${clock.hour}:${clock.minute}`, date: nutritionDate, suppressNotification: true,
+    } };
+    if (!draftStorage('training', pendingTrainingSave)) notifyApp('El guardado puede reintentarse aquí, pero no pudo respaldarse para una recarga.', 'info');
+    await savePendingTraining(generation);
   } catch (error) {
     if (generation !== trainingOpenGeneration) return;
     appendTrainingMessage('error', error.message || 'No se pudo analizar el entrenamiento.');
@@ -1850,8 +1901,9 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     document.querySelector('#trainingButtonLoading').hidden = true;
     if (generation === trainingOpenGeneration) {
       trainingLoading.hidden = true;
-      trainingInput.disabled = false;
+      trainingInput.disabled = Boolean(pendingTrainingSave);
       trainingAnalyzeButton.disabled = !trainingSessionReady;
+      updateTrainingMode();
       if (trainingDialog.open) trainingInput.focus();
     }
   }
@@ -2302,7 +2354,7 @@ async function submitFoodMessage(retry = null) {
         const draft = await restoreFoodDraft(feedback);
         placeProgressAfterLatestUserMessage(document.querySelector('#foodChatMessages'), progressMessage);
         draftRestored = Boolean(draft?.messages?.some((message) => message.role === 'assistant' && message.content.startsWith('[ERROR_REGISTRO] ')));
-      } else {
+      } else if (response.status < 500 && response.status !== 429) {
         pendingMessage.remove();
       }
       throw new Error(result.error || result.message || 'No se pudo guardar la comida.');
@@ -2342,7 +2394,11 @@ async function submitFoodMessage(retry = null) {
         navigateWithNotice(result.message || 'Comida guardada en la fecha calendario anterior.', `${url.pathname}${url.search}${url.hash}`);
         return;
       }
-      if (Array.isArray(result.records)) renderFoodEntries(result.records);
+      if (Array.isArray(result.records)) {
+        foodEntriesLoadId += 1;
+        renderFoodEntries(result.records);
+        document.querySelector('#foodEntriesList')?.setAttribute('aria-busy', 'false');
+      }
       else await loadFoodEntries(foodDate());
       foodSessionReady = foodOpenCodeSessionActive = false;
       foodDialog.close();
@@ -3085,21 +3141,25 @@ function renderFoodEntries(records) {
   }
 }
 
+let foodEntriesLoadId = 0;
 async function loadFoodEntries(date = document.querySelector('#daySelect')?.value || localDate()) {
   const list = document.querySelector('#foodEntriesList');
   if (!list) return;
+  const loadId = ++foodEntriesLoadId;
   list.setAttribute('aria-busy', 'true');
   try {
     const response = await fetch(`/api/food-entries?fecha=${encodeURIComponent(date)}`, { credentials: 'same-origin' });
     if (!response.ok) throw new Error();
     const { records } = await response.json();
+    if (loadId !== foodEntriesLoadId) return;
     if (!Array.isArray(records)) throw new Error();
     renderFoodEntries(records);
   } catch {
+    if (loadId !== foodEntriesLoadId) return;
     list.textContent = 'No se pudieron cargar los alimentos guardados.';
     notifyApp('No se pudieron cargar los alimentos guardados.', 'error');
   } finally {
-    list.setAttribute('aria-busy', 'false');
+    if (loadId === foodEntriesLoadId) list.setAttribute('aria-busy', 'false');
   }
 }
 

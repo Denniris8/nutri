@@ -18,7 +18,7 @@ const { deleteFoodOpenCodeSession, openCodeRequest: defaultOpenCodeRequest, reco
 const { buildChefNutritionContext, deleteChefSession, sendChefMessage } = require('./api/chef-chat.js');
 const { recordApplicationError } = require('./api/application-errors.js');
 const { sendPasswordRecoveryEmail: defaultSendPasswordRecoveryEmail, sendVerificationEmail: defaultSendVerificationEmail } = require('./api/email.js');
-const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, getTrainingProgress, readTrainingPlanPrompt, refineTrainingPlan, reportTrainingProgress } = require('./api/training-analysis.js');
+const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, getTrainingProgress, readTrainingPlanDraft, readTrainingPlanPrompt, refineTrainingPlan, reportTrainingProgress } = require('./api/training-analysis.js');
 const { createAnalysisProgressRecorder } = require('./api/analysis-progress.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailyStepData, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
 const { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
@@ -1160,7 +1160,7 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
           previousTrainingPlanSummary: summarizeTrainingPlan(previousPlanRow ? JSON.parse(previousPlanRow) : null),
         };
         reportTrainingProgress(claims.sub, data.progressId, 'plan_context_ready', progressRecorder.record);
-        const generated = await generateTrainingPlan({ userId: claims.sub, goals: data && typeof data === 'object' ? data.goals : undefined, context, progressId: data.progressId, progressRecorder, requestOpenCode: openCodeRequest });
+        const generated = await generateTrainingPlan({ userId: claims.sub, goals: data && typeof data === 'object' ? data.goals : undefined, context, recoverySecret: jwtSecret, progressId: data.progressId, progressRecorder, requestOpenCode: openCodeRequest });
         reportTrainingProgress(claims.sub, data.progressId, 'plan_complete', progressRecorder.record);
         await progressRecorder.flush();
         if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'generado', title: 'Plan generado, aún sin guardar', message: 'Tu plan está listo para revisar y guardar.', dbQuery, textSql }); } catch {}
@@ -1187,6 +1187,22 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
       return;
     }
 
+    if (pathname === '/api/training-plan/restore') {
+      if (request.method !== 'POST') { response.writeHead(405, { Allow: 'POST' }).end(); return; }
+      if (!sameOrigin(request)) { authError(response, 403, 'Solicitud no permitida.'); return; }
+      let claims;
+      try { claims = await authenticated(request); }
+      catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
+      if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
+      if (!allowAttempt(request, response, 'training-plan-restore')) return;
+      try {
+        const data = await bodyJson(request, 524288);
+        const draft = readTrainingPlanDraft(claims.sub, data.draftToken, jwtSecret);
+        json(response, 200, { plan: draft.plan, macros: draft.macros, goals: draft.goals, runId: draft.runId, expiresAt: draft.expiresAt });
+      } catch (error) { authError(response, error.status || 400, error.status === 409 ? error.message : 'No se pudo recuperar el borrador.'); }
+      return;
+    }
+
     if (pathname === '/api/training-plan/refine') {
       if (request.method !== 'POST') { response.writeHead(405, { Allow: 'POST' }).end(); return; }
       if (!sameOrigin(request)) { authError(response, 403, 'Solicitud no permitida.'); return; }
@@ -1196,7 +1212,7 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
       catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
       if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
       let data;
-      try { data = await bodyJson(request); }
+      try { data = await bodyJson(request, 524288); }
       catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
       if (data.progressId != null && (typeof data.progressId !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(data.progressId))) {
         authError(response, 400, 'Solicitud de progreso no válida.'); return;
@@ -1204,7 +1220,7 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
       const progressRecorder = createAnalysisProgressRecorder({ dbQuery, textSql, userId: claims.sub, flow: 'plan', operationId: data.progressId || randomUUID() });
       try {
         reportTrainingProgress(claims.sub, data.progressId, 'plan_context_started', progressRecorder.record);
-        const refined = await refineTrainingPlan({ userId: claims.sub, runId: data.runId, changes: data.changes, progressId: data.progressId, progressRecorder, requestOpenCode: openCodeRequest });
+        const refined = await refineTrainingPlan({ userId: claims.sub, runId: data.runId, changes: data.changes, draftToken: data.draftToken, recoverySecret: jwtSecret, progressId: data.progressId, progressRecorder, requestOpenCode: openCodeRequest });
         reportTrainingProgress(claims.sub, data.progressId, 'plan_complete', progressRecorder.record);
         await progressRecorder.flush();
         json(response, 200, refined);
@@ -1444,6 +1460,7 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
 
     if (request.method !== 'GET' && request.method !== 'HEAD') { response.writeHead(405, { Allow: 'GET, HEAD' }).end(); return; }
     if (!files.has(pathname)) { response.writeHead(404).end('Not found'); return; }
+    let storageScope = '';
     if (['/', '/login.html', '/dashboard_nutricional.html', '/preferencias.html', '/terminos.html'].includes(pathname)) {
       let claims;
       try { claims = await authenticated(request); }
@@ -1458,6 +1475,7 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
           return;
         }
       } else {
+        storageScope = createHmac('sha256', jwtSecret).update(`draft-storage:${claims.sub}`).digest('hex');
         let destination;
         try { destination = await onboardingPath(claims.sub); }
         catch { response.writeHead(503).end('Servicio temporalmente no disponible'); return; }
@@ -1467,7 +1485,7 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
     }
     try {
       let body = await readFile(path.join(__dirname, files.get(pathname)));
-      if (pathname === '/dashboard_nutricional.html') body = Buffer.from(body.toString().replace('__APP_VERSION__', appVersion));
+      if (pathname === '/dashboard_nutricional.html') body = Buffer.from(body.toString().replace('__APP_VERSION__', appVersion).replace('__DRAFT_STORAGE_SCOPE__', storageScope));
       const versionedAsset = /\.(?:css|js)$/.test(pathname) && /[?&]v=[^&]+/.test(request.url);
       response.writeHead(200, { 'Content-Type': contentTypes[path.extname(files.get(pathname))], 'Content-Length': body.length, 'Cache-Control': versionedAsset ? 'public, max-age=31536000, immutable' : 'no-store' });
       response.end(request.method === 'HEAD' ? undefined : body);

@@ -312,10 +312,14 @@ COMMIT;`);
     const saved = await dbQuery(`SELECT JSON_OBJECT('id',id,'requestId',request_id,'description',descripcion,'activity',actividad,'durationMinutes',duracion_minutos,'weightKg',peso_kg,'met',met,'caloriesKcal',energia_kcal,'garminIncluded',garmin_incluido_en_active,'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ')) FROM registros_entrenamientos WHERE id=${entryId} AND usuario_id=${userId} LIMIT 1;`);
     if (!saved) throw Object.assign(new Error('training_readback_missing'), { code: 'TRAINING_PERSISTENCE_VERIFY_FAILED' });
     const persisted = JSON.parse(saved);
+    const explicitTime = entry.savedAt || parseTrainingSavedTime(entry.description).value;
+    const timeMismatch = explicitTime && createdAt && persisted.createdAt !== `${createdAt.replace(' ', 'T')}Z`;
+    const dateMismatch = nutritionDate && localCalendarDate(calendarTimezone, new Date(persisted.createdAt)) !== nutritionDate;
     if (persisted.requestId !== entry.requestId || persisted.description !== entry.description
       || persisted.activity !== entry.activity || Number(persisted.durationMinutes) !== entry.durationMinutes
       || Number(persisted.weightKg) !== entry.weightKg || Number(persisted.met) !== entry.met
-      || Number(persisted.caloriesKcal) !== entry.caloriesKcal || Boolean(Number(persisted.garminIncluded)) !== garminIncluded) {
+      || Number(persisted.caloriesKcal) !== entry.caloriesKcal || Boolean(Number(persisted.garminIncluded)) !== garminIncluded
+      || timeMismatch || dateMismatch) {
       json(response, 409, { error: 'La clave de reintento ya corresponde a otro registro.' });
       return;
     }

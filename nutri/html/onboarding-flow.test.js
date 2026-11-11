@@ -42,7 +42,7 @@ class Element {
 
 const settle = async () => { for (let turn = 0; turn < 10; turn += 1) await new Promise(setImmediate); };
 
-function loadFlow(search = '', fetchOverride) {
+function loadFlow(search = '', fetchOverride, options = {}) {
   const ids = [
     'loginForm', 'loginEmail', 'loginPassword', 'forgotPasswordButton', 'registerForm', 'errorMessage', 'cancelRegister',
     'recoveryRequestForm', 'recoveryEmail', 'cancelRecoveryRequest', 'resetPasswordForm', 'newPassword', 'confirmNewPassword', 'cancelPasswordReset',
@@ -64,7 +64,7 @@ function loadFlow(search = '', fetchOverride) {
     'appNoticeDialog', 'appNoticeText', 'foodButtonLoading', 'editUnitSystem',
     'chefDialog', 'chefForm', 'chefChatMessages', 'chefMessage', 'chefSendButton', 'chefLoading', 'chefFeedback', 'chefButton',
   ];
-  const elements = Object.fromEntries(ids.map((id) => [`#${id}`, new Element()]));
+  const elements = { ...Object.fromEntries([...ids, ...(options.ids || [])].map((id) => [`#${id}`, new Element()])), ...options.elements };
   elements['.mode-buttons'] = new Element();
   elements['#testDataNotice'].hidden = true;
   const modeButtons = ['login', 'register'].map((mode) => {
@@ -85,6 +85,7 @@ function loadFlow(search = '', fetchOverride) {
   };
   const fetch = fetchOverride || defaultFetch;
   const document = {
+    body: { dataset: { draftStorageScope: options.scope || 'a'.repeat(64) } },
     addEventListener() {},
     querySelector: (selector) => elements[selector] || null,
     querySelectorAll: (selector) => selector === '[data-mode]' ? modeButtons : [],
@@ -92,9 +93,12 @@ function loadFlow(search = '', fetchOverride) {
   };
   const window = { fetch, addEventListener() {}, location: { href: `http://localhost/dashboard_nutricional.html${search}`, search, pathname: '/dashboard_nutricional.html', assign: (url) => destinations.push(url) } };
   const source = readFileSync(require.resolve('./onboarding-flow.js'), 'utf8');
-  const Intl = { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'America/Mexico_City' }) }) };
-  vm.runInNewContext(source, { document, window, fetch, Intl, URL, URLSearchParams, navigator: { wakeLock: null }, setTimeout: (callback, ms) => { if (ms <= 1500) setImmediate(callback); return 0; }, clearTimeout() {}, crypto: { randomUUID: () => '123e4567-e89b-42d3-a456-426614174000', getRandomValues: (bytes) => bytes.fill(1) } });
-  return { elements, modeButtons, destinations, requests };
+  const testIntl = options.intl || { DateTimeFormat: () => ({ resolvedOptions: () => ({ timeZone: 'America/Mexico_City' }) }) };
+  const storage = options.storage || new Map();
+  const sessionStorage = { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value), removeItem: (key) => storage.delete(key) };
+  const context = vm.createContext({ document, window, fetch, Intl: testIntl, sessionStorage, AbortController, URL, URLSearchParams, navigator: { wakeLock: null }, setTimeout: (callback, ms) => { if (ms <= 1500) setImmediate(callback); return 0; }, clearTimeout() {}, crypto: { randomUUID: () => '123e4567-e89b-42d3-a456-426614174000', getRandomValues: (bytes) => bytes.fill(1) } });
+  vm.runInContext(source, context);
+  return { elements, modeButtons, destinations, requests, storage, evaluate: (code) => vm.runInContext(code, context) };
 }
 
 test('registration sends account details and navigates into the authenticated app', async () => {
@@ -355,6 +359,160 @@ test('food modal shows a safe OpenCode transport error without trace details', a
   assert.match(elements['#foodEntryFeedback'].textContent, /El servicio no respondió/);
   assert.equal(elements['#saveFoodButton'].disabled, false);
   assert.equal(elements['#foodLoading'].hidden, true);
+});
+
+test('temporary food errors retain the message and retry the identical payload', async () => {
+  const posts = [];
+  const { elements } = loadFlow('', async (url, options = {}) => {
+    if (url !== '/api/food-entries') return { ok: true, json: async () => ({}) };
+    posts.push(options.body);
+    return posts.length === 1
+      ? { ok: false, status: 503, json: async () => ({ error: 'Servicio temporalmente no disponible.' }) }
+      : { ok: true, json: async () => ({ records: [], messages: [], state: 'completado', message: 'Guardado.' }) };
+  });
+  await elements['#registerFoodButton'].dispatch('click');
+  elements['#foodDescription'].value = '150 g de pollo';
+  await elements['#registerFoodForm'].dispatch('submit');
+  await settle();
+  const message = elements['#foodChatMessages'].children.find((node) => node.dataset.role === 'user');
+  assert.ok(message);
+  const retry = message.children.find((node) => node.className === 'button-muted food-chat-retry');
+  assert.ok(retry);
+  await retry.dispatch('click');
+  await settle();
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0], posts[1]);
+});
+
+test('stale food responses cannot replace a more recent list or saved result', async () => {
+  const pending = [];
+  const flow = loadFlow('', async (url) => url.startsWith('/api/food-entries?')
+    ? new Promise((resolve) => pending.push(resolve))
+    : { ok: true, json: async () => ({}) });
+  const list = new Element();
+  flow.elements['#foodEntriesList'] = list;
+  flow.evaluate('renderFoodEntries = (records) => { globalThis.renderedRecords = records; }');
+  const first = flow.evaluate("loadFoodEntries('2026-11-09')");
+  const second = flow.evaluate("loadFoodEntries('2026-11-10')");
+  pending[1]({ ok: true, json: async () => ({ records: [{ id: 'new' }] }) });
+  await second;
+  pending[0]({ ok: true, json: async () => ({ records: [{ id: 'old' }] }) });
+  await first;
+  assert.equal(flow.evaluate('renderedRecords[0].id'), 'new');
+  const third = flow.evaluate("loadFoodEntries('2026-11-10')");
+  flow.evaluate("foodEntriesLoadId += 1; renderFoodEntries([{ id: 'saved' }]);");
+  pending[2]({ ok: true, json: async () => ({ records: [{ id: 'before-save' }] }) });
+  await third;
+  assert.equal(flow.evaluate('renderedRecords[0].id'), 'saved');
+});
+
+test('stopping training progress does not wait for a hung request', async () => {
+  let signal;
+  const flow = loadFlow('', (url, options) => url.startsWith('/api/training-progress?')
+    ? (signal = options.signal, new Promise(() => {}))
+    : Promise.resolve({ ok: true, json: async () => ({}) }));
+  const progress = flow.evaluate("startTrainingProgress('test', () => document.createElement('div'))");
+  await progress.stop('Terminado.');
+  assert.equal(signal.aborted, true);
+});
+
+test('temporary drafts survive a reload, expire, and are isolated by account', () => {
+  const storage = new Map();
+  const first = loadFlow('', undefined, { storage });
+  first.evaluate("draftStorage('plan', { draftToken: 'signed', expiresAt: Date.now() + 60000 })");
+  const restored = loadFlow('', undefined, { storage });
+  assert.equal(restored.evaluate("draftStorage('plan').draftToken"), 'signed');
+  const other = loadFlow('', undefined, { storage, scope: 'b'.repeat(64) });
+  assert.equal(other.evaluate("draftStorage('plan')"), null);
+  first.evaluate("draftStorage('plan', { draftToken: 'expired', expiresAt: Date.now() - 1 })");
+  assert.equal(restored.evaluate("draftStorage('plan')"), null);
+});
+
+test('a pending training save survives reload and retries without another model analysis', async () => {
+  const storage = new Map();
+  const ids = ['trainingModal', 'addTrainingButton', 'trainingDescription', 'trainingAnalyzeButton', 'trainingLoading', 'trainingLoadingText', 'trainingFeedback', 'trainingChatMessages', 'syncGarminTrainingButton', 'trainingModeToggle', 'trainingDescriptionFields', 'trainingButtonLoading'];
+  const posts = [];
+  let analyses = 0;
+  const fetch = async (url, options = {}) => {
+    if (url === '/api/training-analysis') {
+      analyses += 1;
+      return { ok: true, json: async () => ({ analysis: {
+        trainingSession: true, activity: 'Correr', durationMinutes: 30, weightKg: 70, met: 7,
+        caloriesKcal: 257.3, saveTimeStatus: 'none', biometricContext: { latestWeightKg: 70 }, formula: 'MET × peso × duración',
+      } }) };
+    }
+    if (url === '/api/training-entries') {
+      posts.push(options.body);
+      return posts.length === 1
+        ? { ok: false, status: 503, json: async () => ({ error: 'No se pudo verificar el guardado.' }) }
+        : { ok: true, status: 201, json: async () => ({ savedAt: '11:00' }) };
+    }
+    return { ok: true, json: async () => ({}) };
+  };
+  const first = loadFlow('', fetch, { ids, storage, intl: Intl });
+  await settle();
+  first.elements['#trainingChatMessages'].querySelectorAll = () => (first.elements['#trainingChatMessages'].children || [])
+    .filter((node) => node.dataset.role === 'user').map((node) => node.children.find((child) => child.className === 'food-chat-text'));
+  first.elements['#trainingDescription'].value = 'Corrí 30 minutos';
+  first.elements['#daySelect'].value = '2026-11-10';
+  first.evaluate('trainingSessionReady = true;');
+  await first.elements['#trainingAnalyzeButton'].dispatch('click');
+  assert.equal(first.elements['#trainingAnalyzeButton'].textContent, 'Reintentar guardado');
+  assert.equal(JSON.parse(posts[0]).description, 'Corrí 30 minutos');
+  assert.equal(JSON.parse(posts[0]).date, '2026-11-10');
+  assert.match(JSON.parse(posts[0]).savedAt, /^\d{2}:\d{2}$/);
+  const reloaded = loadFlow('', fetch, { ids, storage });
+  reloaded.evaluate('trainingSessionReady = true;');
+  await reloaded.elements['#trainingAnalyzeButton'].dispatch('click');
+  assert.equal(analyses, 1);
+  assert.equal(posts.length, 2);
+  assert.equal(posts[0], posts[1]);
+  assert.equal(reloaded.evaluate("draftStorage('training')"), null);
+});
+
+test('generating and saving a plan never replaces the active dashboard targets', async () => {
+  const ids = ['trainingPlanGoals', 'sendTrainingPlanGoals', 'saveTrainingPlan', 'goToSavedTrainingPlans', 'trainingPlanDialog', 'createTrainingPlanButton', 'trainingPlanButtonLoading', 'planChatMessages', 'planLoading', 'planSummaryText', 'savedTrainingPlans'];
+  const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
+  const flow = loadFlow('', async (url) => ({ ok: true, json: async () =>
+    url === '/api/training-plan' ? { plan: 'Borrador', macros, runId: 'draft', draftToken: 'signed', expiresAt: Date.now() + 60000 }
+      : url === '/api/training-plans' ? { id: '41', createdAt: '2026-11-10T17:00:00Z', plans: [] } : {} }),
+  { ids, intl: Intl, elements: { 'label[for="trainingPlanGoals"]': new Element() } });
+  await settle();
+  flow.evaluate('selectedActiveTrainingPlan = { macros: { calorias_kcal: 1800 } }; setTrainingPlanTargets(selectedActiveTrainingPlan.macros);');
+  flow.elements['#trainingPlanGoals'].value = 'Ganar fuerza';
+  await flow.elements['#sendTrainingPlanGoals'].dispatch('click');
+  assert.equal(flow.evaluate('trainingPlanTargets.calorias_kcal'), 1800);
+  assert.equal(flow.evaluate('generatedTrainingMacros.calorias_kcal'), 2000);
+  await flow.elements['#saveTrainingPlan'].dispatch('click');
+  assert.equal(flow.evaluate('savedTrainingPlan'), true);
+  assert.equal(flow.evaluate('trainingPlanTargets.calorias_kcal'), 1800);
+  assert.equal(flow.evaluate("draftStorage('plan')"), null);
+});
+
+test('reopening plans restores a signed backup before displaying it or requesting changes', async () => {
+  const ids = ['trainingPlanGoals', 'sendTrainingPlanGoals', 'saveTrainingPlan', 'goToSavedTrainingPlans', 'trainingPlanDialog', 'createTrainingPlanButton', 'trainingPlanButtonLoading', 'planChatMessages', 'planLoading', 'planSummaryText'];
+  const storage = new Map();
+  const initial = loadFlow('', undefined, { storage });
+  initial.evaluate("draftStorage('plan', { draftToken: 'signed-backup', expiresAt: Date.now() + 60000 })");
+  const calls = [];
+  const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
+  const restored = loadFlow('', async (url, options = {}) => {
+    calls.push([url, options]);
+    return { ok: true, json: async () => url === '/api/training-plan/restore'
+      ? { plan: 'Borrador recuperado', goals: 'Ganar fuerza', macros, runId: 'draft' }
+      : url === '/api/training-plan/refine'
+        ? { plan: 'Borrador modificado', macros, runId: 'draft', draftToken: 'updated-backup', expiresAt: Date.now() + 60000 } : {} };
+  }, { ids, storage, intl: Intl, elements: { 'label[for="trainingPlanGoals"]': new Element() } });
+  await restored.elements['#createTrainingPlanButton'].dispatch('click');
+  assert.equal(restored.elements['#trainingPlanDialog'].open, true);
+  assert.equal(restored.evaluate('generatedTrainingPlan'), 'Borrador recuperado');
+  assert.equal(restored.evaluate('generatedTrainingGoals'), 'Ganar fuerza');
+  restored.elements['#trainingPlanGoals'].value = 'Tres días';
+  await restored.elements['#sendTrainingPlanGoals'].dispatch('click');
+  const refine = calls.find(([url]) => url === '/api/training-plan/refine');
+  assert.equal(JSON.parse(refine[1].body).draftToken, 'signed-backup');
+  assert.equal(calls.some(([url]) => url === '/api/training-plan'), false);
+  assert.equal(restored.evaluate("draftStorage('plan').draftToken"), 'updated-backup');
 });
 
 test('clarification applies multiple preview edits together in the reply composer', async () => {

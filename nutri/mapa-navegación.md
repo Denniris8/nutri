@@ -41,6 +41,7 @@
 | Chat del chef | `chef-chat.js` | `chef-chat.test.js` |
 | Análisis y registro de entrenamientos, pasos y energía | `training-entries.js` | `training-entries.test.js`, `server.test.js` |
 | Planes: generación, refinamiento y sesión pendiente | `training-analysis.js` | `training-analysis.test.js`, `training-plan.test.js`, `server.test.js` |
+| Recuperación temporal de planes (24 h), firma y propiedad del respaldo | `training-analysis.js`; `POST /api/training-plan/restore` en `server.js`; `draftStorage()` en `onboarding-flow.js` | `training-plan.test.js`, `server.test.js`, `onboarding-flow.test.js` |
 | Validación, guardado, activación y lectura de planes | `training-plans.js` | `training-plans.test.js`, `server.test.js` |
 | Fechas y zona horaria del calendario | `calendar-day.js` | `calendar-day.test.js` |
 | Notificaciones | `notifications.js` | `notifications.test.js`, `server.test.js` |
@@ -49,6 +50,8 @@
 | Correo de verificación y recuperación | `email.js` | `email.test.js`, `server.test.js` |
 
 `html/server.test.js` cubre integración de rutas y flujos HTTP. Los módulos con sufijo `.test.js` junto al código cubren lógica más acotada.
+
+Los reintentos de guardado de entrenamientos reutilizan el payload completo en `savePendingTraining()` sin volver a analizar. Su respaldo y el de planes viven en `sessionStorage`, separados por cuenta mediante un ámbito opaco insertado por el servidor en el dashboard; no son registros definitivos ni se trasladan entre navegadores. El respaldo de planes incluye firma, propiedad y vencimiento; no expone IDs de sesión OpenCode. Cambiar la clave JWT invalida estos respaldos.
 
 `html/api/food-entry-flow.test.js` distingue la orquestación simulada de la prueba optativa de análisis real de salchicha/tortillas/huevo (`NUTRI_TEST_REAL_EGG_ANALYSIS=1`). Esta última envía el texto original, imprime la respuesta y usa una sesión temporal de diagnóstico sin cuenta ni escrituras MySQL; no prueba autenticación ni persistencia real. Requiere autorización antes de ejecutarla y consume una solicitud real al modelo configurado.
 

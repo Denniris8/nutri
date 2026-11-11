@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { deleteTrainingPlanSession, generateTrainingPlan, parseTrainingPlanReply, readTrainingPlanPrompt } = require('./training-analysis.js');
+const { deleteTrainingPlanSession, generateTrainingPlan, issueTrainingPlanDraft, readTrainingPlanDraft, refineTrainingPlan, parseTrainingPlanReply, readTrainingPlanPrompt } = require('./training-analysis.js');
 const disclosure = 'Las metas de calorías y carbohidratos se ajustan según los entrenamientos registrados para el día seleccionado.';
 const planPrompt = `presenta los macros; añade literalmente esta frase: “${disclosure}”`;
 const macroTable = '| Nutriente | Meta diaria de reposo |\n|---|---:|\n| Proteínas | 140 g |\n| Carbohidratos | 220 g |\n| Grasas | 65 g |\n| Calorías | 2000 kcal |';
@@ -68,4 +68,40 @@ test('canonical prompt treats injection strings as data and defines bounded meas
   assert.match(prompt, /máximo 24 registros/);
   assert.match(prompt, /al menos 3 mediciones comparables/);
   assert.match(prompt, /La ausencia de datos clínicos no equivale a ausencia de riesgos/);
+});
+
+test('plan backups reject tampering, expiry, other users and other signing secrets', () => {
+  const secret = 'test-only-plan-recovery-secret-123456789';
+  const pending = { runId: 'draft', goals: 'Fuerza', plan: planText, macros: {}, context: {}, expiresAt: Date.now() + 60000 };
+  const token = issueTrainingPlanDraft('9011', pending, secret);
+  assert.equal(readTrainingPlanDraft('9011', token, secret).plan, planText);
+  assert.throws(() => readTrainingPlanDraft('9012', token, secret), { status: 409 });
+  assert.throws(() => readTrainingPlanDraft('9011', `${token}x`, secret), { status: 409 });
+  assert.throws(() => readTrainingPlanDraft('9011', token, 'other-secret'), { status: 409 });
+  assert.throws(() => readTrainingPlanDraft('9011', issueTrainingPlanDraft('9011', { ...pending, expiresAt: Date.now() - 1 }, secret), secret), { status: 409 });
+});
+
+test('a signed plan can be refined after losing server memory without exposing or accepting session ids', async () => {
+  const userId = '9013';
+  const recoverySecret = 'test-only-plan-recovery-secret-123456789';
+  const context = { profile: { age: 32 }, biometricRecords: [], plicometricRecords: [] };
+  const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
+  const calls = [];
+  const requestOpenCode = async (method, endpoint, body) => {
+    calls.push({ method, endpoint, body });
+    if (endpoint === '/session') return { status: 201, data: { id: 'ses_recovery9013' } };
+    if (method === 'DELETE') return { status: 204 };
+    return { status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({ macros_objetivo: macros, plan_markdown: planText }) }] } };
+  };
+  const readConfig = async () => ({ requestTimeoutMs: 1000 });
+  const generated = await generateTrainingPlan({ userId, goals: 'Fuerza', context, recoverySecret, requestOpenCode, readConfig });
+  const backup = readTrainingPlanDraft(userId, generated.draftToken, recoverySecret);
+  assert.equal(backup.sessionId, undefined);
+  await deleteTrainingPlanSession({ userId, requestOpenCode });
+  const refined = await refineTrainingPlan({ userId, runId: generated.runId, draftToken: generated.draftToken, recoverySecret, changes: 'Tres días', requestOpenCode, readConfig });
+  assert.equal(refined.runId, generated.runId);
+  assert.equal(readTrainingPlanDraft(userId, refined.draftToken, recoverySecret).plan, planText);
+  assert.equal(calls.filter((call) => call.endpoint === '/session').length, 2);
+  assert.equal(JSON.parse(calls.at(-1).body.parts[0].text).borradorActual.plan_markdown, planText);
+  await deleteTrainingPlanSession({ userId, requestOpenCode });
 });

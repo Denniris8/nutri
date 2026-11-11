@@ -1,4 +1,4 @@
-const { createHash, randomUUID } = require('node:crypto');
+const { createHash, createHmac, randomUUID, timingSafeEqual } = require('node:crypto');
 const path = require('node:path');
 const { readFile } = require('node:fs/promises');
 const { openCodeRequest, readFoodSessionConfig } = require('./opencode-food.js');
@@ -15,6 +15,28 @@ const planLocks = new Map();
 const progress = new Map();
 const trainingPromptPath = path.resolve(__dirname, '../../comportamiento-sesion-entrenamientos.md');
 const trainingPlanPromptPath = path.resolve(__dirname, '../../comportamiento-sesion-plan.md');
+
+function issueTrainingPlanDraft(userId, pending, secret) {
+  if (!secret) return undefined;
+  const { runId, goals, context, plan, macros, expiresAt } = pending;
+  const payload = Buffer.from(JSON.stringify({ userId: String(userId), runId, goals, context, plan, macros, expiresAt })).toString('base64url');
+  const signature = createHmac('sha256', secret).update(`training-plan-draft-v1:${payload}`).digest('base64url');
+  return `${payload}.${signature}`;
+}
+
+function readTrainingPlanDraft(userId, token, secret) {
+  const invalid = () => Object.assign(new Error('El borrador venció o no pertenece a esta cuenta. Genera un plan nuevo.'), { status: 409 });
+  if (!secret || typeof token !== 'string' || token.length > 500000) throw invalid();
+  const [payload, signature, extra] = token.split('.');
+  if (!payload || !signature || extra) throw invalid();
+  const expected = createHmac('sha256', secret).update(`training-plan-draft-v1:${payload}`).digest();
+  const actual = Buffer.from(signature, 'base64url');
+  if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) throw invalid();
+  let draft;
+  try { draft = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); } catch { throw invalid(); }
+  if (draft.userId !== String(userId) || !Number.isFinite(draft.expiresAt) || draft.expiresAt <= Date.now()) throw invalid();
+  return draft;
+}
 
 function reportTrainingProgress(userId, progressId, event, recordEvent) {
   recordEvent?.(event);
@@ -266,7 +288,7 @@ async function deleteTrainingSession({ userId, requestOpenCode = openCodeRequest
 async function closePendingPlanSession(userId, requestOpenCode, runId) {
   const pending = pendingPlanSessions.get(userId);
   if (!pending || runId && pending.runId !== runId) return false;
-  const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(pending.sessionId)}`);
+  const deleted = pending.sessionId ? await requestOpenCode('DELETE', `/session/${encodeURIComponent(pending.sessionId)}`) : { status: 204 };
   if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) {
     throw Object.assign(new Error('No se pudo cerrar la sesión del plan.'), { code: 'TRAINING_PLAN_SESSION_CLEANUP' });
   }
@@ -280,25 +302,46 @@ async function deleteTrainingPlanSession({ userId, runId, requestOpenCode = open
   return withUserLock(id, () => closePendingPlanSession(id, requestOpenCode, runId), planLocks);
 }
 
-async function refineTrainingPlan({ userId, runId, changes, progressId, progressRecorder, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
+async function refineTrainingPlan({ userId, runId, changes, draftToken, recoverySecret, progressId, progressRecorder, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
   const id = String(userId);
   const text = typeof changes === 'string' ? changes.trim() : '';
   if (!/^\d+$/.test(id) || typeof runId !== 'string' || !text || text.length > 2000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(text)) {
     throw Object.assign(new Error('Describe los cambios que quieres hacer (máximo 2000 caracteres).'), { status: 400 });
   }
   return withUserLock(id, async () => {
-    const pending = pendingPlanSessions.get(id);
+    let pending = pendingPlanSessions.get(id);
+    if (!pending && draftToken) {
+      const draft = readTrainingPlanDraft(id, draftToken, recoverySecret);
+      if (draft.runId !== runId) throw Object.assign(new Error('El borrador no coincide con la solicitud.'), { status: 409 });
+      pending = { ...draft, sessionId: null };
+      pendingPlanSessions.set(id, pending);
+    }
     if (!pending || pending.runId !== runId) throw Object.assign(new Error('El borrador ya no está disponible. Genera un plan nuevo.'), { status: 409 });
+    if (pending.expiresAt <= Date.now()) throw Object.assign(new Error('El borrador venció. Genera un plan nuevo.'), { status: 409 });
     const config = await readConfig();
     const systemPrompt = await readTrainingPlanPrompt();
     const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
+    const openSession = async () => {
+      const created = await requestOpenCode('POST', '/session', {
+        title: 'Plan de entrenamiento recuperado', permission: permissions,
+        metadata: { trainingPlanUserId: id },
+      }, config.requestTimeoutMs);
+      if (created.status < 200 || created.status >= 300 || !/^ses_[A-Za-z0-9_-]{4,120}$/.test(created.data?.id || '')) throw Object.assign(new Error('No se pudo recuperar la sesión del plan.'), { upstream: true });
+      pending.sessionId = created.data.id;
+    };
+    if (!pending.sessionId) await openSession();
     reportTrainingProgress(id, progressId, 'plan_sent', progressRecorder?.record);
     const send = async (correccionFormato) => {
-      const result = await requestOpenCode('POST', `/session/${encodeURIComponent(pending.sessionId)}/message`, {
+      const body = {
         system: systemPrompt, tools: {}, ...(model ? { model } : {}),
         ...(config.agent ? { agent: config.agent } : {}), ...(config.variant ? { variant: config.variant } : {}),
         parts: [{ type: 'text', text: JSON.stringify({ goals: pending.goals, context: pending.context, borradorActual: { plan_markdown: pending.plan, macros_objetivo: pending.macros }, cambiosSolicitados: text, ...(correccionFormato ? { correccionFormato } : {}) }) }],
-      }, config.requestTimeoutMs);
+      };
+      let result = await requestOpenCode('POST', `/session/${encodeURIComponent(pending.sessionId)}/message`, body, config.requestTimeoutMs);
+      if (result.status === 404) {
+        await openSession();
+        result = await requestOpenCode('POST', `/session/${encodeURIComponent(pending.sessionId)}/message`, body, config.requestTimeoutMs);
+      }
       if (result.status < 200 || result.status >= 300) throw Object.assign(new Error('No se pudo actualizar el plan.'), { upstream: true });
       reportTrainingProgress(id, progressId, 'plan_received', progressRecorder?.record);
       return parseTrainingPlanReply(result.data?.parts || [], systemPrompt, pending.context);
@@ -311,11 +354,11 @@ async function refineTrainingPlan({ userId, runId, changes, progressId, progress
     }
     pending.plan = refined.plan;
     pending.macros = refined.macros;
-    return { ...refined, runId };
+    return { ...refined, runId, draftToken: issueTrainingPlanDraft(id, pending, recoverySecret), expiresAt: pending.expiresAt };
   }, planLocks);
 }
 
-async function generateTrainingPlan({ userId, goals, context, progressId, progressRecorder, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
+async function generateTrainingPlan({ userId, goals, context, recoverySecret, progressId, progressRecorder, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
   const id = String(userId);
   const text = typeof goals === 'string' ? goals.trim() : '';
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta autenticada no válida.'), { status: 400 });
@@ -371,9 +414,10 @@ async function generateTrainingPlan({ userId, goals, context, progressId, progre
         plan = await generate(`Corrige la respuesta anterior: ${String(error.message).slice(0, 300)} Devuelve únicamente el JSON completo requerido.`);
       }
       const runId = randomUUID();
-      pendingPlanSessions.set(id, { sessionId, runId, goals: text, context, plan: plan.plan, macros: plan.macros });
+      const pending = { sessionId, runId, goals: text, context, plan: plan.plan, macros: plan.macros, expiresAt: Date.now() + 24 * 60 * 60 * 1000 };
+      pendingPlanSessions.set(id, pending);
       retained = true;
-      return { ...plan, runId };
+      return { ...plan, runId, draftToken: issueTrainingPlanDraft(id, pending, recoverySecret), expiresAt: pending.expiresAt };
     } catch (error) {
       failure = error;
       throw error;
@@ -388,4 +432,4 @@ async function generateTrainingPlan({ userId, goals, context, progressId, progre
   }, planLocks);
 }
 
-module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, extractExplicitSteps, generateTrainingPlan, getTrainingProgress, parseReply, parseTrainingPlanReply, readTrainingPlanPrompt, refineTrainingPlan, reportTrainingProgress };
+module.exports = { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, extractExplicitSteps, generateTrainingPlan, getTrainingProgress, issueTrainingPlanDraft, readTrainingPlanDraft, parseReply, parseTrainingPlanReply, readTrainingPlanPrompt, refineTrainingPlan, reportTrainingProgress };
