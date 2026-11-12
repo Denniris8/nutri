@@ -67,6 +67,7 @@ El borrador de comida se recupera con sus mensajes/candidatos en una ejecución 
 - `esquema-bd.md`: esquema y semántica documentada de tablas.
 - `mysql/migrations/`: cambios persistentes; las migraciones aplicadas son inmutables.
 - `mysql/migrate.sh` → `mysql/migrate.js`: runner con bloqueo MySQL por base y conexión única; pruebas en `mysql/migrate.test.js`.
+- `../pull`: sincroniza el repositorio y solo actualiza/recrea servicios cuando detecta cambios pertinentes; los cambios de migraciones reinician Nutri para aplicarlas, no MySQL.
 - `AGENTS.md`: reglas de trabajo del proyecto.
 - `log.md`: bitácora de cambios.
 

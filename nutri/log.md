@@ -807,3 +807,5 @@
 - 2026-11-06 15:21 CST — Corregido el flujo de comidas: el sondeo de progreso no bloquea el cierre del envío, las respuestas idempotentes incluyen requestId/fecha y borrador con candidatos se persiste en una sola transacción.
 - 2026-11-06 15:38 CST — Corregidos topes que truncaban comidas/entrenamientos de un día y se evita persistir datos Garmin si el timeout vence mientras siguen pendientes las consultas remotas.
 - 2026-11-06 15:43 CST — Incrementada la versión PATCH a `0.1.80` antes del commit.
+- 2026-11-12 15:50 CST — `./pull` ahora clasifica los archivos incluidos en el fast-forward: actualiza MySQL solo ante cambios de su configuración/archivos, reconstruye Nutri solo ante cambios de la aplicación y reinicia Nutri ante migraciones para que las aplique. Sin cambios mantiene `up -d` para iniciar el servicio si estuviera detenido y conserva la recuperación por healthcheck. No se ejecutaron pruebas ni servicios.
+- 2026-11-12 15:51 CST — Incrementada la versión PATCH a `0.1.85` para confirmar el cambio de `./pull`.

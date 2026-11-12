@@ -6,6 +6,29 @@ before=$(git -C "$root" rev-parse HEAD)
 git -C "$root" pull --ff-only
 after=$(git -C "$root" rev-parse HEAD)
 
+mysql_changed=0
+nutri_changed=0
+changed_files=$(git -C "$root" diff --name-only "$before" "$after" -- nutri/ garmin-connect-mcp/)
+while IFS= read -r file; do
+  case "$file" in
+    nutri/mysql/migrations/*|nutri/mysql/migrate.sh|nutri/mysql/migrate.js)
+      nutri_changed=1
+      ;;
+    nutri/mysql/*)
+      mysql_changed=1
+      ;;
+    nutri/docker-compose.yml)
+      mysql_changed=1
+      nutri_changed=1
+      ;;
+    nutri/*|garmin-connect-mcp/*)
+      nutri_changed=1
+      ;;
+  esac
+done <<EOF
+$changed_files
+EOF
+
 mysql_image_version=9.7
 if [ -r /proc/device-tree/model ]; then
   device_model=$(tr -d '\000' < /proc/device-tree/model 2>/dev/null || true)
@@ -20,9 +43,14 @@ compose_nutri() {
   docker compose --project-directory "$root/nutri" -f "$root/nutri/docker-compose.yml" "$@"
 }
 
-# Refresh the database image and the Node base image before recreating services.
-compose_nutri pull mysql
-compose_nutri build --pull nutri
+if [ "$mysql_changed" -eq 1 ]; then
+  compose_nutri pull mysql
+  compose_nutri up -d mysql
+fi
+
+if [ "$nutri_changed" -eq 1 ]; then
+  compose_nutri build --pull nutri
+fi
 
 nutri_container=$(compose_nutri ps --all -q nutri)
 nutri_health=missing
@@ -30,8 +58,8 @@ if [ -n "$nutri_container" ]; then
   nutri_health=$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$nutri_container")
 fi
 
-if ! git -C "$root" diff --quiet "$before" "$after" -- nutri/ garmin-connect-mcp/ || [ "$nutri_health" = unhealthy ]; then
+if [ "$nutri_changed" -eq 1 ] || [ "$nutri_health" = unhealthy ]; then
   compose_nutri up -d --build --force-recreate nutri
 else
-  compose_nutri up -d --build nutri
+  compose_nutri up -d nutri
 fi
