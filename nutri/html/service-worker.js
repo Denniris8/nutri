@@ -1,4 +1,4 @@
-const cacheName = 'nutri-app-shell-v2';
+const cacheName = 'nutri-app-shell-v3';
 const appShell = new Set([
   '/login.html',
   '/dashboard_nutricional.css', '/notifications.css', '/help-popups.css', '/cookie-consent.css', '/cookie-consent.js', '/onboarding-flow.js',
@@ -17,7 +17,7 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET' || url.origin !== self.location.origin || !appShell.has(url.pathname)) return;
   event.respondWith((async () => {
     const cache = await caches.open(cacheName);
-    const key = new Request(`${url.origin}${url.pathname}`);
+    const key = new Request(`${url.origin}${url.pathname}${url.search}`);
     try {
       const response = await fetch(request);
       if (response.ok && !response.redirected) await cache.put(key, response.clone());

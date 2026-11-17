@@ -28,6 +28,9 @@ let redirectingToLogin = false;
 let progressDataCache = null;
 let progressCacheRevision = 0;
 const progressRequests = new Map();
+let biometricTrendsLoadId = 0;
+let biometricTrendsCache = null;
+let biometricTrendsRequest = null;
 const fetchWithSessionRedirect = window.fetch.bind(window);
 window.fetch = async (...args) => {
   const response = await fetchWithSessionRedirect(...args);
@@ -37,6 +40,9 @@ window.fetch = async (...args) => {
     progressDataCache = null;
     progressCacheRevision += 1;
     progressRequests.clear();
+    biometricTrendsCache = null;
+    biometricTrendsRequest?.controller.abort();
+    biometricTrendsRequest = null;
   }
   if (response.status === 401 && location.pathname !== '/login.html' && !redirectingToLogin) {
     const message = await response.clone().json().then((data) => data.error).catch(() => '');
@@ -2569,14 +2575,37 @@ async function loadBiometricTrends(days, end) {
   const container = document.querySelector('#progressBiometricsCharts');
   const panel = container?.closest('.progress-biometrics');
   if (!container) return;
+  const loadId = ++biometricTrendsLoadId;
+  const revision = progressCacheRevision;
+  const cacheKey = `${days}:${end}`;
+  if (biometricTrendsRequest && biometricTrendsRequest.key !== cacheKey) {
+    biometricTrendsRequest.controller.abort();
+    biometricTrendsRequest = null;
+  }
   panel?.setAttribute('aria-busy', 'true');
   try {
     const periodStart = new Date(`${end}T12:00:00Z`);
     periodStart.setUTCDate(periodStart.getUTCDate() - days + 1);
     const start = periodStart.toISOString().slice(0, 10);
-    const response = await fetch(`/api/biometrics?desde=${encodeURIComponent(start)}&hasta=${encodeURIComponent(end)}`, { credentials: 'same-origin' });
-    if (!response.ok) throw new Error();
-    const { records = [] } = await response.json();
+    let records = biometricTrendsCache?.key === cacheKey && Date.now() - biometricTrendsCache.savedAt < 30000
+      ? biometricTrendsCache.records : null;
+    if (!records) {
+      if (!biometricTrendsRequest) {
+        const controller = new AbortController();
+        const promise = fetch(`/api/biometrics?desde=${encodeURIComponent(start)}&hasta=${encodeURIComponent(end)}`, { credentials: 'same-origin', signal: controller.signal })
+          .then(async (response) => {
+            if (!response.ok) throw new Error();
+            const data = await response.json();
+            if (!Array.isArray(data.records)) throw new Error();
+            if (revision === progressCacheRevision && !controller.signal.aborted) biometricTrendsCache = { key: cacheKey, records: data.records, savedAt: Date.now() };
+            return data.records;
+          })
+          .finally(() => { if (biometricTrendsRequest?.promise === promise) biometricTrendsRequest = null; });
+        biometricTrendsRequest = { key: cacheKey, controller, promise };
+      }
+      records = await biometricTrendsRequest.promise;
+    }
+    if (loadId !== biometricTrendsLoadId || revision !== progressCacheRevision) return;
     const periodRecords = records.filter((record) => {
       const date = String(record.measuredAt || '').slice(0, 10);
       return date >= start && date <= end;
@@ -2639,10 +2668,11 @@ async function loadBiometricTrends(days, end) {
     if (!container.childElementCount) container.textContent = 'Aún no hay mediciones biométricas disponibles.';
     document.querySelector('#progressBiometricsCaption').textContent = `Mostrando ${recent.length} de ${periodRecords.length} mediciones del ${start} al ${end} (máximo 5); la línea conecta lecturas observadas, sin interpolar. El espaciado representa el orden de registros, no el tiempo transcurrido; cada lectura indica su fuente.`;
   } catch {
+    if (loadId !== biometricTrendsLoadId || revision !== progressCacheRevision) return;
     container.textContent = 'No se pudieron cargar los registros biométricos.';
     notifyApp('No se pudieron cargar las tendencias biométricas.', 'error');
   } finally {
-    panel?.setAttribute('aria-busy', 'false');
+    if (loadId === biometricTrendsLoadId) panel?.setAttribute('aria-busy', 'false');
   }
 }
 
@@ -3224,10 +3254,16 @@ async function loadFoodEntries(date = document.querySelector('#daySelect')?.valu
 
 if (document.querySelector('#foodEntriesList')) calendarDayReady.then(() => loadFoodEntries());
 
+let dailyStepsLoadId = 0;
+let dailyStepsController;
 async function loadDailySteps(date = dayInput?.value || localDate()) {
   const count = document.querySelector('#dailyStepsCount');
   const energy = document.querySelector('#dailyStepsEnergy');
   if (!count) return;
+  const loadId = ++dailyStepsLoadId;
+  dailyStepsController?.abort();
+  const controller = new AbortController();
+  dailyStepsController = controller;
   const dateLabel = document.querySelector('#dailyStepsDate');
   if (dateLabel) {
     dateLabel.dateTime = date;
@@ -3235,19 +3271,26 @@ async function loadDailySteps(date = dayInput?.value || localDate()) {
   }
   count.setAttribute('aria-busy', 'true');
   try {
-    const response = await fetch(`/api/daily-steps?fecha=${encodeURIComponent(date)}`, { credentials: 'same-origin' });
+    const response = await fetch(`/api/daily-steps?fecha=${encodeURIComponent(date)}`, { credentials: 'same-origin', signal: controller.signal });
     if (!response.ok) throw new Error();
     const result = await response.json();
+    if (loadId !== dailyStepsLoadId) return;
     count.textContent = result.stepsCount == null ? '—' : new Intl.NumberFormat('es-MX').format(result.stepsCount);
     if (energy) energy.textContent = result.caloriesKcal == null
       ? result.stepsCount == null ? '' : result.source === 'garmin' ? '· activeKilocalories Garmin no disponibles' : '· kcal no disponibles (falta peso reciente o estatura)'
       : result.energyMethod === 'garmin_active' ? `· ${new Intl.NumberFormat('es-MX').format(result.caloriesKcal)} kcal activas Garmin`
         : `· ~${new Intl.NumberFormat('es-MX').format(result.caloriesKcal)} kcal estimadas`;
   } catch {
+    if (loadId !== dailyStepsLoadId) return;
     count.textContent = '—';
     if (energy) energy.textContent = '';
     notifyApp('No se pudieron cargar los pasos del día.', 'error');
-  } finally { count.removeAttribute('aria-busy'); }
+  } finally {
+    if (loadId === dailyStepsLoadId) {
+      count.removeAttribute('aria-busy');
+      dailyStepsController = null;
+    }
+  }
 }
 
 if (document.querySelector('#dailyStepsCount')) calendarDayReady.then(() => loadDailySteps());

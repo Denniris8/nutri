@@ -25,7 +25,7 @@
 | Avisos accesibles | `html/notifications.css`; renderizado y eventos en `html/server.js` |
 | Consentimiento de cookies | `html/cookie-consent.js`, `html/cookie-consent.css` |
 | Ayudas emergentes | `html/help-popups.css`; contenido y estructura en `html/dashboard_nutricional.html` |
-| PWA, caché e instalación | `html/manifest.webmanifest`, `html/service-worker.js`, `html/pwa-register.js`, `html/pwa-icon.*` |
+| PWA, caché e instalación | `html/manifest.webmanifest`, `html/service-worker.js`, `html/service-worker.test.js`, `html/pwa-register.js`, `html/pwa-icon.*` |
 
 ## Lógica de API (`html/api/`)
 
@@ -50,6 +50,10 @@
 | Correo de verificación y recuperación | `email.js` | `email.test.js`, `server.test.js` |
 
 `html/server.test.js` cubre integración de rutas y flujos HTTP. Los módulos con sufijo `.test.js` junto al código cubren lógica más acotada.
+
+El servidor calcula hashes de contenido de JS/CSS al arrancar y reescribe sus URLs en las páginas HTML; solo el hash vigente recibe caché immutable. Reiniciar Nutri tras cambiar estáticos; el service worker conserva cada versión por URL completa. `nginx/default.conf` negocia gzip y amplía la espera de respuestas para reintentos del modelo; validar y recargar Nginx al desplegar esa configuración.
+
+Tendencias biométricas: comparten solicitudes idénticas, caché local de 30 s e invalidación tras escrituras API; descartan respuestas antiguas y cancelan periodos reemplazados. Los pasos mantienen su petición independiente y también descartan/cancelan cargas reemplazadas. Notificaciones: listado y contador completo comparten una ejecución MySQL con snapshot de solo lectura. El resumen biométrico agrega ambos periodos desde una lectura de registros; la TMB y su fuente se obtienen de la misma fila.
 
 Los reintentos de guardado de entrenamientos reutilizan el payload completo en `savePendingTraining()` sin volver a analizar. Su respaldo y el de planes viven en `sessionStorage`, separados por cuenta mediante un ámbito opaco insertado por el servidor en el dashboard; no son registros definitivos ni se trasladan entre navegadores. El respaldo de planes incluye firma, propiedad y vencimiento; no expone IDs de sesión OpenCode. Cambiar la clave JWT invalida estos respaldos.
 

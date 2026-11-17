@@ -19,13 +19,17 @@ function resolveNotificationsSql({ userId, category, state = 'requiere_respuesta
 }
 
 async function readNotifications({ userId, dbQuery }) {
-  const [rows, unreadCount] = await Promise.all([
-    dbQuery(`SELECT JSON_OBJECT('id',CAST(id AS CHAR),'category',categoria,'state',estado,'title',titulo,'message',mensaje,'referenceId',CAST(referencia_id AS CHAR),'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ'),'readAt',IF(leida_en IS NULL,NULL,DATE_FORMAT(leida_en,'%Y-%m-%dT%H:%i:%sZ'))) FROM notificaciones_usuario WHERE usuario_id=${userId} ORDER BY creado_en DESC,id DESC LIMIT 50;`),
-    dbQuery(`SELECT COUNT(*) FROM notificaciones_usuario WHERE usuario_id=${userId} AND leida_en IS NULL;`),
-  ]);
+  if (!/^[1-9]\d{0,19}$/.test(String(userId))) throw new Error('notification_invalid');
+  const lines = (await dbQuery(`START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY;
+SELECT JSON_OBJECT('id',CAST(id AS CHAR),'category',categoria,'state',estado,'title',titulo,'message',mensaje,'referenceId',CAST(referencia_id AS CHAR),'createdAt',DATE_FORMAT(creado_en,'%Y-%m-%dT%H:%i:%sZ'),'readAt',IF(leida_en IS NULL,NULL,DATE_FORMAT(leida_en,'%Y-%m-%dT%H:%i:%sZ'))) FROM notificaciones_usuario WHERE usuario_id=${userId} ORDER BY creado_en DESC,id DESC LIMIT 50;
+SELECT 'unreadCount';
+SELECT COUNT(*) FROM notificaciones_usuario WHERE usuario_id=${userId} AND leida_en IS NULL;
+COMMIT;`)).split(/\r?\n/);
+  const marker = lines.indexOf('unreadCount');
+  if (marker < 0 || !/^\d+$/.test(lines[marker + 1] || '')) throw new Error('notification_read_failed');
   return {
-    notifications: rows ? rows.split(/\r?\n/).map((row) => JSON.parse(row)) : [],
-    unreadCount: Number(unreadCount) || 0,
+    notifications: lines.slice(0, marker).filter(Boolean).map((row) => JSON.parse(row)),
+    unreadCount: Number(lines[marker + 1]),
   };
 }
 

@@ -31,7 +31,7 @@ COMMIT;`);
 function accountProfileSql(userId) {
   const id = String(userId);
   if (!/^\d+$/.test(id)) throw new Error('invalid_user_id');
-  return `SELECT JSON_OBJECT('accountName',u.nombre,'sex',u.sexo,'heightCm',u.estatura_cm,'restingMetabolismKcal',(SELECT metabolismo_basal_kcal FROM registros_biometricos WHERE usuario_id=u.id AND metabolismo_basal_kcal IS NOT NULL ORDER BY medido_en DESC,id DESC LIMIT 1),'restingMetabolismSource',(SELECT fuente FROM registros_biometricos WHERE usuario_id=u.id AND metabolismo_basal_kcal IS NOT NULL ORDER BY medido_en DESC,id DESC LIMIT 1)) FROM usuarios u WHERE u.id=${id} LIMIT 1;`;
+  return `SELECT JSON_OBJECT('accountName',u.nombre,'sex',u.sexo,'heightCm',u.estatura_cm,'restingMetabolismKcal',b.metabolismo_basal_kcal,'restingMetabolismSource',b.fuente) FROM usuarios u LEFT JOIN registros_biometricos b ON b.id=(SELECT id FROM registros_biometricos WHERE usuario_id=u.id AND metabolismo_basal_kcal IS NOT NULL ORDER BY medido_en DESC,id DESC LIMIT 1) WHERE u.id=${id} LIMIT 1;`;
 }
 
 async function readAccountProfile({ userId, dbQuery }) {

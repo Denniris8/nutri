@@ -1,10 +1,12 @@
 const assert = require('node:assert/strict');
 const { createHash, createHmac, randomBytes, scryptSync } = require('node:crypto');
 const http = require('node:http');
+const { readFileSync } = require('node:fs');
 const test = require('node:test');
 const { beforeEach } = test;
 const { createServer, signJwt } = require('./server.js');
 const { readBiometrics, validateBiometric } = require('./api/biometrics.js');
+const { accountProfileSql } = require('./api/account-profile.js');
 const { ensureFoodOpenCodeSession, forgetFoodSessionCache, openCodeRequest, requestFoodDescription, getFoodSessionDefaults } = require('./api/opencode-food.js');
 
 beforeEach(() => forgetFoodSessionCache());
@@ -168,9 +170,23 @@ test('progress nutrition endpoint returns account-scoped nutrition, body, activi
   assert.equal((summarySql.match(/JOIN registros_comida_items i/g) || []).length, 1, 'Las fuentes deben contarse en una única agregación');
   assert.equal((summarySql.match(/LEFT JOIN registros_entrenamientos t/g) || []).length, 2, 'Una agregación de actividad por periodo');
   assert.ok(summarySql.includes("'manualMinutes',SUM(CASE WHEN t.origen='manual' THEN t.duracion_minutos END)"), 'Sin sesiones debe conservar NULL, no cero');
+  const bodySql = summarySql.slice(summarySql.indexOf('WITH body_records AS'), summarySql.indexOf('FROM ranked_body;'));
+  assert.equal((bodySql.match(/FROM registros_biometricos/g) || []).length, 1);
+  assert.match(bodySql, /PARTITION BY current_period ORDER BY medido_en,id/);
+  assert.match(bodySql, /PARTITION BY current_period ORDER BY medido_en DESC,id DESC/);
+  assert.match(bodySql, /first_reading=1 THEN peso_kg END/);
+  assert.ok(!bodySql.includes('COALESCE'), 'Sin mediciones el peso debe seguir siendo NULL');
   const sqlText = (value) => `CONVERT(0x${Buffer.from(value).toString('hex')} USING utf8mb4)`;
   assert.ok(summarySql.includes(`creado_en>=${sqlText('2026-10-15 06:00:00')} AND creado_en<${sqlText('2026-10-22 06:00:00')}`));
   assert.ok(summarySql.includes(`creado_en>=${sqlText('2026-10-08 06:00:00')} AND creado_en<${sqlText('2026-10-15 06:00:00')}`));
+});
+
+test('account TMB value and provenance come from the same latest biometric row', () => {
+  const sql = accountProfileSql('27');
+  assert.match(sql, /'restingMetabolismKcal',b.metabolismo_basal_kcal,'restingMetabolismSource',b.fuente/);
+  assert.match(sql, /LEFT JOIN registros_biometricos b ON b.id=\(SELECT id/);
+  assert.equal((sql.match(/ORDER BY medido_en DESC,id DESC LIMIT 1/g) || []).length, 1);
+  assert.throws(() => accountProfileSql('27 OR 1=1'));
 });
 
 test('progress activity uses account timezone across daylight-saving changes', async () => {
@@ -233,13 +249,33 @@ test('biometric range query validates dates and reads only the selected period',
   await assert.rejects(readBiometrics({ userId: 27, start: '2026-02-30', end: '2026-03-01', dbQuery: async () => '[]' }), /invalid_biometric_range/);
 });
 
-test('only versioned CSS and JavaScript assets receive immutable caching', async () => {
+test('HTML uses content hashes and only matching asset versions receive immutable caching', async () => {
   await withServer(async () => { throw new Error('unexpected_query'); }, async (base) => {
-    const versioned = await fetch(`${base}/dashboard_nutricional.css?v=67`);
+    const htmlResponse = await fetch(`${base}/login.html`);
+    const html = await htmlResponse.text();
+    const scriptUrl = html.match(/src="(\/onboarding-flow\.js\?v=[a-f0-9]{16})"/)?.[1];
+    assert.ok(scriptUrl);
+    const script = await fetch(`${base}${scriptUrl}`);
+    const expected = createHash('sha256').update(await script.text()).digest('hex').slice(0, 16);
+    assert.equal(new URL(scriptUrl, base).searchParams.get('v'), expected);
+    assert.equal(script.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+    assert.equal(htmlResponse.headers.get('cache-control'), 'no-store');
+    const oldVersion = await fetch(`${base}/onboarding-flow.js?v=adaptive-analysis-progress-v1`);
     const unversioned = await fetch(`${base}/dashboard_nutricional.css`);
-    assert.equal(versioned.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+    assert.equal(oldVersion.headers.get('cache-control'), 'no-store');
     assert.equal(unversioned.headers.get('cache-control'), 'no-store');
   });
+});
+
+test('proxy allows model retries and negotiates compression instead of forcing it', () => {
+  const config = readFileSync(require.resolve('../nginx/default.conf'), 'utf8');
+  const readTimeout = Number(config.match(/proxy_read_timeout\s+(\d+)s;/)?.[1]);
+  assert.ok(readTimeout > getFoodSessionDefaults().requestTimeoutMs / 1000 * 3);
+  assert.match(config, /gzip on;/);
+  assert.match(config, /gzip_vary on;/);
+  assert.match(config, /gzip_min_length 1024;/);
+  assert.match(config, /gzip_types[^;]*text\/css[^;]*application\/javascript[^;]*application\/json/);
+  assert.ok(!config.includes('proxy_set_header Accept-Encoding'), 'No sobrescribir negociación del cliente');
 });
 
 test('dummy registration creates synthetic measurement rows without completing onboarding', async () => {

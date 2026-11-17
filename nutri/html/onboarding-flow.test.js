@@ -475,6 +475,55 @@ test('stale food responses cannot replace a more recent list or saved result', a
   assert.equal(flow.evaluate('renderedRecords[0].id'), 'saved');
 });
 
+test('daily steps stay independent but abort older requests and ignore late results', async () => {
+  const pending = [];
+  const flow = loadFlow('', async (url, options = {}) => url.startsWith('/api/daily-steps?')
+    ? new Promise((resolve) => pending.push({ resolve, signal: options.signal }))
+    : { ok: true, json: async () => ({}) }, { intl: Intl });
+  flow.elements['#dailyStepsCount'] = new Element();
+  flow.elements['#dailyStepsEnergy'] = new Element();
+  const first = flow.evaluate("loadDailySteps('2026-11-16')");
+  const second = flow.evaluate("loadDailySteps('2026-11-17')");
+  assert.equal(pending[0].signal.aborted, true);
+  pending[1].resolve({ ok: true, json: async () => ({ stepsCount: 200, caloriesKcal: null }) });
+  await second;
+  pending[0].resolve({ ok: true, json: async () => ({ stepsCount: 100, caloriesKcal: null }) });
+  await first;
+  assert.equal(flow.elements['#dailyStepsCount'].textContent, '200');
+});
+
+test('biometric trends share requests, cache briefly, invalidate on writes and ignore old periods', async () => {
+  const pending = [];
+  const flow = loadFlow('', async (url, options = {}) => url.startsWith('/api/biometrics?')
+    ? new Promise((resolve) => pending.push({ resolve, signal: options.signal }))
+    : { ok: true, status: 200, json: async () => ({}) }, { intl: Intl });
+  const panel = new Element();
+  const chart = new Element();
+  chart.closest = () => panel;
+  flow.elements['#progressBiometricsCharts'] = chart;
+  flow.elements['#progressBiometricsCaption'] = new Element();
+  const first = flow.evaluate("loadBiometricTrends(7, '2026-11-16')");
+  const shared = flow.evaluate("loadBiometricTrends(7, '2026-11-16')");
+  assert.equal(pending.length, 1);
+  pending[0].resolve({ ok: true, json: async () => ({ records: [] }) });
+  await Promise.all([first, shared]);
+  await flow.evaluate("loadBiometricTrends(7, '2026-11-16')");
+  assert.equal(pending.length, 1);
+  await flow.evaluate("window.fetch('/api/biometrics', { method: 'POST' })");
+  const invalidated = flow.evaluate("loadBiometricTrends(7, '2026-11-16')");
+  assert.equal(pending.length, 2);
+  const latest = flow.evaluate("loadBiometricTrends(7, '2026-11-17')");
+  assert.equal(pending[1].signal.aborted, true);
+  pending[2].resolve({ ok: true, json: async () => ({ records: [] }) });
+  await latest;
+  const caption = flow.elements['#progressBiometricsCaption'].textContent;
+  pending[1].resolve({ ok: true, json: async () => ({ records: [] }) });
+  await invalidated;
+  assert.equal(flow.elements['#progressBiometricsCaption'].textContent, caption);
+  assert.match(caption, /2026-11-17/);
+  assert.equal(panel.attributes['aria-busy'], 'false');
+});
+
 test('training retry keeps its payload and backup on conflict without polling analysis', async () => {
   const urls = [];
   const flow = loadFlow('', async (url) => {

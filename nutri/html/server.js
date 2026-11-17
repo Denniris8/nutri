@@ -54,6 +54,8 @@ const files = new Map([
   ['/pwa-icon-192.png', 'pwa-icon-192.png'], ['/pwa-icon-512.png', 'pwa-icon-512.png'],
   ['/service-worker.js', 'service-worker.js'], ['/pwa-register.js', 'pwa-register.js'],
 ]);
+const assetVersions = new Map([...files].filter(([url]) => /\.(?:css|js)$/.test(url))
+  .map(([url, filename]) => [url, createHash('sha256').update(readFileSync(path.join(__dirname, filename))).digest('hex').slice(0, 16)]));
 const contentTypes = {
   '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.svg': 'image/svg+xml', '.webmanifest': 'application/manifest+json; charset=utf-8',
@@ -885,7 +887,27 @@ SELECT JSON_OBJECT('days',${days},'current',JSON_OBJECT(
   'fat',AVG(CASE WHEN fecha_consumo<${currentStart} AND complete THEN fat END)),
    'quality',JSON_OBJECT('currentPending',(SELECT COUNT(*) FROM registros_comidas WHERE usuario_id=${claims.sub} AND estado<>'completado' AND ${currentDates('fecha_consumo')}),'previousPending',(SELECT COUNT(*) FROM registros_comidas WHERE usuario_id=${claims.sub} AND estado<>'completado' AND ${previousDates('fecha_consumo')}),'macroSources',(SELECT JSON_OBJECT('items',COUNT(*),'usda',COALESCE(SUM(i.fuente_macros='usda_fdc'),0),'declared',COALESCE(SUM(i.fuente_macros='declarado_usuario'),0),'web',COALESCE(SUM(i.fuente_macros='webfetch'),0),'openfoodfacts',COALESCE(SUM(i.fuente_macros='openfoodfacts'),0),'websearch',COALESCE(SUM(i.fuente_macros='websearch'),0),'opencode',COALESCE(SUM(i.fuente_macros='opencode_estimado'),0),'estimated',COALESCE(SUM(i.estado_macros='estimado'),0)) FROM registros_comidas e JOIN registros_comida_items i ON i.registro_comida_id=e.id WHERE e.usuario_id=${claims.sub} AND e.estado='completado' AND ${currentDates('e.fecha_consumo')})),
    'goals',(SELECT JSON_OBJECT('kcal',p.objetivo_calorias_kcal,'protein',p.objetivo_proteinas_g,'carbs',p.objetivo_carbohidratos_g,'fat',p.objetivo_grasas_g) FROM vigencias_planes_entrenamiento v JOIN planes_entrenamiento p ON p.id=v.plan_id AND p.usuario_id=v.usuario_id WHERE v.usuario_id=${claims.sub} AND v.fecha_inicio<=${currentStart} AND (v.fecha_fin IS NULL OR v.fecha_fin>=${textSql(end)}) ORDER BY v.fecha_inicio DESC,v.id DESC LIMIT 1)) FROM daily;
-SELECT JSON_OBJECT('current',JSON_OBJECT('measurements',(SELECT COUNT(*) FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')}),'firstKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1),'firstDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${currentDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1)), 'previous',JSON_OBJECT('measurements',(SELECT COUNT(*) FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')}),'firstKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastKg',(SELECT peso_kg FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1),'firstDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en,id LIMIT 1),'lastDate',(SELECT DATE_FORMAT(medido_en,'%Y-%m-%d') FROM registros_biometricos WHERE usuario_id=${claims.sub} AND ${previousDates('DATE(medido_en)')} ORDER BY medido_en DESC,id DESC LIMIT 1)));
+WITH body_records AS (
+  SELECT id,medido_en,peso_kg,medido_en>=CONCAT(${currentStart},' 00:00:00') AS current_period
+  FROM registros_biometricos WHERE usuario_id=${claims.sub}
+    AND medido_en>=CONCAT(${previousStart},' 00:00:00') AND medido_en<DATE_ADD(${textSql(end)},INTERVAL 1 DAY)
+), ranked_body AS (
+  SELECT *,ROW_NUMBER() OVER (PARTITION BY current_period ORDER BY medido_en,id) AS first_reading,
+    ROW_NUMBER() OVER (PARTITION BY current_period ORDER BY medido_en DESC,id DESC) AS last_reading
+  FROM body_records
+)
+SELECT JSON_OBJECT('current',JSON_OBJECT(
+  'measurements',COUNT(CASE WHEN current_period THEN 1 END),
+  'firstKg',MAX(CASE WHEN current_period AND first_reading=1 THEN peso_kg END),
+  'lastKg',MAX(CASE WHEN current_period AND last_reading=1 THEN peso_kg END),
+  'firstDate',MAX(CASE WHEN current_period AND first_reading=1 THEN DATE_FORMAT(medido_en,'%Y-%m-%d') END),
+  'lastDate',MAX(CASE WHEN current_period AND last_reading=1 THEN DATE_FORMAT(medido_en,'%Y-%m-%d') END)),
+  'previous',JSON_OBJECT(
+  'measurements',COUNT(CASE WHEN NOT current_period THEN 1 END),
+  'firstKg',MAX(CASE WHEN NOT current_period AND first_reading=1 THEN peso_kg END),
+  'lastKg',MAX(CASE WHEN NOT current_period AND last_reading=1 THEN peso_kg END),
+  'firstDate',MAX(CASE WHEN NOT current_period AND first_reading=1 THEN DATE_FORMAT(medido_en,'%Y-%m-%d') END),
+  'lastDate',MAX(CASE WHEN NOT current_period AND last_reading=1 THEN DATE_FORMAT(medido_en,'%Y-%m-%d') END))) FROM ranked_body;
 SELECT JSON_OBJECT('current',${activitySummary(currentDates)},'previous',${activitySummary(previousDates)});
 SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE usuario_id=${claims.sub} AND ${currentDates('fecha')}),'previous',(SELECT COUNT(*) FROM registros_plicometro WHERE usuario_id=${claims.sub} AND ${previousDates('fecha')}));`)).split('\n');
         const nutrition = JSON.parse(result);
@@ -1506,7 +1528,11 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
     try {
       let body = await readFile(path.join(__dirname, files.get(pathname)));
       if (pathname === '/dashboard_nutricional.html') body = Buffer.from(body.toString().replace('__APP_VERSION__', appVersion).replace('__DRAFT_STORAGE_SCOPE__', storageScope));
-      const versionedAsset = /\.(?:css|js)$/.test(pathname) && /[?&]v=[^&]+/.test(request.url);
+      if (pathname === '/' || pathname.endsWith('.html')) body = Buffer.from(body.toString().replace(
+        /\b(src|href)="(\/[^"?]+\.(?:css|js))(?:\?[^"]*)?"/g,
+        (attribute, name, url) => assetVersions.has(url) ? `${name}="${url}?v=${assetVersions.get(url)}"` : attribute,
+      ));
+      const versionedAsset = assetVersions.has(pathname) && new URL(request.url, 'http://localhost').searchParams.get('v') === assetVersions.get(pathname);
       response.writeHead(200, { 'Content-Type': contentTypes[path.extname(files.get(pathname))], 'Content-Length': body.length, 'Cache-Control': versionedAsset ? 'public, max-age=31536000, immutable' : 'no-store' });
       response.end(request.method === 'HEAD' ? undefined : body);
     } catch { response.writeHead(500).end('Internal server error'); }
