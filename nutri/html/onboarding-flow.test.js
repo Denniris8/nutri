@@ -101,6 +101,30 @@ function loadFlow(search = '', fetchOverride, options = {}) {
   return { elements, modeButtons, destinations, requests, storage, evaluate: (code) => vm.runInContext(code, context) };
 }
 
+test('Chef blocks sending and duplicate closes until cleanup completes, then recovers after failure', async () => {
+  let finishClose;
+  const calls = [];
+  const flow = loadFlow('', (url) => {
+    calls.push(url);
+    if (url === '/api/chef-chat/session') return new Promise((resolve) => { finishClose = resolve; });
+    return Promise.resolve({ ok: true, json: async () => ({ answer: 'Receta' }) });
+  });
+  flow.evaluate("chefSessionActive = true; confirmFlowExit = async () => true;");
+  const closing = flow.evaluate('closeChefChat()');
+  await settle();
+  assert.equal(flow.elements['#chefSendButton'].disabled, true);
+  flow.elements['#chefMessage'].value = 'Otra receta';
+  await flow.elements['#chefForm'].dispatch('submit');
+  await flow.evaluate('closeChefChat()');
+  assert.equal(calls.filter((url) => url === '/api/chef-chat/session').length, 1);
+  assert.ok(!calls.includes('/api/chef-chat'));
+  finishClose({ ok: false, json: async () => ({ error: 'No se pudo cerrar' }) });
+  await closing;
+  assert.equal(flow.evaluate('chefSessionActive'), true);
+  assert.equal(flow.elements['#chefSendButton'].disabled, false);
+  assert.equal(flow.elements['#chefMessage'].value, 'Otra receta');
+});
+
 test('registration sends account details and navigates into the authenticated app', async () => {
   const { elements, modeButtons, destinations, requests } = loadFlow();
   assert.equal(elements['#loginEmail'].value, '');
@@ -361,6 +385,51 @@ test('food modal shows a safe OpenCode transport error without trace details', a
   assert.equal(elements['#foodLoading'].hidden, true);
 });
 
+test('committed food with unavailable readback closes without offering a resend', async () => {
+  let posts = 0;
+  const flow = loadFlow('', async (url) => {
+    if (url === '/api/food-entries') {
+      posts += 1;
+      return { ok: true, json: async () => ({ state: 'completado', refreshRequired: true, entryId: '55', message: 'Comida guardada; actualiza el día.' }) };
+    }
+    if (url.startsWith('/api/food-entries?fecha=')) throw new Error('read unavailable');
+    return { ok: true, json: async () => ({}) };
+  });
+  await flow.elements['#registerFoodButton'].dispatch('click');
+  flow.elements['#foodDescription'].value = '150 g de pollo';
+  await flow.elements['#registerFoodForm'].dispatch('submit');
+  await settle();
+  assert.equal(posts, 1);
+  assert.equal(flow.elements['#registerFoodDialog'].open, false);
+  assert.equal(flow.evaluate('foodTargetEntryId'), null);
+  assert.ok(!flow.elements['#foodChatMessages'].children.some((node) =>
+    (node.children || []).some((child) => child.className === 'button-muted food-chat-retry')));
+});
+
+test('food progress stops at 401 and aborts its request when saving finishes', async () => {
+  let finishRequest;
+  let signal;
+  let progressCalls = 0;
+  const flow = loadFlow('', async (url, options = {}) => {
+    if (url.startsWith('/api/food-entries/progress?')) {
+      progressCalls += 1;
+      signal = options.signal;
+      return { ok: false, status: 401, json: async () => ({}) };
+    }
+    if (url === '/api/food-entries') return new Promise((resolve) => { finishRequest = resolve; });
+    return { ok: true, json: async () => ({}) };
+  });
+  await flow.elements['#registerFoodButton'].dispatch('click');
+  flow.elements['#foodDescription'].value = '150 g de pollo';
+  const submission = flow.elements['#registerFoodForm'].dispatch('submit');
+  await settle();
+  assert.equal(progressCalls, 1);
+  finishRequest({ ok: true, json: async () => ({ records: [], state: 'completado', message: 'Guardado.' }) });
+  await submission;
+  await settle();
+  assert.equal(signal.aborted, true);
+});
+
 test('temporary food errors retain the message and retry the identical payload', async () => {
   const posts = [];
   const { elements } = loadFlow('', async (url, options = {}) => {
@@ -404,6 +473,47 @@ test('stale food responses cannot replace a more recent list or saved result', a
   pending[2]({ ok: true, json: async () => ({ records: [{ id: 'before-save' }] }) });
   await third;
   assert.equal(flow.evaluate('renderedRecords[0].id'), 'saved');
+});
+
+test('training retry keeps its payload and backup on conflict without polling analysis', async () => {
+  const urls = [];
+  const flow = loadFlow('', async (url) => {
+    urls.push(url);
+    return { ok: false, status: 409, json: async () => ({ error: 'La clave de reintento ya corresponde a otro registro.' }) };
+  }, { ids: ['trainingModal', 'addTrainingButton', 'trainingDescription', 'trainingAnalyzeButton',
+    'trainingLoading', 'trainingLoadingText', 'trainingFeedback', 'trainingChatMessages',
+    'syncGarminTrainingButton', 'trainingModeToggle', 'trainingDescriptionFields', 'trainingButtonLoading'] });
+  flow.evaluate(`
+    pendingTrainingSave = { expiresAt: Date.now() + 60000, timezone: 'UTC',
+      body: { requestId: 'same-key', date: '2026-11-17', description: 'Correr' } };
+    draftStorage('training', pendingTrainingSave);
+    trainingSessionReady = true;
+    startTrainingProgress = () => { throw new Error('Retry must not poll analysis'); };
+  `);
+  const before = flow.evaluate('JSON.stringify(pendingTrainingSave)');
+  await flow.elements['#trainingAnalyzeButton'].dispatch('click');
+  await settle();
+  assert.equal(flow.evaluate('JSON.stringify(pendingTrainingSave)'), before);
+  assert.equal(flow.evaluate("JSON.stringify(draftStorage('training'))"), before);
+  assert.ok(urls.includes('/api/training-entries'));
+  assert.ok(!urls.some((url) => url.startsWith('/api/training-progress') || url === '/api/training-analysis'));
+});
+
+test('training save warns about refresh failure without preserving a resend payload', async () => {
+  const flow = loadFlow('', async () => ({ ok: true, json: async () => ({ ok: true, savedAt: '11:00' }) }), {
+    ids: ['trainingModal', 'trainingLoadingText', 'trainingFeedback'],
+  });
+  flow.evaluate(`
+    pendingTrainingSave = { expiresAt: Date.now() + 60000, timezone: 'UTC',
+      body: { requestId: 'same-key', date: '2026-11-17' } };
+    draftStorage('training', pendingTrainingSave);
+    loadTrainingEntries = async () => false;
+  `);
+  await flow.evaluate('savePendingTraining(trainingOpenGeneration)');
+  assert.equal(flow.evaluate('pendingTrainingSave'), null);
+  assert.equal(flow.evaluate("draftStorage('training')"), null);
+  assert.match(flow.elements['#trainingFeedback'].textContent, /guardado.*No se pudo actualizar la vista/);
+  assert.match(flow.elements['#appNoticeText'].textContent, /no vuelvas a guardar/);
 });
 
 test('stopping training progress does not wait for a hung request', async () => {
@@ -512,6 +622,64 @@ test('generating and saving a plan never replaces the active dashboard targets',
   assert.equal(flow.evaluate('savedTrainingPlan'), true);
   assert.equal(flow.evaluate('trainingPlanTargets.calorias_kcal'), 1800);
   assert.equal(flow.evaluate("draftStorage('plan')"), null);
+});
+
+test('plan refinement and saving cannot overlap, and stale replies cannot restore cancelled state', async () => {
+  const ids = ['trainingPlanGoals', 'sendTrainingPlanGoals', 'saveTrainingPlan', 'goToSavedTrainingPlans',
+    'trainingPlanDialog', 'createTrainingPlanButton', 'trainingPlanButtonLoading', 'planChatMessages',
+    'planLoading', 'planSummaryText', 'savedTrainingPlans'];
+  let finishRefine;
+  let finishSave;
+  const calls = [];
+  const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
+  const flow = loadFlow('', (url) => {
+    calls.push(url);
+    if (url === '/api/training-plan/refine') return new Promise((resolve) => { finishRefine = resolve; });
+    if (url === '/api/training-plans') return new Promise((resolve) => { finishSave = resolve; });
+    return Promise.resolve({ ok: true, json: async () => ({}) });
+  }, { ids, intl: Intl, elements: { 'label[for="trainingPlanGoals"]': new Element() } });
+  await settle();
+  flow.evaluate(`
+    trainingPlanSessionReady = true;
+    generatedTrainingPlan = 'Original'; generatedTrainingPlanRunId = 'draft';
+    generatedTrainingGoals = 'Fuerza'; generatedTrainingMacros = ${JSON.stringify(macros)};
+    startTrainingProgress = () => ({ stop: async () => {} });
+  `);
+  flow.elements['#trainingPlanGoals'].value = 'Tres días';
+  const refining = flow.elements['#sendTrainingPlanGoals'].dispatch('click');
+  await settle();
+  assert.equal(flow.elements['#saveTrainingPlan'].disabled, true);
+  await flow.elements['#saveTrainingPlan'].dispatch('click');
+  assert.equal(calls.filter((url) => url === '/api/training-plans').length, 0);
+  finishRefine({ ok: true, json: async () => ({ plan: 'Revisado', macros, runId: 'draft' }) });
+  await refining;
+  assert.equal(flow.elements['#saveTrainingPlan'].disabled, false);
+  const saving = flow.elements['#saveTrainingPlan'].dispatch('click');
+  await settle();
+  assert.equal(flow.elements['#sendTrainingPlanGoals'].disabled, true);
+  flow.elements['#trainingPlanGoals'].value = 'Cuatro días';
+  await flow.elements['#sendTrainingPlanGoals'].dispatch('click');
+  await flow.elements['#saveTrainingPlan'].dispatch('click');
+  assert.equal(calls.filter((url) => url === '/api/training-plan/refine').length, 1);
+  assert.equal(calls.filter((url) => url === '/api/training-plans').length, 1);
+  finishSave({ ok: false, json: async () => ({ error: 'Fallo temporal' }) });
+  await saving;
+  assert.equal(flow.elements['#sendTrainingPlanGoals'].disabled, false);
+  assert.equal(flow.evaluate('generatedTrainingPlan'), 'Revisado');
+
+  const late = flow.elements['#sendTrainingPlanGoals'].dispatch('click');
+  await settle();
+  flow.evaluate(`
+    trainingPlanGeneration += 1; trainingPlanGenerating = false;
+    trainingPlanSessionActive = false; generatedTrainingPlan = null;
+    trainingPlanSendButton.disabled = true; planLoading.hidden = false;
+  `);
+  finishRefine({ ok: true, json: async () => ({ plan: 'Respuesta cancelada', macros, runId: 'draft' }) });
+  await late;
+  assert.equal(flow.evaluate('trainingPlanSessionActive'), false);
+  assert.equal(flow.evaluate('generatedTrainingPlan'), null);
+  assert.equal(flow.elements['#sendTrainingPlanGoals'].disabled, true);
+  assert.equal(flow.elements['#planLoading'].hidden, false);
 });
 
 test('reopening plans restores a signed backup before displaying it or requesting changes', async () => {

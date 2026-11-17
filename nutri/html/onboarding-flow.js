@@ -115,6 +115,7 @@ let trainingPlanSessionReady = true;
 let trainingPlanGeneration = 0;
 let trainingPlanCancelPending = false;
 let trainingPlanSaving = false;
+let trainingPlanGenerating = false;
 let generatedTrainingDraftToken = null;
 
 function draftStorage(name, value) {
@@ -464,6 +465,7 @@ async function cancelTrainingPlan() {
     notifyApp('Sesión e historial del plan eliminados.', 'success');
   } catch (error) { trainingPlanSessionActive = true; notifyApp(error.message, 'error'); }
   finally {
+    trainingPlanGenerating = false;
     trainingPlanCancelPending = false;
     trainingPlanTrigger.disabled = false;
     trainingPlanSendButton.disabled = !trainingPlanSessionReady;
@@ -476,7 +478,7 @@ trainingPlanDialog?.addEventListener('click', (event) => { if (event.target === 
 trainingPlanDialog?.addEventListener('close', () => trainingPlanTrigger?.focus());
 
 trainingPlanSendButton?.addEventListener('click', async () => {
-  if (!trainingPlanSessionReady) return;
+  if (!trainingPlanSessionReady || trainingPlanGenerating || trainingPlanSaving || trainingPlanCancelPending) return;
   const goals = trainingPlanGoalsInput.value.trim();
   if (!goals) {
     trainingPlanGoalsInput.focus();
@@ -485,6 +487,8 @@ trainingPlanSendButton?.addEventListener('click', async () => {
   }
   trainingPlanSendButton.disabled = true;
   const generation = ++trainingPlanGeneration;
+  trainingPlanGenerating = true;
+  trainingPlanSaveButton.disabled = true;
   const refining = Boolean(generatedTrainingPlan && generatedTrainingPlanRunId && !savedTrainingPlan);
   trainingPlanGoalsLabel.textContent = refining ? '¿Qué quieres cambiar del borrador?' : 'Tus objetivos';
   trainingPlanGoalsInput.disabled = true;
@@ -513,8 +517,8 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo generar el plan.');
-    trainingPlanSessionActive = true;
     if (generation !== trainingPlanGeneration) return;
+    trainingPlanSessionActive = true;
     appendTrainingPlanMessage('assistant', result.plan);
     generatedTrainingPlan = result.plan;
     generatedTrainingPlanRunId = result.runId;
@@ -544,19 +548,25 @@ trainingPlanSendButton?.addEventListener('click', async () => {
     await notifyResultIfHidden(trainingPlanDialog, 'plan', 'error', 'No se pudo generar el plan', 'Revisa el modal de plan e inténtalo de nuevo.');
   } finally {
     await progress.stop(generatedTrainingPlan ? 'Plan generado; listo para revisar y guardar.' : 'Generación finalizada.');
+    if (generation !== trainingPlanGeneration) return;
+    trainingPlanGenerating = false;
     planLoading.hidden = true;
     trainingPlanTrigger.setAttribute('aria-busy', 'false');
     trainingPlanTriggerLoading.hidden = true;
     trainingPlanSendButton.disabled = !trainingPlanSessionReady;
     trainingPlanGoalsInput.disabled = !trainingPlanSessionReady;
+    trainingPlanSaveButton.disabled = !generatedTrainingPlan || savedTrainingPlan;
     if (trainingPlanSessionReady) trainingPlanGoalsInput.focus();
   }
 });
 
 trainingPlanSaveButton?.addEventListener('click', async () => {
-  if (!generatedTrainingPlan || !generatedTrainingGoals || !generatedTrainingMacros || savedTrainingPlan) return;
+  if (!generatedTrainingPlan || !generatedTrainingGoals || !generatedTrainingMacros || savedTrainingPlan
+    || trainingPlanGenerating || trainingPlanSaving || trainingPlanCancelPending) return;
   trainingPlanSaving = true;
   trainingPlanSaveButton.disabled = true;
+  trainingPlanSendButton.disabled = true;
+  trainingPlanGoalsInput.disabled = true;
   notifyApp('Guardando el plan de entrenamiento.', 'info');
   try {
     const response = await fetch('/api/training-plans', {
@@ -588,7 +598,11 @@ trainingPlanSaveButton?.addEventListener('click', async () => {
     appendTrainingPlanMessage('error', error.message || 'No se pudo guardar el plan.');
     notifyApp(error.message || 'No se pudo guardar el plan.', 'error');
     await notifyResultIfHidden(trainingPlanDialog, 'plan', 'error', 'No se pudo guardar el plan', 'Intenta guardar el plan nuevamente.');
-  } finally { trainingPlanSaving = false; }
+  } finally {
+    trainingPlanSaving = false;
+    trainingPlanSendButton.disabled = savedTrainingPlan || !trainingPlanSessionReady;
+    trainingPlanGoalsInput.disabled = savedTrainingPlan || !trainingPlanSessionReady;
+  }
 });
 
 goToSavedTrainingPlansButton?.addEventListener('click', async () => {
@@ -1798,7 +1812,6 @@ async function savePendingTraining(generation) {
     if (response.ok && saved.requiresGarminConfirmation) throw new Error('No se pudo confirmar si Garmin ya cuenta esta sesión.');
   }
   if (!response.ok) {
-    if (response.status === 409) { pendingTrainingSave = null; draftStorage('training', null); }
     throw new Error(saved.error || 'No se pudo guardar el entrenamiento.');
   }
   pendingTrainingSave = null;
@@ -1808,9 +1821,11 @@ async function savePendingTraining(generation) {
   trainingOpenCodeSessionActive = false;
   trainingSessionReady = trainingSessionUiInitialized = false;
   trainingDialog.close();
-  try { await loadTrainingEntries(saveBody.date); } catch {}
-  trainingFeedback.textContent = saved.savedAt ? `Entrenamiento guardado a las ${saved.savedAt}.` : 'Entrenamiento guardado.';
-  notifyApp(trainingFeedback.textContent, 'success');
+  let refreshed = true;
+  try { refreshed = await loadTrainingEntries(saveBody.date) !== false; } catch { refreshed = false; }
+  trainingFeedback.textContent = (saved.savedAt ? `Entrenamiento guardado a las ${saved.savedAt}.` : 'Entrenamiento guardado.')
+    + (refreshed ? '' : ' No se pudo actualizar la vista. Actualiza el día; no vuelvas a guardar el entrenamiento.');
+  notifyApp(trainingFeedback.textContent, refreshed ? 'success' : 'info');
   await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'guardado', 'Entrenamiento guardado', trainingFeedback.textContent);
 }
 
@@ -1831,7 +1846,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
   trainingAnalyzeButton.disabled = true;
   if (!retrying) appendTrainingMessage('user', description);
   const progressId = createFoodRequestId();
-  const progress = startTrainingProgress(progressId, appendTrainingMessage);
+  const progress = retrying ? null : startTrainingProgress(progressId, appendTrainingMessage);
   trainingInput.value = '';
   notifyApp(retrying ? 'Reintentando el mismo guardado, sin repetir el análisis.' : 'Analizando el entrenamiento.', 'info');
   try {
@@ -1902,7 +1917,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     notifyApp(trainingFeedback.textContent, 'error');
     await notifyResultIfHidden(trainingDialog, 'entrenamiento', 'error', 'No se pudo completar el entrenamiento', trainingFeedback.textContent);
   } finally {
-    await progress.stop(trainingOpenCodeSessionActive ? 'Análisis terminado.' : 'Análisis finalizado.');
+    if (progress) await progress.stop(trainingOpenCodeSessionActive ? 'Análisis terminado.' : 'Análisis finalizado.');
     trainingSaving = false;
     trainingPending = false;
     trainingTrigger.setAttribute('aria-busy', 'false');
@@ -1926,6 +1941,7 @@ const chefSendButton = document.querySelector('#chefSendButton');
 const chefLoading = document.querySelector('#chefLoading');
 const chefFeedback = document.querySelector('#chefFeedback');
 let chefPending = false;
+let chefClosing = false;
 let chefSessionActive = false;
 
 document.querySelector('#chefButton')?.addEventListener('click', () => {
@@ -1948,10 +1964,13 @@ function appendChefMessage(role, content) {
 }
 
 async function closeChefChat() {
+  if (chefClosing) return;
   if (chefPending) { notifyApp('Espera a que Chef termine de responder antes de salir.', 'info'); return; }
-  const hasConversation = chefSessionActive || Boolean(chefMessages.querySelector('[data-role="user"]'));
-  if (hasConversation && !await confirmFlowExit('La conversación temporal de Chef se eliminará. ¿Quieres salir?')) return;
+  chefClosing = true;
+  chefMessage.disabled = chefSendButton.disabled = true;
   try {
+    const hasConversation = chefSessionActive || Boolean(chefMessages.querySelector('[data-role="user"]'));
+    if (hasConversation && !await confirmFlowExit('La conversación temporal de Chef se eliminará. ¿Quieres salir?')) return;
     if (hasConversation) {
       const response = await fetch('/api/chef-chat/session', { method: 'DELETE', credentials: 'same-origin' });
       const result = await response.json().catch(() => ({}));
@@ -1964,6 +1983,10 @@ async function closeChefChat() {
     chefDialog.close();
     if (hasConversation) notifyApp('Sesión temporal de Chef eliminada.', 'success');
   } catch (error) { notifyApp(error.message || 'No se pudo cerrar el chat Chef.', 'error'); }
+  finally {
+    chefClosing = false;
+    chefMessage.disabled = chefSendButton.disabled = false;
+  }
 }
 
 document.querySelector('#closeChefDialog')?.addEventListener('click', closeChefChat);
@@ -1973,7 +1996,7 @@ chefDialog?.addEventListener('close', () => document.querySelector('#chefButton'
 chefForm?.addEventListener('submit', async (event) => {
   event.preventDefault();
   const message = chefMessage.value.trim();
-  if (!message || chefPending) return;
+  if (!message || chefPending || chefClosing) return;
   appendChefMessage('user', message);
   chefMessage.value = '';
   chefPending = chefSessionActive = true;
@@ -2319,12 +2342,21 @@ async function submitFoodMessage(retry = null) {
     progressFinalized = true;
   };
   let pollingProgress = true;
+  let foodPollDelay = 1000;
+  const foodProgressController = new AbortController();
   void (async () => {
     while (pollingProgress) {
       if (!document.hidden) try {
-        const response = await fetch(`/api/food-entries/progress?requestId=${encodeURIComponent(body.requestId)}`, { credentials: 'same-origin' });
+        const response = await fetch(`/api/food-entries/progress?requestId=${encodeURIComponent(body.requestId)}`, { credentials: 'same-origin', signal: foodProgressController.signal });
+        if (response.status === 401) {
+          pollingProgress = false;
+          finishFoodProgress('Sesión vencida; inicia sesión de nuevo.');
+          break;
+        }
         const { progress } = response.ok ? await response.json() : {};
-        if (progress?.label && progressText.isConnected && progress.label !== currentProgressLabel) {
+        const changed = Boolean(progress?.label && progress.label !== currentProgressLabel);
+        foodPollDelay = changed ? 1000 : Math.min(foodPollDelay * 2, 5000);
+        if (pollingProgress && !progressFinalized && changed && progressText.isConnected) {
           const now = Date.now();
           completedProgress.push(`✓ ${currentProgressLabel} (${((now - currentProgressAt) / 1000).toFixed(1)} s)`);
           currentProgressLabel = progress.label;
@@ -2333,8 +2365,8 @@ async function submitFoodMessage(retry = null) {
           progressMessage.dataset.progressStage = currentProgressLabel;
           scrollChatToLatest(document.querySelector('#foodChatMessages'));
         }
-      } catch {}
-      if (pollingProgress) await new Promise((resolve) => setTimeout(resolve, 1500));
+      } catch { foodPollDelay = Math.min(foodPollDelay * 2, 5000); }
+      if (pollingProgress) await new Promise((resolve) => setTimeout(resolve, foodPollDelay));
     }
   })();
   feedback.textContent = 'Enviando la descripción…';
@@ -2394,6 +2426,24 @@ async function submitFoodMessage(retry = null) {
       notifyApp(result.message, 'info');
       resultNotificationHandled = true;
     } else {
+      if (result.refreshRequired) {
+        foodSessionReady = foodOpenCodeSessionActive = false;
+        foodRequestId = createFoodRequestId();
+        foodTargetEntryId = null;
+        foodEntryDate = '';
+        foodDialog.close();
+        resultNotificationHandled = true;
+        if (result.fecha && result.fecha !== foodDate()) {
+          const url = new URL(window.location.href);
+          url.searchParams.set('date', result.fecha);
+          navigateWithNotice(result.message, `${url.pathname}${url.search}${url.hash}`);
+          return;
+        }
+        notifyApp(result.message, 'info');
+        try { await loadFoodEntries(result.fecha || foodDate()); }
+        catch { notifyApp('La comida quedó guardada. Actualiza el día para ver los datos; no vuelvas a enviarla.', 'info'); }
+        return;
+      }
       if (result.appended) { await audioReady; playFoodAddedSound(); }
       if (result.fecha && result.fecha !== foodDate()) {
         foodDialog.close();
@@ -2438,6 +2488,7 @@ async function submitFoodMessage(retry = null) {
     if (!draftRestored && !resultNotificationHandled) await notifyResultIfHidden(foodDialog, 'comida', 'error', 'No se pudo completar el registro de comida', feedback.textContent, foodTargetEntryId);
   } finally {
     pollingProgress = false;
+    foodProgressController.abort();
     if (!progressFinalized) finishFoodProgress('Solicitud finalizada.');
     if (!progressMessage.isConnected) placeProgressAfterLatestUserMessage(document.querySelector('#foodChatMessages'), progressMessage);
     foodPending = false;
@@ -3263,7 +3314,7 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
       empty.className = 'empty';
       empty.textContent = 'No hay entrenamientos registrados para esta fecha.';
       list.append(empty);
-      return;
+      return true;
     }
     for (const record of records) {
       const card = document.createElement('article');
@@ -3323,6 +3374,7 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
       card.append(header, details, total);
       list.append(card);
     }
+    return true;
   } catch {
     if (loadId !== trainingEntriesLoadId) return;
     trainingDayStatus = 'error';
@@ -3346,6 +3398,7 @@ async function loadTrainingEntries(date = dayInput?.value || localDate()) {
     renderMacroCards(currentFoodEntries);
     list.textContent = 'No se pudieron cargar los entrenamientos guardados.';
     notifyApp('No se pudieron cargar los entrenamientos guardados.', 'error');
+    return false;
   } finally {
     if (loadId === trainingEntriesLoadId) list.setAttribute('aria-busy', 'false');
   }

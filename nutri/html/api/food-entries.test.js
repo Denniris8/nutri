@@ -142,6 +142,13 @@ test('known foods shortcut scales previously saved macros and ignores unknown fo
   const reply = await knownFoodsShortcut({ description: 'pollo 200 g', userId: 1, dbQuery, textSql });
   assert.equal(reply.items[0].macros.energyKcal, 266.67);
   assert.equal(reply.items[0].name, 'Pollo');
+  const decimalReply = await knownFoodsShortcut({ description: 'pollo 150,5 g, pollo 100 g', userId: 1, dbQuery, textSql });
+  assert.deepEqual(decimalReply.items.map((item) => item.quantityGrams), [150.5, 100]);
+  let historySql;
+  await knownFoodsShortcut({ description: 'pollo 100 g', userId: 1, dbQuery: async (sql) => { historySql = sql; return row; }, textSql });
+  assert.match(historySql, /ROW_NUMBER\(\) OVER \(PARTITION BY i.nombre_alimento/);
+  assert.match(historySql, /i.food_rank=1/);
+  assert.ok(!historySql.includes('LIMIT 200'));
   assert.equal(await knownFoodsShortcut({ description: 'Pavo 200 g', userId: 1, dbQuery, textSql }), null);
   assert.equal(await knownFoodsShortcut({ description: 'Pollo 200 g; Pavo 100 g', userId: 1, dbQuery, textSql }), null, 'Una coincidencia parcial no debe omitir alimentos desconocidos');
   assert.equal(await knownFoodsShortcut({ description: 'pollo asado con salsa', userId: 1, dbQuery, textSql }), null);

@@ -253,7 +253,7 @@ test('orquesta el registro simulado de salchicha, tortillas y huevo y comprueba 
   }));
 });
 
-test('reutiliza varios alimentos exactos antes del modelo y agrupa totales y lectura posterior', async () => {
+for (const failReadback of [false, true]) test(`historial sin modelo y confirmación guardada con fallo de lectura=${failReadback}`, async () => {
   const description = 'Pollo 200 g; Arroz 100 g';
   const statements = [];
   const known = [
@@ -278,6 +278,7 @@ test('reutiliza varios alimentos exactos antes del modelo y agrupa totales y lec
       if (sql.includes("JSON_OBJECT('name',i.nombre_alimento,'grams'")) return known.map((food) => JSON.stringify(food)).join('\n');
       if (sql.includes("SELECT 'records';")) {
         assert.ok(completed, 'El atajo no necesita consultar las comidas del día antes de guardar');
+        if (failReadback) throw new Error('simulated_readback_failure');
         return ['records', JSON.stringify({ id: '555', state: 'completado', fecha: '2026-11-10' }),
           'items', ...savedItems.map((item) => JSON.stringify(item)), 'clarifications', 'messages',
           JSON.stringify({ role: 'assistant', content: 'Guardado' })].join('\n');
@@ -294,12 +295,34 @@ test('reutiliza varios alimentos exactos antes del modelo y agrupa totales y lec
   assert.equal(result.status, 200);
   assert.equal(result.state, 'completado');
   assert.equal(modelCalls, 0);
+  if (failReadback) {
+    assert.equal(result.refreshRequired, true);
+    assert.equal(result.fecha, '2026-11-10');
+    assert.equal(result.entryId, '555');
+    assert.equal(result.requestId, '123e4567-e89b-42d3-a456-426614174005');
+    assert.match(result.message, /no es necesario reenviar/);
+    return;
+  }
   assert.deepEqual(result.records[0].items.map(({ quantityGrams, energyKcal }) => [quantityGrams, energyKcal]), [[200, 320], [100, 130]]);
   assert.deepEqual(result.messages, [{ role: 'assistant', content: 'Guardado' }]);
   assert.equal(statements.filter((sql) => sql.includes("SELECT 'records';")).length, 1);
   const commit = statements.find((sql) => sql.includes('COMMIT'));
   assert.match(commit, /INTO @food_energia_kcal,@food_energia_449_kcal,@food_proteina_g,@food_carbohidratos_g,@food_grasa_g FROM registros_comida_items/);
   assert.equal((commit.match(/FROM registros_comida_items WHERE registro_comida_id=555/g) || []).length, 2, 'Un borrado y una lectura agregada de los alimentos');
+});
+
+test('limpieza de sesión limita espera y conserva la referencia si falla', async () => {
+  const queries = [];
+  await assert.rejects(deleteFoodOpenCodeSession({
+    userId: '999994',
+    dbQuery: async (sql) => { queries.push(sql); return 'ses_cleanup_test'; },
+    requestOpenCode: async (method, endpoint, body, timeoutMs) => {
+      assert.equal(method, 'DELETE');
+      assert.equal(timeoutMs, 5000);
+      throw Object.assign(new Error('timeout'), { code: 'TIMEOUT' });
+    },
+  }), { code: 'TIMEOUT' });
+  assert.equal(queries.length, 1, 'No debe borrar la referencia MySQL si falla el DELETE remoto');
 });
 
 test('analiza salchicha, tortillas y huevo con OpenCode real sin guardar comidas', {

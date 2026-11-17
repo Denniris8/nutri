@@ -42,6 +42,29 @@ const post = (url, data, headers = {}) => fetch(url, {
   body: JSON.stringify(data),
 });
 
+test('manual device mode does not request Garmin confirmation despite retained connection metadata', async () => {
+  await withServer(async (sql) => {
+    if (sql.includes('SELECT s.usuario_id')) return '27';
+    if (sql.includes('FROM preferencias_usuario p')) return JSON.stringify({ deviceMode: 'ninguno', garminConnected: true });
+    if (sql.includes('SELECT zona_horaria')) return 'UTC';
+    if (sql.includes('INSERT INTO registros_entrenamientos')) return `41\n${JSON.stringify({
+      id: '41', requestId: '123e4567-e89b-42d3-a456-426614174001', description: 'Correr 30 minutos',
+      activity: 'Correr', durationMinutes: 30, weightKg: 70, met: 7, caloriesKcal: 257.3,
+      garminIncluded: 0, createdAt: '2026-11-17T11:00:00Z',
+    })}`;
+    return '';
+  }, async (base) => {
+    const cookie = `nutri_session=${signJwt('27', '123e4567-e89b-42d3-a456-426614174000', 'test-jwt-secret-must-be-at-least-32-bytes')}`;
+    const response = await post(`${base}/api/training-entries`, {
+      requestId: '123e4567-e89b-42d3-a456-426614174001', description: 'Correr 30 minutos',
+      date: '2026-11-17', savedAt: '11:00', analysis: { activity: 'Correr', durationMinutes: 30, weightKg: 70, met: 7 },
+      suppressNotification: true,
+    }, { Cookie: cookie, 'X-Client-Timezone': 'UTC' });
+    assert.equal(response.status, 201);
+    assert.equal((await response.json()).ok, true);
+  }, { openCodeRequest: async () => ({ status: 200, data: [] }) });
+});
+
 test('training day starts preferences, steps and active-plan reads without waiting for training records', { timeout: 5000 }, async () => {
   let releaseRecords;
   const records = new Promise((resolve) => { releaseRecords = resolve; });
@@ -1315,6 +1338,11 @@ test('authenticated user can refine an unsaved training plan and save the update
     assert.equal(saved.id, 5);
     assert.equal(saved.requestId, generated.runId);
     assert.equal(saved.inserted, true);
+    const factsSql = queries.find((sql) => sql.includes("'hasWeight',b.hasWeight"));
+    assert.ok(factsSql);
+    assert.equal((factsSql.match(/FROM registros_biometricos/g) || []).length, 1);
+    assert.equal((factsSql.match(/FROM registros_plicometro/g) || []).length, 1);
+    assert.match(factsSql, /JSON_EXTRACT\(IF\(COUNT\(peso_kg\)>0,'true','false'\),'\$'\)/);
     assert.ok(queries.some((sql) => sql.includes('INSERT INTO planes_entrenamiento') && sql.includes('usuario_id=27')));
     assert.deepEqual(requests, [
       { method: 'POST', endpoint: '/session' },

@@ -69,6 +69,98 @@ test('Chef rejects an empty message before opening an OpenCode session', async (
   assert.equal(called, false);
 });
 
+test('Chef cleanup discovers sessions without cache and only deletes the authenticated account in bounded batches', async () => {
+  let active = 0;
+  let peak = 0;
+  const removed = [];
+  const owned = Array.from({ length: 7 }, (_, index) => ({
+    id: `ses_orphan${index}`, metadata: { chefUserId: '987660' },
+  }));
+  assert.equal(await deleteChefSession({
+    userId: '987660',
+    requestOpenCode: async (method, endpoint, body, timeoutMs) => {
+      assert.equal(timeoutMs, 5000);
+      if (method === 'GET') return { status: 200, data: [...owned,
+        { id: 'ses_otheruser', metadata: { chefUserId: '987661' } },
+        { id: 'invalid', metadata: { chefUserId: '987660' } },
+      ] };
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise(setImmediate);
+      active -= 1;
+      removed.push(endpoint);
+      return { status: 204 };
+    },
+  }), true);
+  assert.equal(removed.length, 7);
+  assert.equal(peak, 3);
+  assert.ok(!removed.includes('/session/ses_otheruser'));
+});
+
+test('Chef renews a missing session once but never retries a timed-out message', async () => {
+  for (const failWithTimeout of [false, true]) {
+    const userId = failWithTimeout ? '987663' : '987662';
+    const remote = [];
+    let posts = 0;
+    let created = 0;
+    const args = {
+      userId, message: 'Una receta', nutritionContext: {},
+      readConfig: async () => ({ model: null, agent: null, variant: null, requestTimeoutMs: 10000 }),
+      requestOpenCode: async (method, endpoint, body) => {
+        if (method === 'GET' && endpoint === '/session') return { status: 200, data: remote };
+        if (method === 'POST' && endpoint === '/session') {
+          const id = `ses_recovery${userId}_${++created}`;
+          remote.push({ id, metadata: body.metadata });
+          return { status: 201, data: { id } };
+        }
+        if (method === 'DELETE') return { status: 404 };
+        posts += 1;
+        if (failWithTimeout) throw Object.assign(new Error('timeout'), { code: 'TIMEOUT' });
+        if (posts === 1) return { status: 404 };
+        return { status: 200, data: { parts: [{ type: 'text', text: 'Receta recuperada.' }] } };
+      },
+    };
+    if (failWithTimeout) {
+      await assert.rejects(sendChefMessage(args), { code: 'TIMEOUT' });
+      assert.equal(posts, 1);
+      assert.equal(created, 1);
+    } else {
+      assert.equal(await sendChefMessage(args), 'Receta recuperada.');
+      assert.equal(posts, 2);
+      assert.equal(created, 2);
+    }
+    let cachedDeleted = false;
+    await assert.rejects(deleteChefSession({
+      userId, requestOpenCode: async (method) => {
+        if (method === 'GET') return { status: 200, data: [] };
+        throw Object.assign(new Error('timeout'), { code: 'TIMEOUT' });
+      },
+    }), { code: 'TIMEOUT' });
+    await deleteChefSession({
+      userId, requestOpenCode: async (method) => {
+        if (method === 'GET') return { status: 200, data: [] };
+        cachedDeleted = true;
+        return { status: 204 };
+      },
+    });
+    assert.equal(cachedDeleted, true, 'La referencia debe sobrevivir a una limpieza fallida');
+  }
+});
+
+test('Chef does not classify model estimates or unknown provenance as external sources', () => {
+  const context = buildChefNutritionContext({
+    date: '2026-11-17', trainingRecords: [], exercise: {}, activePlan: null,
+    foodRecords: [{ state: 'completado', items: [
+      { macroStatus: 'estimado', macroSource: 'opencode_estimado' },
+      { macroStatus: 'declarado', macroSource: 'declarado_usuario' },
+      { macroStatus: 'estimado', macroSource: 'websearch' },
+      { macroStatus: 'declarado', macroSource: 'usda_fdc' },
+      { macroStatus: 'pendiente' },
+    ] }],
+  });
+  assert.deepEqual(context.macroSources, { estimated: 2, declared: 1, sourced: 2 });
+});
+
 test('Chef context calculates remaining targets with registered training adjustment', () => {
   const context = buildChefNutritionContext({
     date: '2026-10-28',

@@ -48,6 +48,7 @@ function validateTrainingEntry(data) {
   const duration = Number(durationMinutes.toFixed(2));
   const weight = Number(weightKg.toFixed(2));
   const intensity = Number(met.toFixed(2));
+  if (duration <= 0 || intensity <= 0) throw Object.assign(new Error('La duración y los MET deben ser al menos 0.01.'), { status: 400 });
   return {
     description, activity, durationMinutes: duration, weightKg: weight, met: intensity, savedAt, requestId, garminIncluded,
     caloriesKcal: Math.round(intensity * 3.5 * weight / 200 * duration * 10) / 10,
@@ -282,7 +283,7 @@ async function saveTrainingEntry({ response, data, userId, dbQuery, textSql, jso
     const hasExistingChoice = existingChoice != null && existingChoice !== '';
     if (entry.garminIncluded == null && hasExistingChoice) entry.garminIncluded = Number(existingChoice) === 1;
     if (garminEnabled && !hasExistingChoice) {
-      const records = await readTrainingEntries({ userId, dbQuery, date: occurredDate, timezone: calendarTimezone });
+      const records = await readTrainingEntries({ userId, dbQuery, date: occurredDate, resolvedTimezone: calendarTimezone });
       const candidate = {
         origin: 'manual', activity: entry.activity, durationMinutes: entry.durationMinutes,
         createdAt: createdAt ? `${createdAt.replace(' ', 'T')}Z` : new Date().toISOString(),
@@ -340,7 +341,7 @@ async function deleteTrainingEntry({ userId, entryId, dbQuery }) {
   return result.split(/\s+/).at(-1) === '1';
 }
 
-async function readTrainingEntries({ userId, dbQuery, date, timezone }) {
+async function readTrainingEntries({ userId, dbQuery, date, timezone, resolvedTimezone }) {
   const id = String(userId);
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta no válida.'), { status: 400 });
   let dateFilter = '';
@@ -351,7 +352,7 @@ async function readTrainingEntries({ userId, dbQuery, date, timezone }) {
     let end;
     try {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) throw new Error();
-      const calendarTimezone = await readCalendarTimezone(id, dbQuery, timezone);
+      const calendarTimezone = resolvedTimezone || await readCalendarTimezone(id, dbQuery, timezone);
       ({ start, end } = calendarDayRange(date, calendarTimezone));
     } catch { throw Object.assign(new Error('La fecha o zona horaria no es válida.'), { status: 400 }); }
     dateFilter = ` AND e.creado_en>='${start}' AND e.creado_en<'${end}'`;

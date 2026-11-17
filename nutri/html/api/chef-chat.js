@@ -27,7 +27,7 @@ function buildChefNutritionContext({ date, foodRecords, trainingRecords, exercis
   for (const item of items) {
     if (item.macroStatus === 'estimado') macroSources.estimated += 1;
     if (item.macroSource === 'declarado_usuario') macroSources.declared += 1;
-    if (!['estimado', 'declarado_usuario'].includes(item.macroSource)) macroSources.sourced += 1;
+    if (['usda_fdc', 'openfoodfacts', 'webfetch', 'websearch'].includes(item.macroSource)) macroSources.sourced += 1;
   }
   const nutrients = Object.fromEntries(nutrientFields.map(([key, itemKey, targetKey]) => {
     const rawTarget = base[targetKey];
@@ -77,7 +77,30 @@ function withUserLock(userId, run) {
   return current.finally(() => { if (locks.get(userId) === current) locks.delete(userId); });
 }
 
-async function openChefSession(userId, config, request) {
+async function listOwnedChefSessions(userId, request) {
+  const listed = await request('GET', '/session', undefined, 5000);
+  if (listed.status < 200 || listed.status >= 300 || !Array.isArray(listed.data)) {
+    throw Object.assign(new Error('No se pudieron revisar las sesiones anteriores de Chef.'), { code: 'CHEF_SESSION_DISCOVERY_FAILED' });
+  }
+  return listed.data.filter((session) => session?.metadata?.chefUserId === userId && /^ses_[A-Za-z0-9_-]{4,120}$/.test(session.id || ''));
+}
+
+async function removeChefSessions(ids, request) {
+  const unique = [...new Set(ids)];
+  // Lotes pequeños; esperar todos los DELETE antes de liberar el bloqueo de la cuenta.
+  for (let offset = 0; offset < unique.length; offset += 3) {
+    const results = await Promise.allSettled(unique.slice(offset, offset + 3).map(async (id) => {
+      const deleted = await request('DELETE', `/session/${encodeURIComponent(id)}`, undefined, 5000);
+      if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) {
+        throw Object.assign(new Error('No se pudo cerrar la sesión de Chef.'), { code: 'CHEF_SESSION_CLEANUP_FAILED' });
+      }
+    }));
+    const failed = results.find((result) => result.status === 'rejected');
+    if (failed) throw failed.reason;
+  }
+}
+
+async function openChefSession(userId, config, request, missingSessionId) {
   const fingerprint = createHash('sha256').update(JSON.stringify({ userId, scope: 'chef-chat', model: config.model, agent: config.agent, variant: config.variant })).digest('hex');
   const cached = sessions.get(userId);
   if (cached?.fingerprint === fingerprint) {
@@ -86,27 +109,14 @@ async function openChefSession(userId, config, request) {
     if (current.status >= 500) throw Object.assign(new Error('No se pudo verificar la sesión de Chef.'), { code: 'CHEF_SESSION_VERIFY_FAILED' });
     sessions.delete(userId);
   } else if (cached) {
-    const deleted = await request('DELETE', `/session/${encodeURIComponent(cached.id)}`, undefined, config.requestTimeoutMs);
-    if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) {
-      throw Object.assign(new Error('No se pudo cerrar la sesión anterior de Chef.'), { code: 'CHEF_SESSION_CLEANUP_FAILED' });
-    }
+    await removeChefSessions([cached.id], request);
     sessions.delete(userId);
   }
-  const listed = await request('GET', '/session', undefined, config.requestTimeoutMs);
-  if (listed.status < 200 || listed.status >= 300 || !Array.isArray(listed.data)) {
-    throw Object.assign(new Error('No se pudieron revisar las sesiones anteriores de Chef.'), { code: 'CHEF_SESSION_DISCOVERY_FAILED' });
-  }
-  const owned = listed.data.filter((session) => session?.metadata?.chefUserId === userId && /^ses_[A-Za-z0-9_-]{4,120}$/.test(session.id || ''));
+  const owned = await listOwnedChefSessions(userId, request);
   const reusable = owned
-    .filter((session) => session.metadata.chefConfigSha256 === fingerprint)
+    .filter((session) => session.id !== missingSessionId && session.metadata.chefConfigSha256 === fingerprint)
     .sort((a, b) => Date.parse(b.time?.updated || b.time?.created || 0) - Date.parse(a.time?.updated || a.time?.created || 0))[0];
-  for (const session of owned) {
-    if (session.id === reusable?.id) continue;
-    const deleted = await request('DELETE', `/session/${encodeURIComponent(session.id)}`, undefined, config.requestTimeoutMs);
-    if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) {
-      throw Object.assign(new Error('No se pudieron cerrar sesiones anteriores de Chef.'), { code: 'CHEF_SESSION_CLEANUP_FAILED' });
-    }
-  }
+  await removeChefSessions(owned.filter((session) => session.id !== reusable?.id).map((session) => session.id), request);
   if (reusable) {
     sessions.set(userId, { id: reusable.id, fingerprint });
     return reusable.id;
@@ -136,16 +146,24 @@ async function sendChefMessage({ userId, message, nutritionContext, requestOpenC
   }
   return withUserLock(id, async () => {
     const [config, system] = await Promise.all([readConfig(), readChefPrompt()]);
-    const sessionId = await openChefSession(id, config, requestOpenCode);
+    let sessionId = await openChefSession(id, config, requestOpenCode);
     const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
-    const result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
+    const body = {
       system,
       tools: {},
       ...(model ? { model } : {}),
       ...(config.agent ? { agent: config.agent } : {}),
       ...(config.variant ? { variant: config.variant } : {}),
       parts: [{ type: 'text', text: JSON.stringify({ message: text, nutritionContext }) }],
-    }, config.requestTimeoutMs);
+    };
+    const send = () => requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, body, config.requestTimeoutMs);
+    let result = await send();
+    if (result.status === 404) {
+      const missingSessionId = sessionId;
+      sessions.delete(id);
+      sessionId = await openChefSession(id, config, requestOpenCode, missingSessionId);
+      result = await send();
+    }
     if (result.status < 200 || result.status >= 300) throw Object.assign(new Error('Chef no pudo completar la respuesta.'), { code: 'CHEF_REPLY_FAILED' });
     const answer = (result.data?.parts || []).filter((part) => part.type === 'text').map((part) => part.text || '').join('\n').trim();
     if (!answer || answer.length > 12000) throw Object.assign(new Error('Chef no devolvió una respuesta válida.'), { code: 'CHEF_REPLY_INVALID' });
@@ -158,13 +176,11 @@ async function deleteChefSession({ userId, requestOpenCode = openCodeRequest }) 
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta autenticada no válida.'), { status: 400 });
   return withUserLock(id, async () => {
     const cached = sessions.get(id);
-    if (!cached) return false;
-    const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(cached.id)}`);
-    if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) {
-      throw Object.assign(new Error('No se pudo cerrar el chat Chef.'), { code: 'CHEF_SESSION_CLEANUP_FAILED' });
-    }
+    const owned = await listOwnedChefSessions(id, requestOpenCode);
+    const ids = [...owned.map((session) => session.id), ...(cached ? [cached.id] : [])];
+    await removeChefSessions(ids, requestOpenCode);
     sessions.delete(id);
-    return true;
+    return ids.length > 0;
   });
 }
 

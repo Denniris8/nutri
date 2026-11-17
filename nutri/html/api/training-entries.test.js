@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { calculateTrainingEnergy, estimateStepEnergyKcal, readTrainingEntries, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./training-entries.js');
+const { calculateTrainingEnergy, estimateStepEnergyKcal, readTrainingEntries, saveDailySteps, saveTrainingEntry, validateTrainingEntry, visibleTrainingEntries } = require('./training-entries.js');
 
 const manual = (overrides = {}) => ({ origin: 'manual', activity: 'Correr', createdAt: '2026-10-15T10:00:00Z', durationMinutes: 30, met: 7, weightKg: 70, ...overrides });
 const garmin = (overrides = {}) => ({ origin: 'garmin', energyType: 'reportada_dispositivo', activity: 'running', createdAt: '2026-10-15T10:00:00Z', durationMinutes: 30, caloriesKcal: 250, ...overrides });
@@ -9,6 +9,33 @@ const trainingRequest = (overrides = {}) => ({
   analysis: { activity: 'Correr', durationMinutes: 30, weightKg: 70, met: 7 }, suppressNotification: true, ...overrides,
 });
 const trainingJson = (response, status, body) => { response.status = status; response.body = body; };
+
+test('training rejects positive duration or MET rounded to zero', () => {
+  for (const key of ['durationMinutes', 'met']) {
+    assert.throws(() => validateTrainingEntry(trainingRequest({
+      analysis: { ...trainingRequest().analysis, [key]: 0.001 },
+    })), { status: 400 });
+    assert.equal(validateTrainingEntry(trainingRequest({
+      analysis: { ...trainingRequest().analysis, [key]: 0.01 },
+    }))[key], 0.01);
+  }
+});
+
+test('Garmin duplicate check reuses the server-resolved timezone', async () => {
+  const queries = [];
+  const response = {};
+  await saveTrainingEntry({
+    response, data: trainingRequest({ date: '2026-11-17', savedAt: '11:00' }),
+    userId: '27', garminEnabled: true, timezone: 'UTC', textSql: (value) => `'${value}'`, json: trainingJson,
+    dbQuery: async (sql) => {
+      queries.push(sql);
+      return sql.includes('SELECT zona_horaria') ? 'America/Mexico_City' : '';
+    },
+  });
+  assert.equal(response.body.requiresGarminConfirmation, true);
+  assert.equal(queries.filter((sql) => sql.includes('SELECT zona_horaria')).length, 1);
+  assert.match(queries.find((sql) => sql.includes('FROM registros_entrenamientos e')), /2026-11-17 06:00:00/);
+});
 
 test('la lectura diaria de entrenamientos es completa y conserva el límite solo en el historial general', async () => {
   const queries = [];

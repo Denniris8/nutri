@@ -24,3 +24,6 @@ Responde con texto normal, no JSON. Si falta información esencial, haz una preg
 - Cada chat usa una sesión OpenCode temporal asociada por el servidor a la cuenta autenticada; el navegador no recibe ni elige el ID de sesión.
 - Chef permite hasta 20 solicitudes de mensaje por dirección IP en una ventana de 2 minutos; al exceder el límite, el servidor responde 429 e indica cuándo se puede volver a enviar.
 - El prompt se vuelve a leer en cada mensaje. La conversación no se guarda en MySQL; al cerrar Chef se elimina la sesión OpenCode.
+- El cierre bloquea envíos y cierres duplicados mientras se confirma/procesa. El servidor descubre las sesiones de la cuenta aunque haya perdido su caché tras reiniciar; las elimina en lotes de hasta tres, con timeout de 5 segundos por operación. Si falla la limpieza, no confirma el cierre ni descarta la referencia en caché.
+- Si el envío devuelve 404 porque la sesión desapareció, se renueva y se reenvía el mensaje una sola vez; no se repiten mensajes ante timeouts ni otros errores. Una sesión desaparecida no permite recuperar su conversación anterior.
+- La procedencia distingue estimaciones del modelo, declaraciones del usuario y fuentes externas conocidas; una procedencia ausente no cuenta como fuente externa.

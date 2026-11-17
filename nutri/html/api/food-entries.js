@@ -611,7 +611,14 @@ async function readKnownFoods({ userId, names, dbQuery, textSql }) {
   const unique = [...new Set((names || []).map((name) => String(name || '').trim()).filter((name) => name && name.length <= 150))].slice(0, 12);
   const known = new Map();
   if (!unique.length) return known;
-  const rows = await dbQuery(`SELECT JSON_OBJECT('name',i.nombre_alimento,'grams',i.cantidad_g,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente,'energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g) FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND e.estado='completado' AND e.creado_en >= UTC_TIMESTAMP() - INTERVAL 7 DAY AND i.base_macros='per_portion' AND i.cantidad_g>0 AND i.energia_kcal IS NOT NULL AND i.nombre_alimento IN (${unique.map(textSql).join(',')}) ORDER BY e.creado_en DESC,i.id DESC LIMIT 200;`);
+  const rows = await dbQuery(`SELECT JSON_OBJECT('name',i.nombre_alimento,'grams',i.cantidad_g,'macroStatus',i.estado_macros,'macroSource',i.fuente_macros,'sourceName',i.nombre_fuente_web,'sourceUrl',i.url_fuente_web,'sourceQuote',i.cita_fuente,'energyKcal',i.energia_kcal,'proteinG',i.proteina_g,'carbohydrateG',i.carbohidratos_g,'fatG',i.grasa_g) FROM (
+    SELECT i.*,ROW_NUMBER() OVER (PARTITION BY i.nombre_alimento ORDER BY e.creado_en DESC,i.id DESC) AS food_rank
+    FROM registros_comida_items i JOIN registros_comidas e ON e.id=i.registro_comida_id
+    WHERE e.usuario_id=${userId} AND e.estado='completado' AND e.creado_en >= UTC_TIMESTAMP() - INTERVAL 7 DAY
+      AND i.base_macros='per_portion' AND i.cantidad_g>0
+      AND i.energia_kcal IS NOT NULL AND i.proteina_g IS NOT NULL AND i.carbohidratos_g IS NOT NULL AND i.grasa_g IS NOT NULL
+      AND i.nombre_alimento IN (${unique.map(textSql).join(',')})
+  ) i WHERE i.food_rank=1;`);
   for (const row of rows ? rows.split(/\r?\n/).filter(Boolean) : []) {
     let food;
     try { food = JSON.parse(row); } catch { continue; }
@@ -642,7 +649,7 @@ function knownFoodProduct(food, name) {
 }
 
 async function knownFoodsShortcut({ description, userId, dbQuery, textSql }) {
-  const segments = String(description || '').split(/\r?\n|;|,|\s+y\s+|\+/i).map((part) => part.trim()).filter(Boolean);
+  const segments = String(description || '').split(/\r?\n|;|(?<!\d),|,(?!\d)|\s+y\s+|\+/i).map((part) => part.trim()).filter(Boolean);
   if (!segments.length || segments.length > 12) return null;
   const parsed = segments.map((segment) => segment.match(/^(.{1,150}?)\s+(\d+(?:[.,]\d+)?)\s*(?:g|gr|grs|gramos?)\.?$/i));
   if (parsed.some((match) => !match)) return null;
@@ -690,6 +697,7 @@ async function saveFoodEntryUnlocked({ response, data, userId, dbQuery, textSql,
   let committed = false;
   let committedEntryId;
   let committedConfirmation;
+  let committedDate;
   let stage = 'draft';
   try {
     const initial = { timezone: '', draftDate: '', prior: '' };
@@ -1172,6 +1180,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     committed = true;
     committedEntryId = destinationId;
     committedConfirmation = confirmation;
+    committedDate = savedDate;
     traceFoodSession(trace, 'items_saved', { itemCount: items.length, appended: append });
     stage = 'verification';
     let messages = [];
@@ -1210,7 +1219,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     try { await recordFoodError({ dbQuery, textSql, userId, trace, stage, error, httpStatus: entryId ? 502 : 503 }); }
     catch { console.error(JSON.stringify({ area: 'error-log', event: 'database_write_failed' })); }
     if (committed) {
-      json(response, 503, { state: 'completado', entryId: committedEntryId, requestId: entry.requestId, message: `${committedConfirmation} No pude verificar la lectura actualizada. Actualiza el día antes de volver a enviar la solicitud.` });
+      json(response, 200, { state: 'completado', refreshRequired: true, fecha: committedDate, entryId: committedEntryId, requestId: entry.requestId, message: `${committedConfirmation} No pude verificar la lectura actualizada. Actualiza el día; no es necesario reenviar la comida.` });
       return;
     }
     if (entryId && /^\d+$/.test(entryId)) {

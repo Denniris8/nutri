@@ -288,7 +288,7 @@ async function deleteTrainingSession({ userId, requestOpenCode = openCodeRequest
 async function closePendingPlanSession(userId, requestOpenCode, runId) {
   const pending = pendingPlanSessions.get(userId);
   if (!pending || runId && pending.runId !== runId) return false;
-  const deleted = pending.sessionId ? await requestOpenCode('DELETE', `/session/${encodeURIComponent(pending.sessionId)}`) : { status: 204 };
+  const deleted = pending.sessionId ? await requestOpenCode('DELETE', `/session/${encodeURIComponent(pending.sessionId)}`, undefined, 5000) : { status: 204 };
   if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) {
     throw Object.assign(new Error('No se pudo cerrar la sesión del plan.'), { code: 'TRAINING_PLAN_SESSION_CLEANUP' });
   }

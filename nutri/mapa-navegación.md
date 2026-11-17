@@ -53,7 +53,15 @@
 
 Los reintentos de guardado de entrenamientos reutilizan el payload completo en `savePendingTraining()` sin volver a analizar. Su respaldo y el de planes viven en `sessionStorage`, separados por cuenta mediante un ámbito opaco insertado por el servidor en el dashboard; no son registros definitivos ni se trasladan entre navegadores. El respaldo de planes incluye firma, propiedad y vencimiento; no expone IDs de sesión OpenCode. Cambiar la clave JWT invalida estos respaldos.
 
+Entrenamientos: los reintentos conservan el respaldo ante HTTP 409 y no sondean progreso de análisis. El guardado advierte si falla el refresco del día sin ofrecer reenviar un registro confirmado. `loadTrainingEntries()` devuelve `false` ante fallo de carga. Las comprobaciones Garmin reutilizan la zona horaria resuelta en servidor y exigen modo Garmin conectado tanto al guardar como al consultar; duración y MET deben seguir siendo positivos después del redondeo.
+
+Planes: generación/refinamiento y guardado son mutuamente excluyentes en la interfaz, incluidos dobles envíos; las respuestas de generaciones canceladas no reactivan sesiones ni controles. La limpieza remota del plan espera como máximo 5 segundos por DELETE y conserva la sesión pendiente si falla. Al guardar, la cobertura biométrica y de plicometría se agrega una vez por tabla conservando booleanos JSON y ausencia de datos.
+
+Chef: `chef-chat.js` centraliza descubrimiento por propiedad y limpieza de sesiones remotas, incluso sin caché, en lotes de hasta tres DELETE. La UI bloquea envíos durante el cierre. Recupera una sesión desaparecida solo ante 404 del mensaje, con un único reenvío y sin repetir timeouts; regresiones en `chef-chat.test.js` y `onboarding-flow.test.js`.
+
 El borrador de comida se recupera con sus mensajes/candidatos en una ejecución MySQL con snapshot de solo lectura (`readPendingFoodDraft`). El entrenamiento se verifica después de `COMMIT` en la misma ejecución que lo guarda; las lecturas independientes de su vista diaria se lanzan en paralelo en `server.js`. El sondeo compartido de entrenamientos/planes (`startTrainingProgress`) adapta su intervalo entre 1 y 5 segundos y termina ante HTTP 401. Se conserva la petición independiente de pasos diarios.
+
+Comidas: el historial selecciona la última referencia completa por nombre sin límite global de filas; admite coma decimal en cantidades. Si falla la lectura tras confirmar el guardado, la API responde con `refreshRequired` y la interfaz refresca el día sin ofrecer reenvío. La limpieza remota tiene un timeout de 5 segundos y conserva su referencia si falla. El sondeo de comidas adapta su intervalo entre 1 y 5 segundos, termina ante 401 y se cancela al finalizar el envío.
 
 `html/api/food-entry-flow.test.js` distingue la orquestación simulada de la prueba optativa de análisis real de salchicha/tortillas/huevo (`NUTRI_TEST_REAL_EGG_ANALYSIS=1`). Esta última envía el texto original, imprime la respuesta y usa una sesión temporal de diagnóstico sin cuenta ni escrituras MySQL; no prueba autenticación ni persistencia real. Requiere autorización antes de ejecutarla y consume una solicitud real al modelo configurado.
 

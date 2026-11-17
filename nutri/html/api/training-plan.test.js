@@ -28,7 +28,14 @@ test('training plan keeps its temporary session until the user saves or cancels'
   assert.equal(calls[0].body.permission[0].action, 'deny');
   assert.deepEqual(JSON.parse(calls[1].body.parts[0].text), { goals: 'Ganar fuerza', context });
   assert.equal(calls.at(-1).method, 'POST');
-  await deleteTrainingPlanSession({ userId: '27', runId: generated.runId, requestOpenCode: async (method, endpoint) => {
+  await assert.rejects(deleteTrainingPlanSession({ userId: '27', runId: generated.runId,
+    requestOpenCode: async (method, endpoint, body, timeoutMs) => {
+      assert.equal(timeoutMs, 5000);
+      throw Object.assign(new Error('simulated timeout'), { code: 'TIMEOUT' });
+    },
+  }), { code: 'TIMEOUT' });
+  await deleteTrainingPlanSession({ userId: '27', runId: generated.runId, requestOpenCode: async (method, endpoint, body, timeoutMs) => {
+    assert.equal(timeoutMs, 5000);
     calls.push({ method, endpoint, body: undefined });
     return { status: 204 };
   } });

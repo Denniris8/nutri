@@ -497,7 +497,7 @@ async function deleteFoodOpenCodeSession({ userId, dbQuery, requestOpenCode = op
     const sessionId = await dbQuery(`SELECT session_id FROM sesiones_comidas_opencode WHERE usuario_id=${id} LIMIT 1;`);
     if (!sessionId) { verifiedFoodSessions.delete(id); return; }
     try {
-      const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(sessionId)}`);
+      const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(sessionId)}`, undefined, 5000);
       if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404 && !forgetOnError) {
         throw openCodeHttpError(deleted.status, 'DELETE /api/session/{id}', 'No se pudo eliminar la sesión OpenCode de comidas.');
       }

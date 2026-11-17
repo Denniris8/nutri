@@ -1319,7 +1319,27 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
         const disclosure = extractPlanDisclosure(await readTrainingPlanPrompt());
         const [profile, factsRow] = await Promise.all([
           readAccountProfile({ userId: claims.sub, dbQuery }),
-          dbQuery(`SELECT JSON_OBJECT('age',(SELECT edad FROM usuarios WHERE id=${claims.sub} LIMIT 1),'hasWeight',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND peso_kg IS NOT NULL),'bodyFacts',JSON_OBJECT('bmi',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND imc IS NOT NULL),'bodyFatPct',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND grasa_pct IS NOT NULL),'musclePct',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND musculo_pct IS NOT NULL),'visceralFat',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND grasa_visceral IS NOT NULL),'bodyAge',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND edad_corporal IS NOT NULL),'restingMetabolismKcal',EXISTS(SELECT 1 FROM registros_biometricos WHERE usuario_id=${claims.sub} AND metabolismo_basal_kcal IS NOT NULL)),'plicometryFacts',JSON_OBJECT('tricepsMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND triceps_mm IS NOT NULL),'bicepsMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND biceps_mm IS NOT NULL),'subescapularMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND subescapular_mm IS NOT NULL),'suprailiacoMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND suprailiaco_mm IS NOT NULL),'abdominalMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND abdominal_mm IS NOT NULL),'musloAnteriorMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND muslo_anterior_mm IS NOT NULL),'pantorrillaMm',EXISTS(SELECT 1 FROM registros_plicometro WHERE usuario_id=${claims.sub} AND pantorrilla_mm IS NOT NULL)));`),
+          dbQuery(`SELECT JSON_OBJECT('age',(SELECT edad FROM usuarios WHERE id=${claims.sub} LIMIT 1),
+            'hasWeight',b.hasWeight,
+            'bodyFacts',b.facts,
+            'plicometryFacts',p.facts)
+          FROM (SELECT JSON_EXTRACT(IF(COUNT(peso_kg)>0,'true','false'),'$') AS hasWeight,JSON_OBJECT(
+            'bmi',JSON_EXTRACT(IF(COUNT(imc)>0,'true','false'),'$'),
+            'bodyFatPct',JSON_EXTRACT(IF(COUNT(grasa_pct)>0,'true','false'),'$'),
+            'musclePct',JSON_EXTRACT(IF(COUNT(musculo_pct)>0,'true','false'),'$'),
+            'visceralFat',JSON_EXTRACT(IF(COUNT(grasa_visceral)>0,'true','false'),'$'),
+            'bodyAge',JSON_EXTRACT(IF(COUNT(edad_corporal)>0,'true','false'),'$'),
+            'restingMetabolismKcal',JSON_EXTRACT(IF(COUNT(metabolismo_basal_kcal)>0,'true','false'),'$')) AS facts
+            FROM registros_biometricos WHERE usuario_id=${claims.sub}) b
+          CROSS JOIN (SELECT JSON_OBJECT(
+            'tricepsMm',JSON_EXTRACT(IF(COUNT(triceps_mm)>0,'true','false'),'$'),
+            'bicepsMm',JSON_EXTRACT(IF(COUNT(biceps_mm)>0,'true','false'),'$'),
+            'subescapularMm',JSON_EXTRACT(IF(COUNT(subescapular_mm)>0,'true','false'),'$'),
+            'suprailiacoMm',JSON_EXTRACT(IF(COUNT(suprailiaco_mm)>0,'true','false'),'$'),
+            'abdominalMm',JSON_EXTRACT(IF(COUNT(abdominal_mm)>0,'true','false'),'$'),
+            'musloAnteriorMm',JSON_EXTRACT(IF(COUNT(muslo_anterior_mm)>0,'true','false'),'$'),
+            'pantorrillaMm',JSON_EXTRACT(IF(COUNT(pantorrilla_mm)>0,'true','false'),'$')) AS facts
+            FROM registros_plicometro WHERE usuario_id=${claims.sub}) p;`),
         ]);
         const facts = JSON.parse(factsRow);
         if (facts.hasWeight !== true) {
@@ -1419,7 +1439,7 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
       let preferences;
       try { preferences = await readPreferences({ userId: claims.sub, dbQuery }); }
       catch { authError(response, 503, 'No se pudo validar la configuración de entrenamiento.'); return; }
-      const garminEnabled = preferences?.garminConnected === true;
+      const garminEnabled = preferences?.deviceMode === 'garmin' && preferences.garminConnected === true;
       await saveTrainingEntry({ response, data, userId: claims.sub, dbQuery, textSql, json, timezone: request.headers['x-client-timezone'], garminEnabled });
       if (response.statusCode === 201) {
         try { await deleteTrainingSession({ userId: claims.sub, requestOpenCode: openCodeRequest }); }
