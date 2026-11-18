@@ -2095,12 +2095,20 @@ function appendFoodChatMessage(role, content) {
   return bubble;
 }
 
-function renderFoodChat(messages) {
+function renderFoodChat(messages, previewItems = [], question = null) {
   const chat = document.querySelector('#foodChatMessages');
   chat.replaceChildren();
   const thread = document.querySelector('#foodChatThread');
   thread.hidden = !messages.length && document.querySelector('#foodLoading').hidden;
-  for (const message of messages) appendFoodChatMessage(message.role, message.content);
+  const questionIndex = question ? messages.findLastIndex((message) => message.role === 'assistant' && message.content === question) : -1;
+  for (const [index, message] of messages.entries()) {
+    if (index === questionIndex) renderFoodPreview(previewItems);
+    appendFoodChatMessage(message.role, message.content);
+  }
+  if (questionIndex < 0) {
+    renderFoodPreview(previewItems);
+    if (question) appendFoodChatMessage('assistant', question);
+  }
   scrollChatToLatest(chat);
 }
 
@@ -2196,8 +2204,7 @@ async function restoreFoodDraft(feedback) {
     foodRequestId = draft.requestId;
     foodEntryDate = draft.fecha;
     foodTargetEntryId = draft.targetEntryId || null;
-    renderFoodChat(draft.messages || []);
-    renderFoodPreview(draft.previewItems);
+    renderFoodChat(draft.messages || [], draft.previewItems, draft.question);
     document.querySelector('#foodEntryDate').textContent = `Borrador del día ${draft.fecha}; todavía no está guardado como comida.`;
     label.textContent = draft.question ? 'Tu respuesta' : 'Alimentos consumidos';
     description.placeholder = draft.question ? 'Responde la pregunta del asistente…' : 'Describe o corrige los alimentos…';
@@ -2406,11 +2413,11 @@ async function submitFoodMessage(retry = null) {
       throw new Error(result.error || result.message || 'No se pudo guardar la comida.');
     }
     pendingMessage.remove();
-    renderFoodChat(result.messages || []);
+    renderFoodChat(result.messages || [], result.state === 'requiere_aclaracion' ? result.previewItems : [],
+      result.state === 'requiere_aclaracion' ? result.question : null);
     finishFoodProgress(result.state === 'requiere_aclaracion' ? 'Esperando aclaración.' : 'Registro completado.');
     placeProgressAfterLatestUserMessage(document.querySelector('#foodChatMessages'), progressMessage);
     if (result.state === 'requiere_aclaracion') {
-      renderFoodPreview(result.previewItems);
       foodOpenCodeSessionActive = true;
       foodRequestId = result.requestId;
       foodEntryDate = foodDate();

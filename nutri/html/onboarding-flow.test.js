@@ -775,6 +775,10 @@ test('clarification applies multiple preview edits together in the reply compose
   await settle();
   const preview = elements['#foodChatMessages'].children.find((child) => child.className === 'food-chat-preview');
   assert.ok(preview);
+  const chatChildren = elements['#foodChatMessages'].children;
+  const questionIndex = chatChildren.findIndex((child) => child.dataset.role === 'assistant'
+    && child.children?.[1]?.textContent === '¿Cuántos gramos?');
+  assert.ok(questionIndex > chatChildren.indexOf(preview), 'La pregunta debe aparecer después de los campos editables');
   const rows = preview.children.filter((child) => child.className === 'food-preview-row');
   rows[0].children[0].value = 'Pollo asado';
   rows[0].children[1].value = '150 g';
@@ -790,6 +794,24 @@ test('clarification applies multiple preview edits together in the reply compose
   assert.equal(sentEdits.length, 2);
   assert.equal(sentEdits[0].name, 'Pollo asado');
   assert.equal(sentEdits[1].quantityText, '75 g');
+});
+
+test('restored food drafts place their current question after the editable preview without duplicating it', async () => {
+  for (const questionInMessages of [false, true]) {
+    const question = '¿Cuántos gramos de pollo consumiste?';
+    const messages = [{ role: 'user', content: 'Pollo' }];
+    if (questionInMessages) messages.push({ role: 'assistant', content: question });
+    const flow = loadFlow('', async () => ({ ok: true, json: async () => ({ draft: {
+      requestId: 'draft', fecha: '2026-11-18', question, messages,
+      previewItems: [{ name: 'Pollo', quantityGrams: null }],
+    } }) }));
+    await flow.evaluate("restoreFoodDraft(document.querySelector('#foodEntryFeedback'))");
+    const children = flow.elements['#foodChatMessages'].children;
+    const previewIndex = children.findIndex((child) => child.className === 'food-chat-preview');
+    const questions = children.filter((child) => child.dataset.role === 'assistant' && child.children?.[1]?.textContent === question);
+    assert.equal(questions.length, 1);
+    assert.ok(previewIndex >= 0 && children.indexOf(questions[0]) > previewIndex);
+  }
 });
 
 test('More tab switches the visible dashboard section', () => {
