@@ -33,6 +33,7 @@ class Element {
   showPopover() { this.open = true; }
   hidePopover() { this.open = false; }
   dispatch(name) {
+    if (name === 'click' && this.disabled) return;
     const event = { currentTarget: this, preventDefault() { this.defaultPrevented = true; } };
     const results = (this.listeners[name] || []).map((listener) => listener(event));
     const pending = results.filter((result) => result && typeof result.then === 'function');
@@ -688,6 +689,7 @@ test('plan refinement and saving cannot overlap, and stale replies cannot restor
     return Promise.resolve({ ok: true, json: async () => ({}) });
   }, { ids, intl: Intl, elements: { 'label[for="trainingPlanGoals"]': new Element() } });
   await settle();
+  calls.length = 0;
   flow.evaluate(`
     trainingPlanSessionReady = true;
     generatedTrainingPlan = 'Original'; generatedTrainingPlanRunId = 'draft';
