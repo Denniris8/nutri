@@ -1001,7 +1001,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       const sourceTime = foodReference.time.hours.map((hour) => formatFoodTime(hour, foodReference.time.minute)).join(' o ');
       const candidates = referenceItems.map((item) => `${item.name}${item.quantity ? ` (${item.quantity})` : ''}`).join('; ');
       clarification = candidates
-        ? `No pude identificar con seguridad qué alimento de la comida de las ${sourceTime} debo reutilizar. Elige uno: ${candidates}.`
+        ? `Alimentos de la comida de las ${sourceTime}: ${candidates}. ¿Cuál debo reutilizar?`
         : `No encontré una comida guardada a las ${sourceTime} para reutilizar sus macros. Confirma la hora o indica los macros del alimento.`;
     }
     if (isQuantityQuestion(saved.question) && pendingMasses.length > 1 && items.some((item) => item.quantityGrams == null)) {
@@ -1020,7 +1020,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     }
     if (!reuseAsNewMeal && !activeTarget && matchedMeals.length > 1 && !timeClarification
       && (result.action === 'update' || requestedTime && !requestedTime.invalid)) {
-      timeClarification = `Hay varias comidas${requestedTime ? ' a esa hora' : ' guardadas este día'}. ¿A cuál deseas ${result.action === 'update' ? 'corregir' : 'agregar alimentos'}? ${matchedMeals.map((meal) => `${meal.hora}: ${(meal.alimentos || []).join(', ') || meal.descripcion}`).join('; ')}`;
+      timeClarification = `Hay varias comidas${requestedTime ? ' a esa hora' : ' guardadas este día'}: ${matchedMeals.map((meal) => `${meal.hora}: ${(meal.alimentos || []).join(', ') || meal.descripcion}`).join('; ')}. ¿A cuál deseas ${result.action === 'update' ? 'corregir' : 'agregar alimentos'}?`;
     }
     if (!requestedTime && !activeTarget && result.action !== 'update' && clarification && /(?:a qu[eé] hora|hora.*consumiste|cu[aá]ndo.*comida)/i.test(clarification)) clarification = null;
     if (result.action !== 'update' && clarification && /(?:a cu[aá]l comida|qu[eé] comida|which meal|no hay comidas guardadas|no existe una comida)/i.test(clarification)) clarification = null;
@@ -1067,7 +1067,7 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
       if (!items.some((item) => item.targetItemId != null) || items.some((item) => item.targetItemId != null && !availableItemIds.has(String(item.targetItemId)))) {
         const availableItems = (target?.items || []).map((item) => `${item.name}${item.quantity ? ` (${item.quantity})` : ''}`).join('; ');
         clarification = availableItems
-          ? `No pude identificar cuál alimento corregir. Los alimentos guardados en esa comida son: ${availableItems}. Indica cuál y la cantidad correcta.`
+          ? `Alimentos guardados en esa comida: ${availableItems}. ¿Cuál quieres corregir y cuál es la cantidad correcta?`
           : 'No encontré alimentos guardados en esa comida. Indica cuál registro quieres corregir.';
         updateTargetId = null;
       }
