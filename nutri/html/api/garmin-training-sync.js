@@ -72,13 +72,19 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
         let stepsUnavailable = 0;
         let activeCaloriesUpdated = 0;
         let activeCaloriesUnavailable = 0;
+        const dailySummaries = [];
         for (const [stepDate, summary] of stepResults) {
           const stepsCount = summary?.stepsCount ?? null;
           if (summary?.activeKcal == null) activeCaloriesUnavailable += 1;
-          if (stepsCount == null) { stepsUnavailable += 1; continue; }
+          if (stepsCount == null) {
+            stepsUnavailable += 1;
+            dailySummaries.push({ date: stepDate, stepsCount: null, activeKilocalories: summary?.activeKcal ?? null, stepsSaved: false, activeCaloriesSaved: false });
+            continue;
+          }
           await saveDailySteps({ userId, date: stepDate, localDate, stepsCount, source: 'garmin', activeKcal: summary.activeKcal, dbQuery, textSql });
           stepsUpdated += 1;
           if (summary.activeKcal != null) activeCaloriesUpdated += 1;
+          dailySummaries.push({ date: stepDate, stepsCount, activeKilocalories: summary.activeKcal, stepsSaved: true, activeCaloriesSaved: summary.activeKcal != null });
         }
         const rows = new Map(activities.map((activity) => {
           const activityId = Number(activity.activityId);
@@ -109,7 +115,7 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
             createdAt,
           }];
         }).filter(([id]) => id !== null));
-        if (!rows.size) return { activities: activities.length, activitiesUnavailable, saved: 0, updated: 0, unchanged: 0, skipped: activities.length, stepsUpdated, stepsUnavailable, activeCaloriesUpdated, activeCaloriesUnavailable };
+        if (!rows.size) return { activities: activities.length, activitiesUnavailable, saved: 0, updated: 0, unchanged: 0, stepsUpdated, stepsUnavailable, activeCaloriesUpdated, activeCaloriesUnavailable, dailySummaries };
         const vigencySql = `(SELECT id FROM vigencias_planes_entrenamiento WHERE usuario_id=${userId} AND fecha_inicio<=${textSql(date)} AND (fecha_fin IS NULL OR fecha_fin>=${textSql(date)}) ORDER BY fecha_inicio DESC,id DESC LIMIT 1)`;
         const statements = `START TRANSACTION;
 SELECT id INTO @locked_user FROM usuarios WHERE id=${userId} FOR UPDATE;
@@ -119,7 +125,7 @@ COMMIT;`;
         const saved = counts.filter((count) => count === 1).length;
         const updated = counts.filter((count) => count === 2).length;
         const unchanged = counts.filter((count) => count === 0).length;
-        return { activities: activities.length, activitiesUnavailable, saved, updated, unchanged, skipped: activities.length - rows.size, stepsUpdated, stepsUnavailable, activeCaloriesUpdated, activeCaloriesUnavailable };
+        return { activities: activities.length, activitiesUnavailable, saved, updated, unchanged, stepsUpdated, stepsUnavailable, activeCaloriesUpdated, activeCaloriesUnavailable, dailySummaries };
       })(),
       new Promise((_, reject) => {
         timeout = setTimeout(() => {

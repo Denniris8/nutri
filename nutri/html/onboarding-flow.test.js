@@ -549,6 +549,27 @@ test('training retry keeps its payload and backup on conflict without polling an
   assert.ok(!urls.some((url) => url.startsWith('/api/training-progress') || url === '/api/training-analysis'));
 });
 
+test('Garmin sync summary omits skipped activities and reports actual daily values', async () => {
+  const flow = loadFlow('', async (url) => url === '/api/integrations/garmin/sync'
+    ? { ok: true, json: async () => ({
+      activities: 4, saved: 1, updated: 2, unchanged: 0, skipped: 1, activitiesUnavailable: false,
+      dailySummaries: [{ date: '2026-11-20', stepsCount: 8456, activeKilocalories: 410, stepsSaved: true, activeCaloriesSaved: true }],
+    }) }
+    : { ok: true, json: async () => ({}) }, {
+    ids: ['syncGarminTrainingButton', 'trainingFeedback', 'trainingChatMessages', 'daySelect'],
+    intl: Intl,
+  });
+  flow.evaluate('loadTrainingEntries = async () => true; loadDailySteps = async () => true;');
+  flow.elements['#daySelect'].value = '2026-11-20';
+  await flow.elements['#syncGarminTrainingButton'].dispatch('click');
+
+  const message = flow.elements['#trainingFeedback'].textContent;
+  assert.match(message, /1 actividad nueva guardada; 2 actividades actualizadas por cambios en Garmin/);
+  assert.match(message, /Resumen Garmin 2026-11-20: 8,456 pasos guardados; 410 kcal activas guardadas/);
+  assert.doesNotMatch(message, /sin cambios/);
+  assert.doesNotMatch(message, /no se pudieron importar|no importables|skipped/i);
+});
+
 test('training save warns about refresh failure without preserving a resend payload', async () => {
   const flow = loadFlow('', async () => ({ ok: true, json: async () => ({ ok: true, savedAt: '11:00' }) }), {
     ids: ['trainingModal', 'trainingLoadingText', 'trainingFeedback'],

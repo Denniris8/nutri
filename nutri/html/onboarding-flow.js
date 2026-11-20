@@ -1678,24 +1678,31 @@ syncGarminTrainingButton?.addEventListener('click', async () => {
     await loadDailySteps(date);
     const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
     const activityParts = [
-      result.saved ? `${plural(result.saved, 'actividad nueva guardada', 'actividades nuevas guardadas')}` : '',
-      result.updated ? `${plural(result.updated, 'actividad actualizada por cambios en Garmin', 'actividades actualizadas por cambios en Garmin')}` : '',
-      result.unchanged ? `${plural(result.unchanged, 'sin cambios', 'sin cambios')}` : '',
-      result.skipped ? `${plural(result.skipped, 'no se pudo importar', 'no se pudieron importar')}` : '',
+      result.saved ? plural(result.saved, 'actividad nueva guardada', 'actividades nuevas guardadas') : '',
+      result.updated ? plural(result.updated, 'actividad actualizada por cambios en Garmin', 'actividades actualizadas por cambios en Garmin') : '',
+      result.unchanged ? plural(result.unchanged, 'actividad sin cambios', 'actividades sin cambios') : '',
     ].filter(Boolean);
     const activityMessage = result.activitiesUnavailable ? `No se pudieron consultar las actividades Garmin del ${date}; se conservaron los registros existentes.`
       : !result.activities ? `Garmin no tiene actividades para el ${date}.`
-        : activityParts.length ? `Actividades Garmin del ${date}: ${activityParts.join('; ')}.` : `Garmin no devolvió actividades importables para el ${date}.`;
-    const stepsMessages = [
-      result.stepsUpdated ? `Pasos Garmin guardados o actualizados para ${result.stepsUpdated} fecha${result.stepsUpdated === 1 ? '' : 's'}.` : '',
-      result.stepsUnavailable ? `Garmin no devolvió pasos para ${result.stepsUnavailable} fecha${result.stepsUnavailable === 1 ? '' : 's'}.` : '',
-      result.activeCaloriesUpdated ? `ActiveKilocalories Garmin guardadas para ${result.activeCaloriesUpdated} fecha${result.activeCaloriesUpdated === 1 ? '' : 's'}.` : '',
-      result.activeCaloriesUnavailable ? `Sin activeKilocalories Garmin para ${result.activeCaloriesUnavailable} fecha${result.activeCaloriesUnavailable === 1 ? '' : 's'}.` : '',
-    ].filter(Boolean);
+        : activityParts.length ? `Actividades Garmin del ${date}: ${activityParts.join('; ')}.`
+          : `No hubo cambios registrados en las actividades Garmin del ${date}.`;
+    const stepsMessages = (result.dailySummaries || []).map((summary) => {
+      const steps = summary.stepsSaved
+        ? `${new Intl.NumberFormat('es-MX').format(summary.stepsCount)} pasos guardados`
+        : 'pasos no disponibles para guardar';
+      const activeCalories = summary.activeCaloriesSaved
+        ? `${summary.activeKilocalories} kcal activas guardadas`
+        : summary.activeKilocalories == null
+          ? 'Garmin no proporcionó kcal activas'
+          : `${summary.activeKilocalories} kcal activas recibidas, no guardadas porque faltó un conteo válido de pasos`;
+      return `Resumen Garmin ${summary.date}: ${steps}; ${activeCalories}.`;
+    });
     const message = `${activityMessage}${stepsMessages.length ? ` ${stepsMessages.join(' ')}` : ''}`;
     appendTrainingMessage('assistant', message);
     trainingFeedback.textContent = message;
-    notifyApp(message, 'success');
+    const partialFailure = result.activitiesUnavailable || (result.dailySummaries || []).some((summary) =>
+      !summary.stepsSaved || summary.activeKilocalories == null || !summary.activeCaloriesSaved);
+    notifyApp(message, partialFailure ? 'warning' : 'success');
   } catch (error) {
     trainingFeedback.textContent = error.message || 'No se pudieron sincronizar las actividades Garmin.';
     appendTrainingMessage('error', trainingFeedback.textContent);
