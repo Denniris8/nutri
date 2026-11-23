@@ -1,3 +1,5 @@
+- 2026-11-23 09:25 CST — Preparación del commit solicitado: VERSION incrementada de 0.1.90 a 0.1.91; el dashboard sigue leyendo la versión desde ese archivo.
+- 2026-11-23 09:24 CST — OpenCode: actualizadas a 2.4.0 la versión fijada del instalador y la etiqueta de imagen Docker. No se reconstruyeron ni levantaron contenedores.
 - 2026-11-03 23:55 CST — Preparación del commit solicitado mediante `git`: VERSION incrementada de 0.1.66 a 0.1.67; el dashboard sigue leyendo la versión desde ese archivo. No se ejecutaron pruebas.
 - 2026-11-03 23:49 CST — Rate limits de login, registro y mensajes ahora agrupan por la IP válida de `X-Real-IP` que fija Nginx, con fallback a la conexión; el guardado de planes rechaza metas nulas o no positivas. Añadidas pruebas de regresión, no ejecutadas según las reglas del proyecto.
 - 2026-10-22 09:50 CST — Día nutricional en móviles estrechos: a 380 px o menos se compactan los botones de navegación y el espacio entre ellos para dar más ancho al selector de fecha; actualizado el cache-busting. No se ejecutaron pruebas.
