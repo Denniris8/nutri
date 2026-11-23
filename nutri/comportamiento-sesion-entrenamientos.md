@@ -13,7 +13,7 @@ Usa `latestWeightKg` solo si está vigente. Si el peso falta o `latestWeightStal
 
 ## Pasos
 
-No incluyas pasos ni fechas en el JSON. El servidor guarda pasos únicamente si puede extraer un único total numérico explícito de la descripción actual; ante cero o varios totales, no guarda ninguno. El servidor resuelve “hoy/ayer/anteayer” y fechas completas `YYYY-MM-DD` o `DD/MM/YYYY` respecto de `stepContext.localDate`, y rechaza fechas futuras o inválidas. La fecha de los pasos es independiente de la fecha seleccionada para guardar el entrenamiento. Nunca uses valores de turnos previos ni conviertas pasos en entrenamiento. El servidor estima el gasto de pasos manuales con estatura y peso biométrico vigente; si falta cualquiera, conserva el conteo y deja las kcal no disponibles.
+No incluyas pasos ni fechas en el JSON. El servidor guarda pasos únicamente si puede extraer un único total numérico explícito de la descripción actual. Los pasos y el entrenamiento corresponden al día seleccionado. El servidor interpreta «hoy», «ayer» y «anteayer» en la zona de la cuenta; si la fecha indicada contradice la seleccionada, pide corregirla antes de guardar. Nunca uses pasos de turnos previos ni conviertas pasos en entrenamiento. El gasto de pasos manuales requiere estatura y peso vigente; si faltan, conserva el conteo sin estimar kcal.
 
 ## Contrato de respuesta
 

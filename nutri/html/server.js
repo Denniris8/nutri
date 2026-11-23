@@ -21,7 +21,8 @@ const { sendPasswordRecoveryEmail: defaultSendPasswordRecoveryEmail, sendVerific
 const { analyzeTraining, deleteTrainingPlanSession, deleteTrainingSession, generateTrainingPlan, getTrainingProgress, readTrainingPlanDraft, readTrainingPlanPrompt, refineTrainingPlan, reportTrainingProgress } = require('./api/training-analysis.js');
 const { createAnalysisProgressRecorder } = require('./api/analysis-progress.js');
 const { calculateTrainingEnergy, deleteTrainingEntry, localCalendarDate, readDailyStepData, readTrainingEntries, recordTrainingError, saveDailySteps, saveTrainingEntry, visibleTrainingEntries } = require('./api/training-entries.js');
-const { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
+const { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, recordedPlanFacts, readTrainingPlanForDate, readTrainingPlans, saveTrainingPlan, summarizeTrainingPlan } = require('./api/training-plans.js');
+const { planDraftStore, visiblePlan } = require('./api/plan-drafts.js');
 const { addNotification, markNotificationRead, notificationInsertSql, readNotifications, resolveNotificationsSql } = require('./api/notifications.js');
 
 const scrypt = promisify(scryptCallback);
@@ -1078,21 +1079,27 @@ SELECT JSON_OBJECT('current',(SELECT COUNT(*) FROM registros_plicometro WHERE us
       let stage = 'analysis';
       try {
         reportTrainingProgress(claims.sub, data.progressId, 'analysis_context_started', progressRecorder.record);
-        const timezone = request.headers['x-client-timezone'] || 'UTC';
+        const timezone = await readCalendarTimezone(claims.sub, dbQuery, request.headers['x-client-timezone'] || 'UTC');
         const localDate = localCalendarDate(timezone);
+        const selectedDate = data.date ?? localDate;
+        if (typeof selectedDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)
+          || !Number.isFinite(Date.parse(`${selectedDate}T00:00:00Z`)) || new Date(`${selectedDate}T00:00:00Z`).toISOString().slice(0, 10) !== selectedDate || selectedDate > localDate) {
+          throw Object.assign(new Error('Selecciona un día válido que no esté en el futuro.'), { status: 400 });
+        }
         const biometricData = JSON.parse(await dbQuery(`SELECT JSON_OBJECT('latestBiometric',(SELECT JSON_OBJECT('weightKg',peso_kg,'measuredAt',DATE_FORMAT(medido_en,'%Y-%m-%d %H:%i:%s'),'source',fuente) FROM registros_biometricos WHERE usuario_id=${claims.sub} ORDER BY medido_en DESC,id DESC LIMIT 1),'registeredHeightCm',(SELECT estatura_cm FROM usuarios WHERE id=${claims.sub} LIMIT 1));`));
         const latest = biometricData.latestBiometric;
         reportTrainingProgress(claims.sub, data.progressId, 'analysis_context_ready', progressRecorder.record);
         const measuredDate = typeof latest?.measuredAt === 'string' ? latest.measuredAt.slice(0, 10) : '';
         const ageDays = (Date.parse(`${localDate}T00:00:00Z`) - Date.parse(`${measuredDate}T00:00:00Z`)) / 86400000;
         const latestWeightStale = latest?.weightKg != null && (!Number.isFinite(ageDays) || ageDays < 0 || ageDays > 60);
-        const analysis = await analyzeTraining({ userId: claims.sub, description: data.description, userWeightContext: (data.userMessages || [data.description]).join('\n'), stepContext: { localDate, timezone }, biometricData: {
+        const analysis = await analyzeTraining({ userId: claims.sub, description: data.description, userWeightContext: (data.userMessages || [data.description]).join('\n'), stepContext: { localDate, selectedDate, timezone }, biometricData: {
           latestWeightKg: latestWeightStale ? null : latest?.weightKg,
           latestWeightStale,
           weightMeasuredAt: latest?.measuredAt,
           weightSource: latest?.source,
           registeredHeightCm: biometricData.registeredHeightCm,
         }, progressId: data.progressId, progressRecorder, requestOpenCode: openCodeRequest });
+        analysis.timezone = timezone;
         if (analysis.stepsCount !== null) {
           stage = 'steps';
           analysis.stepsSaved = await saveDailySteps({
@@ -1167,6 +1174,8 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
         }
         const previousPlanRow = contextData.get('previousPlan');
         const context = {
+          hasWeight: true,
+          fechaReferencia: localCalendarDate(preferences?.timezone || 'UTC'),
           profile: { age, sex: profile?.sex ?? null, heightCm: profile?.heightCm ?? null, restingMetabolismKcal: profile?.restingMetabolismKcal ?? null, restingMetabolismSource: profile?.restingMetabolismSource ?? null },
           preferences: preferences ? {
             dietaryPattern: preferences.patronAlimentario,
@@ -1182,11 +1191,15 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
           previousTrainingPlanSummary: summarizeTrainingPlan(previousPlanRow ? JSON.parse(previousPlanRow) : null),
         };
         reportTrainingProgress(claims.sub, data.progressId, 'plan_context_ready', progressRecorder.record);
-        const generated = await generateTrainingPlan({ userId: claims.sub, goals: data && typeof data === 'object' ? data.goals : undefined, context, recoverySecret: jwtSecret, progressId: data.progressId, progressRecorder, requestOpenCode: openCodeRequest });
-        reportTrainingProgress(claims.sub, data.progressId, 'plan_complete', progressRecorder.record);
+        const runId = data.progressId || randomUUID();
+        const drafts = planDraftStore(claims.sub, runId, dbQuery, textSql);
+        await drafts.begin();
+        const generated = await generateTrainingPlan({ userId: claims.sub, goals: data.goals, context, progressId: runId, progressRecorder, requestOpenCode: openCodeRequest });
+        await drafts.publish(0, { goals: data.goals.trim(), plan: generated.plan, macros: generated.macros, question: generated.question, context });
+        reportTrainingProgress(claims.sub, data.progressId, generated.question ? 'plan_question' : 'plan_complete', progressRecorder.record);
         await progressRecorder.flush();
-        if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: 'generado', title: 'Plan generado, aún sin guardar', message: 'Tu plan está listo para revisar y guardar.', dbQuery, textSql }); } catch {}
-        json(response, 200, generated);
+        if (data.suppressNotification !== true) try { await addNotification({ userId: claims.sub, category: 'plan', state: generated.question ? 'requiere_respuesta' : 'generado', title: generated.question ? 'Plan: falta una aclaración' : 'Plan generado, aún sin guardar', message: generated.question || 'Tu plan está listo para revisar y guardar.', dbQuery, textSql }); } catch {}
+        json(response, 200, visiblePlan(await drafts.current()));
       } catch (error) {
         reportTrainingProgress(claims.sub, data.progressId, 'plan_failed', progressRecorder.record);
         await progressRecorder.flush();
@@ -1219,8 +1232,17 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
       if (!allowAttempt(request, response, 'training-plan-restore')) return;
       try {
         const data = await bodyJson(request, 524288);
-        const draft = readTrainingPlanDraft(claims.sub, data.draftToken, jwtSecret);
-        json(response, 200, { plan: draft.plan, macros: draft.macros, goals: draft.goals, runId: draft.runId, expiresAt: draft.expiresAt });
+        if (!data.runId && data.draftToken) {
+          const legacy = readTrainingPlanDraft(claims.sub, data.draftToken, jwtSecret);
+          data.runId = legacy.runId;
+          const { context, goals, macros } = legacy;
+          context.hasWeight = true; // El flujo anterior también exigía un peso registrado.
+          const marker = legacy.plan.indexOf('[Estimaciones Calculadas]');
+          if (marker < 0) throw Object.assign(new Error('El informe anterior no es recuperable.'), { status: 409 });
+          const plan = `[Datos Registrados]\n${recordedPlanFacts(context)}\n\n${legacy.plan.slice(marker)}`;
+          await planDraftStore(claims.sub, data.runId, dbQuery, textSql).importLegacy({ goals, plan, macros, context }, legacy.expiresAt);
+        }
+        json(response, 200, visiblePlan(await planDraftStore(claims.sub, data.runId, dbQuery, textSql).current()));
       } catch (error) { authError(response, error.status || 400, error.status === 409 ? error.message : 'No se pudo recuperar el borrador.'); }
       return;
     }
@@ -1242,10 +1264,19 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
       const progressRecorder = createAnalysisProgressRecorder({ dbQuery, textSql, userId: claims.sub, flow: 'plan', operationId: data.progressId || randomUUID() });
       try {
         reportTrainingProgress(claims.sub, data.progressId, 'plan_context_started', progressRecorder.record);
-        const refined = await refineTrainingPlan({ userId: claims.sub, runId: data.runId, changes: data.changes, draftToken: data.draftToken, recoverySecret: jwtSecret, progressId: data.progressId, progressRecorder, requestOpenCode: openCodeRequest });
-        reportTrainingProgress(claims.sub, data.progressId, 'plan_complete', progressRecorder.record);
+        const drafts = planDraftStore(claims.sub, data.runId, dbQuery, textSql);
+        const snapshot = await drafts.current();
+        if (data.revision !== snapshot.revision) throw Object.assign(new Error('Revisa la versión más reciente.'), { status: 409 });
+        const refined = await refineTrainingPlan({ userId: claims.sub, runId: data.runId, changes: data.changes, snapshot, progressId: data.progressId, progressRecorder, requestOpenCode: openCodeRequest });
+        const answers = snapshot.answers || [];
+        if (snapshot.question) answers.push({ pregunta: snapshot.question, respuesta: data.changes.trim() });
+        await drafts.publish(snapshot.revision, {
+          goals: snapshot.goals, context: snapshot.context, answers, plan: refined.plan, macros: refined.macros, question: refined.question,
+          ...(refined.question && { baseline: snapshot.baseline || (snapshot.plan ? { plan_markdown: snapshot.plan, macros_objetivo: snapshot.macros } : null), pendingChange: snapshot.pendingChange || (!snapshot.question ? data.changes.trim() : undefined) }),
+        });
+        reportTrainingProgress(claims.sub, data.progressId, refined.question ? 'plan_question' : 'plan_complete', progressRecorder.record);
         await progressRecorder.flush();
-        json(response, 200, refined);
+        json(response, 200, visiblePlan(await drafts.current()));
       } catch (error) {
         reportTrainingProgress(claims.sub, data.progressId, 'plan_failed', progressRecorder.record);
         await progressRecorder.flush();
@@ -1265,9 +1296,12 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
       catch { authError(response, 503, 'No se pudo validar la sesión.'); return; }
       if (!claims) { authError(response, 401, 'La sesión expiró. Inicia sesión de nuevo.'); return; }
       try {
-        const deleted = await deleteTrainingPlanSession({ userId: claims.sub, requestOpenCode: openCodeRequest });
+        const data = await bodyJson(request);
+        await planDraftStore(claims.sub, data.runId, dbQuery, textSql).cancel(data.revision);
+        const deleted = await deleteTrainingPlanSession({ userId: claims.sub, runId: data.runId, requestOpenCode: openCodeRequest });
         json(response, 200, { ok: true, deleted });
-      } catch {
+      } catch (error) {
+        if (error.status && error.status < 500) { authError(response, error.status, error.message); return; }
         const traceId = randomUUID();
         try {
           await dbQuery(`INSERT INTO errores_aplicacion(ocurrido_en,area,trace_id,evento,etapa,accion_realizada,metodo_http,ruta,usuario_id,codigo_error,nombre_error,http_status,descripcion_error) VALUES (UTC_TIMESTAMP(3),${textSql('training-opencode')},${textSql(traceId)},${textSql('session_cleanup_failed')},${textSql('cancel_plan_session')},${textSql('DELETE /api/training-plan/session')},${textSql('DELETE')},${textSql('/api/training-plan/session')},${claims.sub},${textSql('TRAINING_PLAN_SESSION_CANCEL_CLEANUP')},${textSql('Error')},503,${textSql('No se pudo eliminar la sesión OpenCode del plan al cancelar.')});`);
@@ -1339,37 +1373,11 @@ SELECT 'previousPlan'; SELECT JSON_OBJECT('createdAt',DATE_FORMAT(creado_en,'%Y-
       catch (error) { authError(response, error.status || 400, 'Datos no válidos.'); return; }
       try {
         const disclosure = extractPlanDisclosure(await readTrainingPlanPrompt());
-        const [profile, factsRow] = await Promise.all([
-          readAccountProfile({ userId: claims.sub, dbQuery }),
-          dbQuery(`SELECT JSON_OBJECT('age',(SELECT edad FROM usuarios WHERE id=${claims.sub} LIMIT 1),
-            'hasWeight',b.hasWeight,
-            'bodyFacts',b.facts,
-            'plicometryFacts',p.facts)
-          FROM (SELECT JSON_EXTRACT(IF(COUNT(peso_kg)>0,'true','false'),'$') AS hasWeight,JSON_OBJECT(
-            'bmi',JSON_EXTRACT(IF(COUNT(imc)>0,'true','false'),'$'),
-            'bodyFatPct',JSON_EXTRACT(IF(COUNT(grasa_pct)>0,'true','false'),'$'),
-            'musclePct',JSON_EXTRACT(IF(COUNT(musculo_pct)>0,'true','false'),'$'),
-            'visceralFat',JSON_EXTRACT(IF(COUNT(grasa_visceral)>0,'true','false'),'$'),
-            'bodyAge',JSON_EXTRACT(IF(COUNT(edad_corporal)>0,'true','false'),'$'),
-            'restingMetabolismKcal',JSON_EXTRACT(IF(COUNT(metabolismo_basal_kcal)>0,'true','false'),'$')) AS facts
-            FROM registros_biometricos WHERE usuario_id=${claims.sub}) b
-          CROSS JOIN (SELECT JSON_OBJECT(
-            'tricepsMm',JSON_EXTRACT(IF(COUNT(triceps_mm)>0,'true','false'),'$'),
-            'bicepsMm',JSON_EXTRACT(IF(COUNT(biceps_mm)>0,'true','false'),'$'),
-            'subescapularMm',JSON_EXTRACT(IF(COUNT(subescapular_mm)>0,'true','false'),'$'),
-            'suprailiacoMm',JSON_EXTRACT(IF(COUNT(suprailiaco_mm)>0,'true','false'),'$'),
-            'abdominalMm',JSON_EXTRACT(IF(COUNT(abdominal_mm)>0,'true','false'),'$'),
-            'musloAnteriorMm',JSON_EXTRACT(IF(COUNT(muslo_anterior_mm)>0,'true','false'),'$'),
-            'pantorrillaMm',JSON_EXTRACT(IF(COUNT(pantorrilla_mm)>0,'true','false'),'$')) AS facts
-            FROM registros_plicometro WHERE usuario_id=${claims.sub}) p;`),
-        ]);
-        const facts = JSON.parse(factsRow);
-        if (facts.hasWeight !== true) {
-          authError(response, 400, 'Registra al menos un peso en biometría antes de crear un plan.');
-          return;
-        }
-        const context = { profile: { age: facts.age, sex: profile?.sex ?? null, heightCm: profile?.heightCm ?? null, restingMetabolismKcal: profile?.restingMetabolismKcal ?? null }, hasWeight: facts.hasWeight, bodyFacts: facts.bodyFacts, plicometryFacts: facts.plicometryFacts };
-        const saved = await saveTrainingPlan({ userId: claims.sub, requestId: data.runId, goals: data.goals, plan: data.plan, macros: data.macros, disclosure, context, dbQuery, textSql });
+        const drafts = planDraftStore(claims.sub, data.runId, dbQuery, textSql);
+        const draft = await drafts.claim(data.revision);
+        if (draft.state === 'guardado') { json(response, 200, { ok: true, ...draft.data }); return; }
+        const saved = await saveTrainingPlan({ ...draft.data, userId: claims.sub, requestId: data.runId, disclosure, dbQuery, textSql });
+        await drafts.finish(data.revision, saved);
         if (typeof data.runId === 'string') try {
           await deleteTrainingPlanSession({ userId: claims.sub, runId: data.runId, requestOpenCode: openCodeRequest });
         } catch {

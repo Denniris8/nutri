@@ -225,7 +225,7 @@ async function readPendingFoodDraft({ userId, dbQuery }) {
 START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY;
 SET @food_draft_id=(SELECT id FROM registros_comidas WHERE usuario_id=${userId} AND estado='borrador_chat' ORDER BY actualizado_en DESC,id DESC LIMIT 1);
 SELECT 'draft';
-SELECT JSON_OBJECT('id',e.id,'requestId',e.request_id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d'),'description',e.descripcion_original,'question',e.pregunta_pendiente,'state',e.estado) FROM registros_comidas e WHERE e.id=@food_draft_id AND e.usuario_id=${userId};
+SELECT JSON_OBJECT('id',e.id,'requestId',e.request_id,'targetEntryId',CAST(e.registro_comida_destino_id AS CHAR),'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d'),'description',e.descripcion_original,'question',e.pregunta_pendiente,'state',e.estado) FROM registros_comidas e WHERE e.id=@food_draft_id AND e.usuario_id=${userId};
 SELECT 'messages';
 SELECT JSON_OBJECT('role',role,'content',contenido) FROM registros_comida_interacciones WHERE registro_comida_id=@food_draft_id ORDER BY id;
 SELECT 'items';
@@ -651,11 +651,15 @@ function knownFoodProduct(food, name) {
 async function knownFoodsShortcut({ description, userId, dbQuery, textSql }) {
   const segments = String(description || '').split(/\r?\n|;|(?<!\d),|,(?!\d)|\s+y\s+|\+/i).map((part) => part.trim()).filter(Boolean);
   if (!segments.length || segments.length > 12) return null;
-  const parsed = segments.map((segment) => segment.match(/^(.{1,150}?)\s+(\d+(?:[.,]\d+)?)\s*(?:g|gr|grs|gramos?)\.?$/i));
+  const parsed = segments.map((segment) => {
+    const prefix = segment.match(/^(\d+(?:[.,]\d+)?)\s*(?:g|gr|grs|gramos?)\.?\s+(?:de\s+)?(.{1,150})$/i);
+    if (prefix) return [prefix[2], prefix[1]];
+    return segment.match(/^(.{1,150}?)\s+(\d+(?:[.,]\d+)?)\s*(?:g|gr|grs|gramos?)\.?$/i)?.slice(1);
+  });
   if (parsed.some((match) => !match)) return null;
-  const known = await readKnownFoods({ userId, names: parsed.map((match) => match[1]), dbQuery, textSql });
+  const known = await readKnownFoods({ userId, names: parsed.map(([name]) => name), dbQuery, textSql });
   const items = [];
-  for (const [, rawName, rawGrams] of parsed) {
+  for (const [rawName, rawGrams] of parsed) {
     const food = known.get(foodKey(rawName));
     const grams = Number(rawGrams.replace(',', '.'));
     if (!food || !(grams > 0)) return null;
@@ -707,7 +711,7 @@ SELECT zona_horaria FROM preferencias_usuario WHERE usuario_id=${userId} LIMIT 1
 SELECT 'draftDate';
 SELECT DATE_FORMAT(fecha_consumo,'%Y-%m-%d') FROM registros_comidas WHERE usuario_id=${userId} AND request_id=${textSql(entry.requestId)} AND estado='borrador_chat' LIMIT 1;
 SELECT 'prior';
-SELECT JSON_OBJECT('entryId',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d')) FROM registros_comida_interacciones i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND i.request_id=${textSql(entry.requestId)} LIMIT 1;`)).split(/\r?\n/).filter(Boolean)) {
+SELECT JSON_OBJECT('entryId',e.id,'fecha',DATE_FORMAT(e.fecha_consumo,'%Y-%m-%d')) FROM registros_comida_operaciones i JOIN registros_comidas e ON e.id=i.registro_comida_id WHERE e.usuario_id=${userId} AND i.request_id=${textSql(entry.requestId)} LIMIT 1;`)).split(/\r?\n/).filter(Boolean)) {
       if (Object.hasOwn(initial, row)) initialSection = row;
       else if (initialSection) initial[initialSection] = row;
     }
@@ -1081,7 +1085,6 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     traceFoodSession(trace, 'food_destination_resolved', { explicitTime: Boolean(requestedTime && !requestedTime.invalid), resumedTarget: Boolean(activeTarget), candidateCount: matchedMeals.length, appended: Boolean(appendTargetId), updated: Boolean(updateTargetId) });
     let createdAt = null;
     let savedDate = entry.fecha;
-    let savedDescription = asksSelectedDateConfirmation && selectedDateAnswer?.confirmed ? saved.description : entry.descripcion;
     if (effectiveTime && appendTargetId == null) {
       const hour = effectiveTime.hours.length === 1 ? effectiveTime.hours[0] : null;
       const calendarDate = entry.fecha;
@@ -1165,12 +1168,13 @@ SELECT JSON_OBJECT('state',estado,'fecha',DATE_FORMAT(fecha_consumo,'%Y-%m-%d'),
     const total = (column) => `@food_${column}`;
     statements.push(`SELECT ${totalColumns.map((column) => `IF(COUNT(*)=SUM(base_macros='per_portion') AND COUNT(*)=COUNT(${column}),SUM(${column}),NULL)`).join(',')} INTO ${totalColumns.map(total).join(',')} FROM registros_comida_items WHERE registro_comida_id=${destinationId}`);
     if (append || updating) {
+      statements.push(`INSERT INTO registros_comida_operaciones(request_id,registro_comida_id) VALUES (${textSql(entry.requestId)},${destinationId})`);
       for (const message of draftMessages) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${destinationId},${textSql(message.role)},${textSql(message.content)})`);
       for (const message of assistantMessages) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${destinationId},'assistant',${textSql(message)})`);
       statements.push(`UPDATE registros_comidas SET estado='completado',pregunta_pendiente=NULL,energia_kcal=${total('energia_kcal')},energia_449_kcal=${total('energia_449_kcal')},proteina_g=${total('proteina_g')},carbohidratos_g=${total('carbohidratos_g')},grasa_g=${total('grasa_g')} WHERE id=${destinationId} AND usuario_id=${userId}`, `INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido,request_id) VALUES (${destinationId},'assistant',${textSql(confirmation)},${textSql(entry.requestId)})`, `DELETE FROM registros_comidas WHERE id=${entryId} AND usuario_id=${userId}`);
     } else {
       for (const message of assistantMessages) statements.push(`INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(message)})`);
-      statements.push(`UPDATE registros_comidas SET estado='completado',registro_comida_destino_id=NULL,pregunta_pendiente=NULL,fecha_consumo=${textSql(savedDate)},descripcion_original=${textSql(savedDescription)}${createdAt ? `,creado_en=${textSql(createdAt)}` : ''},energia_kcal=${total('energia_kcal')},energia_449_kcal=${total('energia_449_kcal')},proteina_g=${total('proteina_g')},carbohidratos_g=${total('carbohidratos_g')},grasa_g=${total('grasa_g')} WHERE id=${entryId} AND usuario_id=${userId}`, `INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(confirmation)})`);
+      statements.push(`UPDATE registros_comidas SET estado='completado',registro_comida_destino_id=NULL,pregunta_pendiente=NULL,fecha_consumo=${textSql(savedDate)}${createdAt ? `,creado_en=${textSql(createdAt)}` : ''},energia_kcal=${total('energia_kcal')},energia_449_kcal=${total('energia_449_kcal')},proteina_g=${total('proteina_g')},carbohidratos_g=${total('carbohidratos_g')},grasa_g=${total('grasa_g')} WHERE id=${entryId} AND usuario_id=${userId}`, `INSERT INTO registros_comida_interacciones(registro_comida_id,role,contenido) VALUES (${entryId},'assistant',${textSql(confirmation)})`);
     }
     statements.push(resolveNotificationsSql({ userId, category: 'comida', textSql }));
     if (!suppressNotification) statements.push(notificationInsertSql({ userId, category: 'comida', state: 'guardado', title: 'Comida guardada', message: confirmation, referenceId: append || updating ? destinationId : entryId, textSql }));

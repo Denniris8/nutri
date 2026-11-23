@@ -122,7 +122,41 @@ let trainingPlanGeneration = 0;
 let trainingPlanCancelPending = false;
 let trainingPlanSaving = false;
 let trainingPlanGenerating = false;
-let generatedTrainingDraftToken = null;
+let generatedTrainingRevision = 0;
+let creatingPlanId = null;
+
+function usePlanRevision(result) {
+  generatedTrainingPlan = result.plan;
+  generatedTrainingPlanRunId = result.runId;
+  generatedTrainingGoals = result.goals;
+  generatedTrainingMacros = result.macros;
+  generatedTrainingRevision = result.revision;
+  const asking = result.state === 'requiere_aclaracion';
+  appendTrainingPlanMessage('assistant', asking ? result.question : result.plan);
+  trainingPlanGoalsLabel.textContent = asking ? 'Tu respuesta' : '¿Qué quieres cambiar del borrador?';
+  trainingPlanGoalsInput.placeholder = asking ? 'Responde la pregunta para continuar…' : 'Ej.: cambia la rutina a tres días.';
+  trainingPlanSendButton.textContent = asking ? 'Responder' : 'Aplicar cambios';
+  trainingPlanSaveButton.hidden = trainingPlanSaveButton.disabled = asking;
+  if (!draftStorage('plan', { runId: result.runId, revision: result.revision, expiresAt: result.expiresAt })) notifyApp('No se pudo guardar la referencia para recuperar el borrador.', 'info');
+}
+
+async function refreshChangedPlan() {
+  const response = await fetch('/api/training-plan/restore', {
+    method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: generatedTrainingPlanRunId }),
+  });
+  const result = await response.json();
+  if (!response.ok) {
+    if (response.status === 409) {
+      draftStorage('plan', null);
+      generatedTrainingPlan = generatedTrainingPlanRunId = null;
+      trainingPlanSaveButton.hidden = true;
+      trainingPlanSendButton.textContent = 'Generar plan';
+    }
+    throw new Error(result.error || 'No se pudo recuperar la revisión actual.');
+  }
+  usePlanRevision(result);
+  throw new Error('El borrador cambió en otra pestaña. Revisa la versión actual antes de continuar.');
+}
 
 function draftStorage(name, value) {
   const scope = document.body?.dataset.draftStorageScope;
@@ -402,38 +436,29 @@ if (savedTrainingPlansList) void loadSavedTrainingPlans();
 
 trainingPlanTrigger?.addEventListener('click', async () => {
   if (trainingPlanTrigger.disabled) return;
-  const draft = !generatedTrainingPlan && draftStorage('plan');
+  const draft = !generatedTrainingPlanRunId && !generatedTrainingPlan && draftStorage('plan');
   if (draft) {
     trainingPlanTrigger.disabled = true;
     try {
       const response = await fetch('/api/training-plan/restore', {
         method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ draftToken: draft.draftToken }),
+        body: JSON.stringify(draft.runId ? { runId: draft.runId } : { draftToken: draft.draftToken }),
       });
       const result = await response.json();
       if (!response.ok) {
         if (response.status === 409) draftStorage('plan', null);
         throw new Error(result.error || 'No se pudo recuperar el borrador. Inténtalo de nuevo.');
       }
-      generatedTrainingPlan = result.plan;
-      generatedTrainingPlanRunId = result.runId;
-      generatedTrainingGoals = result.goals;
-      generatedTrainingMacros = result.macros;
-      generatedTrainingDraftToken = draft.draftToken;
       trainingPlanSessionActive = true;
       savedTrainingPlan = false;
       appendTrainingPlanMessage('user', result.goals);
-      appendTrainingPlanMessage('assistant', result.plan);
-      trainingPlanGoalsLabel.textContent = '¿Qué quieres cambiar del borrador?';
-      trainingPlanSendButton.textContent = 'Aplicar cambios';
-      trainingPlanSaveButton.hidden = false;
-      trainingPlanSaveButton.disabled = false;
-      planSummaryText.textContent = 'Borrador recuperado · no guardado · caduca a las 24 horas';
-      notifyApp('Borrador recuperado. Puedes revisarlo, modificarlo o guardarlo.', 'success');
+      usePlanRevision(result);
+      planSummaryText.textContent = result.question ? 'Aclaración pendiente · plan no guardado' : 'Borrador recuperado · no guardado · caduca a las 24 horas';
+      notifyApp(planSummaryText.textContent, 'info');
     } catch (error) { notifyApp(error.message, 'error'); return; }
     finally { trainingPlanTrigger.disabled = false; }
   }
-  if (!trainingPlanSessionReady) planSummaryText.textContent = 'Cuéntame tus objetivos y generaré un plan con tus datos registrados.';
+  if (!generatedTrainingPlanRunId && !savedTrainingPlan) planSummaryText.textContent = 'Cuéntame tus objetivos y generaré un plan con tus datos registrados.';
   trainingPlanSessionReady = true;
   trainingPlanGoalsInput.disabled = false;
   trainingPlanSendButton.disabled = false;
@@ -454,12 +479,17 @@ async function cancelTrainingPlan() {
   trainingPlanSendButton.disabled = true;
   trainingPlanSaveButton.disabled = true;
   try {
-    const response = await fetch('/api/training-plan/session', { method: 'DELETE', credentials: 'same-origin' });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || 'No se pudo eliminar la sesión del plan.');
+    const runId = creatingPlanId || generatedTrainingPlanRunId;
+    if (runId) {
+      const response = await fetch('/api/training-plan/session', { method: 'DELETE', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId, revision: creatingPlanId ? 0 : generatedTrainingRevision }) });
+      if (response.status === 409 && generatedTrainingPlanRunId) await refreshChangedPlan();
+      if (!response.ok) throw new Error('No se pudo cancelar el borrador del plan.');
+    }
     if (generation !== trainingPlanGeneration) return;
     generatedTrainingPlan = generatedTrainingPlanRunId = generatedTrainingGoals = generatedTrainingMacros = null;
-    generatedTrainingDraftToken = null;
+    creatingPlanId = null;
+    generatedTrainingRevision = 0;
+    trainingPlanGoalsInput.value = '';
     draftStorage('plan', null);
     planChatMessages.replaceChildren();
     trainingPlanGoalsLabel.textContent = 'Tus objetivos';
@@ -474,6 +504,9 @@ async function cancelTrainingPlan() {
     trainingPlanGenerating = false;
     trainingPlanCancelPending = false;
     trainingPlanTrigger.disabled = false;
+    trainingPlanTrigger.removeAttribute('aria-busy');
+    trainingPlanTriggerLoading.hidden = true;
+    trainingPlanGoalsInput.disabled = false;
     trainingPlanSendButton.disabled = !trainingPlanSessionReady;
     trainingPlanSaveButton.disabled = !generatedTrainingPlan || savedTrainingPlan;
   }
@@ -495,8 +528,8 @@ trainingPlanSendButton?.addEventListener('click', async () => {
   const generation = ++trainingPlanGeneration;
   trainingPlanGenerating = true;
   trainingPlanSaveButton.disabled = true;
-  const refining = Boolean(generatedTrainingPlan && generatedTrainingPlanRunId && !savedTrainingPlan);
-  trainingPlanGoalsLabel.textContent = refining ? '¿Qué quieres cambiar del borrador?' : 'Tus objetivos';
+  const refining = Boolean(generatedTrainingPlanRunId && !savedTrainingPlan);
+  trainingPlanGoalsLabel.textContent = refining ? generatedTrainingPlan ? '¿Qué quieres cambiar del borrador?' : 'Tu respuesta' : 'Tus objetivos';
   trainingPlanGoalsInput.disabled = true;
   if (!refining) {
     trainingPlanSaveButton.hidden = true;
@@ -514,47 +547,44 @@ trainingPlanSendButton?.addEventListener('click', async () => {
   appendTrainingPlanMessage('user', goals);
   trainingPlanGoalsInput.value = '';
   const progressId = createFoodRequestId();
+  if (!refining) creatingPlanId = progressId;
+  let succeeded = false;
   const progress = startTrainingProgress(progressId, appendTrainingPlanMessage);
   notifyApp(refining ? 'Actualizando el borrador del plan.' : 'Generando tu plan de entrenamiento.', 'info');
   try {
     const response = await fetch(refining ? '/api/training-plan/refine' : '/api/training-plan', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(refining ? { runId: generatedTrainingPlanRunId, changes: goals, draftToken: generatedTrainingDraftToken, progressId } : { goals, progressId, suppressNotification: true }),
+      body: JSON.stringify(refining ? { runId: generatedTrainingPlanRunId, changes: goals, revision: generatedTrainingRevision, progressId } : { goals, progressId, suppressNotification: true }),
     });
     const result = await response.json();
+    if (generation !== trainingPlanGeneration) return;
+    if (response.status === 409 && refining) await refreshChangedPlan();
     if (!response.ok) throw new Error(result.error || 'No se pudo generar el plan.');
     if (generation !== trainingPlanGeneration) return;
     trainingPlanSessionActive = true;
-    appendTrainingPlanMessage('assistant', result.plan);
-    generatedTrainingPlan = result.plan;
-    generatedTrainingPlanRunId = result.runId;
-    if (!refining) generatedTrainingGoals = goals;
-    generatedTrainingMacros = result.macros;
-    generatedTrainingDraftToken = result.draftToken;
-    if (!draftStorage('plan', { draftToken: result.draftToken, expiresAt: result.expiresAt })) notifyApp('El borrador está disponible, pero no pudo respaldarse para una recarga.', 'info');
-    trainingPlanGoalsLabel.textContent = '¿Qué quieres cambiar del borrador?';
-    trainingPlanGoalsInput.placeholder = 'Ej.: cambia la rutina a 3 días y prioriza ejercicios con mancuernas.';
-    trainingPlanSendButton.textContent = 'Aplicar cambios';
-    trainingPlanSaveButton.hidden = false;
-    trainingPlanSaveButton.disabled = false;
+    usePlanRevision(result);
+    succeeded = true;
+    if (result.state === 'requiere_aclaracion') {
+      planSummaryText.textContent = 'Responde la pregunta para continuar. El plan todavía no se puede guardar.';
+      notifyApp(planSummaryText.textContent, 'info');
+      await notifyResultIfHidden(trainingPlanDialog, 'plan', 'requiere_respuesta', 'Plan: falta una aclaración', result.question);
+      return;
+    }
     trainingPlanSaveButton.title = '';
     planSummaryText.textContent = `${refining ? 'Borrador actualizado' : 'Plan generado'} · no guardado · respaldo temporal de 24 horas`;
     notifyApp(refining ? 'Cambios aplicados. El borrador sigue sin guardar.' : 'Plan generado. Revisa el borrador y pulsa Guardar para conservarlo como plan.', 'success');
     await notifyResultIfHidden(trainingPlanDialog, 'plan', 'generado', refining ? 'Borrador actualizado' : 'Plan generado, aún sin guardar', 'Tu plan está listo para revisar y guardar.');
   } catch (error) {
     if (generation !== trainingPlanGeneration) return;
-    const sessionFailed = error.message === 'No se pudo abrir la sesión para crear el plan.';
-    if (sessionFailed) {
-      trainingPlanSessionReady = false;
-      planSummaryText.textContent = error.message;
-      planSummaryText.classList.add('food-session-error');
-    } else planSummaryText.textContent = 'No se pudo generar el plan.';
+    trainingPlanGoalsInput.value = goals;
+    planSummaryText.textContent = refining && generatedTrainingPlan ? 'No se confirmó la actualización. Revisa el borrador antes de continuar.' : 'No se pudo generar el plan. Puedes corregir o reenviar tus objetivos.';
     appendTrainingPlanMessage('error', error.message || 'No se pudo generar el plan.');
     notifyApp(error.message || 'No se pudo generar el plan.', 'error');
     await notifyResultIfHidden(trainingPlanDialog, 'plan', 'error', 'No se pudo generar el plan', 'Revisa el modal de plan e inténtalo de nuevo.');
   } finally {
-    await progress.stop(generatedTrainingPlan ? 'Plan generado; listo para revisar y guardar.' : 'Generación finalizada.');
+    await progress.stop(succeeded ? generatedTrainingPlan ? 'Plan listo para revisar y guardar.' : 'Esperando tu aclaración.' : 'Solicitud finalizada sin confirmar cambios.');
     if (generation !== trainingPlanGeneration) return;
+    creatingPlanId = null;
     trainingPlanGenerating = false;
     planLoading.hidden = true;
     trainingPlanTrigger.setAttribute('aria-busy', 'false');
@@ -577,14 +607,15 @@ trainingPlanSaveButton?.addEventListener('click', async () => {
   try {
     const response = await fetch('/api/training-plans', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ goals: generatedTrainingGoals, plan: generatedTrainingPlan, macros: generatedTrainingMacros, runId: generatedTrainingPlanRunId, suppressNotification: true }),
+      body: JSON.stringify({ runId: generatedTrainingPlanRunId, revision: generatedTrainingRevision, suppressNotification: true }),
     });
     const result = await response.json();
+    if (response.status === 409) await refreshChangedPlan();
     if (!response.ok) throw new Error(result.error || 'No se pudo guardar el plan.');
     const savedAt = new Intl.DateTimeFormat('es-MX', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(result.createdAt));
     savedTrainingPlan = true;
     draftStorage('plan', null);
-    generatedTrainingDraftToken = null;
+    generatedTrainingRevision = 0;
     trainingPlanSessionActive = false;
     generatedTrainingPlanRunId = null;
     trainingPlanSendButton.disabled = true;
@@ -600,7 +631,7 @@ trainingPlanSaveButton?.addEventListener('click', async () => {
     notifyApp('Plan de entrenamiento guardado.', 'success');
     await notifyResultIfHidden(trainingPlanDialog, 'plan', 'guardado', 'Plan guardado', 'Tu plan de entrenamiento quedó guardado.', result.id);
   } catch (error) {
-    trainingPlanSaveButton.disabled = false;
+    trainingPlanSaveButton.disabled = !generatedTrainingPlan;
     appendTrainingPlanMessage('error', error.message || 'No se pudo guardar el plan.');
     notifyApp(error.message || 'No se pudo guardar el plan.', 'error');
     await notifyResultIfHidden(trainingPlanDialog, 'plan', 'error', 'No se pudo guardar el plan', 'Intenta guardar el plan nuevamente.');
@@ -1599,6 +1630,7 @@ let trainingOpenCodeSessionActive = false;
 let trainingPending = false;
 let trainingSaving = false;
 let trainingSavedAt = null;
+let trainingEntryDate = '';
 let garminInclusionPending = false;
 let pendingTrainingSave = draftStorage('training');
 let trainingGarminConnected = false;
@@ -1615,8 +1647,8 @@ function updateTrainingMode() {
   trainingDescriptionFields.hidden = useGarmin;
   const prompt = document.querySelector('#trainingInitialPrompt');
   if (prompt) prompt.textContent = pendingTrainingSave ? 'Hay un guardado pendiente. Pulsa Reintentar guardado para reenviar los mismos datos, sin volver a analizar.' : useGarmin
-    ? 'Cuéntame qué entrenamiento hiciste. Por ejemplo: actividad, tiempo, distancia e intensidad.'
-    : 'Cuéntame qué entrenamiento hiciste. Por ejemplo: actividad, tiempo, distancia e intensidad. También puedes agregar los pasos totales dados hoy; si hay peso y estatura recientes, estimaré su gasto.';
+    ? `Consultaré las actividades y el resumen Garmin del ${trainingEntryDate}.`
+    : `Describe tu entrenamiento o tus pasos del ${trainingEntryDate}. Incluye actividad, duración e intensidad si hiciste ejercicio.`;
 }
 async function showGarminTrainingSync(generation) {
   syncGarminTrainingButton.hidden = true;
@@ -1635,6 +1667,7 @@ async function showGarminTrainingSync(generation) {
 trainingTrigger?.addEventListener('click', () => {
   if (trainingPending || trainingSessionUiInitialized) { trainingDialog?.showModal(); return; }
   trainingSessionUiInitialized = true;
+  trainingEntryDate = pendingTrainingSave?.body.date || dayInput?.value || localDate();
   const generation = ++trainingOpenGeneration;
   trainingSessionReady = true;
   trainingOpenCodeSessionActive = false;
@@ -1661,7 +1694,7 @@ trainingModeToggle?.addEventListener('change', (event) => {
   updateTrainingMode();
 });
 syncGarminTrainingButton?.addEventListener('click', async () => {
-  const date = dayInput?.value || localDate();
+  const date = trainingEntryDate;
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   syncGarminTrainingButton.disabled = true;
   trainingFeedback.textContent = `Consultando actividades Garmin del ${date}…`;
@@ -1674,8 +1707,7 @@ syncGarminTrainingButton?.addEventListener('click', async () => {
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudieron sincronizar las actividades Garmin.');
-    await loadTrainingEntries(date);
-    await loadDailySteps(date);
+    if (!dayInput?.value || dayInput.value === date) await Promise.all([loadTrainingEntries(date), loadDailySteps(date)]);
     const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
     const activityParts = [
       result.saved ? plural(result.saved, 'actividad nueva guardada', 'actividades nuevas guardadas') : '',
@@ -1716,7 +1748,7 @@ async function cancelTrainingDialog() {
   if (trainingSaving) { notifyApp('Espera a que termine el guardado antes de cancelar.', 'info'); return; }
   const hasWork = trainingOpenCodeSessionActive || trainingPending || Boolean(trainingInput?.value.trim())
     || Boolean(trainingChatMessages?.querySelector('[data-role="user"]'));
-  if (!hasWork) { trainingDialog?.close(); return; }
+  if (!hasWork && !pendingTrainingSave) { trainingSessionUiInitialized = false; trainingDialog?.close(); return; }
   if (!await confirmFlowExit('El análisis y la conversación de entrenamiento sin guardar se eliminarán. ¿Quieres salir?')) return;
   const generation = ++trainingOpenGeneration;
   try {
@@ -1727,11 +1759,9 @@ async function cancelTrainingDialog() {
     trainingOpenCodeSessionActive = false;
     trainingPending = false;
     trainingSavedAt = null;
-    if (garminInclusionPending) {
-      pendingTrainingSave = null;
-      garminInclusionPending = false;
-      draftStorage('training', null);
-    }
+    pendingTrainingSave = null;
+    garminInclusionPending = false;
+    draftStorage('training', null);
     trainingDialog?.close();
     notifyApp('Sesión e historial del entrenamiento eliminados.', 'success');
   } catch (error) {
@@ -1825,6 +1855,18 @@ async function savePendingTraining(generation) {
     if (response.ok && saved.requiresGarminConfirmation) throw new Error('No se pudo confirmar si Garmin ya cuenta esta sesión.');
   }
   if (!response.ok) {
+    if (response.status === 400 || response.status === 409 && saved.entryId) {
+      pendingTrainingSave = null;
+      draftStorage('training', null);
+      trainingSavedAt = null;
+      if (response.status === 409) {
+        trainingSessionReady = trainingSessionUiInitialized = false;
+        trainingDialog.close();
+        await loadTrainingEntries(dayInput?.value || saveBody.date);
+        throw new Error(`Ya existe el registro «${saved.activity}» del ${saved.date}. Revisa ese día antes de crear otro entrenamiento.`);
+      }
+      trainingInput.value = saveBody.description;
+    }
     throw new Error(saved.error || 'No se pudo guardar el entrenamiento.');
   }
   pendingTrainingSave = null;
@@ -1847,7 +1889,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
   const description = trainingInput.value.trim();
   const retrying = Boolean(pendingTrainingSave?.body);
   if ((!description && !retrying) || trainingAnalyzeButton.disabled || trainingPending) { if (!description && !retrying) trainingFeedback.textContent = 'Describe el entrenamiento para continuar.'; return; }
-  const nutritionDate = dayInput?.value || localDate();
+  const nutritionDate = trainingEntryDate || dayInput?.value || localDate();
   trainingPending = true;
   trainingTrigger.setAttribute('aria-busy', 'true');
   document.querySelector('#trainingButtonLoading').hidden = false;
@@ -1857,7 +1899,8 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
   trainingLoadingText.textContent = 'Analizando entrenamiento…';
   trainingInput.disabled = true;
   trainingAnalyzeButton.disabled = true;
-  if (!retrying) appendTrainingMessage('user', description);
+  const userMessage = !retrying && appendTrainingMessage('user', description);
+  let analyzing = !retrying;
   const progressId = createFoodRequestId();
   const progress = retrying ? null : startTrainingProgress(progressId, appendTrainingMessage);
   trainingInput.value = '';
@@ -1866,10 +1909,11 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     if (retrying) { await savePendingTraining(generation); return; }
     const response = await fetch('/api/training-analysis', {
       method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json', 'X-Client-Timezone': Intl.DateTimeFormat().resolvedOptions().timeZone },
-      body: JSON.stringify({ description, progressId, userMessages: [...trainingChatMessages.querySelectorAll('.food-chat-message[data-role="user"] .food-chat-text')].map((node) => node.textContent.trim()).slice(-20), suppressNotification: true }),
+      body: JSON.stringify({ description, date: nutritionDate, progressId, userMessages: [...trainingChatMessages.querySelectorAll('.food-chat-message[data-role="user"] .food-chat-text')].map((node) => node.textContent.trim()).slice(-20), suppressNotification: true }),
     });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || 'No se pudo analizar el entrenamiento.');
+    analyzing = false;
     if (generation !== trainingOpenGeneration) return;
     trainingOpenCodeSessionActive = true;
     const analysis = result.analysis;
@@ -1916,7 +1960,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     const userTurns = turns.filter((turn, index) => !index || turn !== turns[index - 1]);
     const descriptionToSave = userTurns.join(' · ').length <= 1200 ? userTurns.join(' · ')
       : `${userTurns[0].slice(0, 550)} … ${userTurns.at(-1).slice(-600)}`;
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const timezone = analysis.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
     const clock = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: timezone, hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
     pendingTrainingSave = { expiresAt: Date.now() + 24 * 60 * 60 * 1000, timezone, body: {
       requestId: createFoodRequestId(), description: descriptionToSave, analysis, savedAt: trainingSavedAt || `${clock.hour}:${clock.minute}`, date: nutritionDate, suppressNotification: true,
@@ -1925,6 +1969,7 @@ trainingAnalyzeButton?.addEventListener('click', async () => {
     await savePendingTraining(generation);
   } catch (error) {
     if (generation !== trainingOpenGeneration) return;
+    if (analyzing) { trainingInput.value = description; userMessage.remove(); }
     appendTrainingMessage('error', error.message || 'No se pudo analizar el entrenamiento.');
     trainingFeedback.textContent = error.message || 'No se pudo analizar el entrenamiento.';
     notifyApp(trainingFeedback.textContent, 'error');

@@ -680,7 +680,7 @@ test('generating and saving a plan never replaces the active dashboard targets',
   const ids = ['trainingPlanGoals', 'sendTrainingPlanGoals', 'saveTrainingPlan', 'goToSavedTrainingPlans', 'trainingPlanDialog', 'createTrainingPlanButton', 'trainingPlanButtonLoading', 'planChatMessages', 'planLoading', 'planSummaryText', 'savedTrainingPlans'];
   const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
   const flow = loadFlow('', async (url) => ({ ok: true, json: async () =>
-    url === '/api/training-plan' ? { plan: 'Borrador', macros, runId: 'draft', draftToken: 'signed', expiresAt: Date.now() + 60000 }
+    url === '/api/training-plan' ? { plan: 'Borrador', goals: 'Ganar fuerza', macros, runId: 'draft', revision: 1, expiresAt: Date.now() + 60000 }
       : url === '/api/training-plans' ? { id: '41', createdAt: '2026-11-10T17:00:00Z', plans: [] } : {} }),
   { ids, intl: Intl, elements: { 'label[for="trainingPlanGoals"]': new Element() } });
   await settle();
@@ -723,7 +723,7 @@ test('plan refinement and saving cannot overlap, and stale replies cannot restor
   assert.equal(flow.elements['#saveTrainingPlan'].disabled, true);
   await flow.elements['#saveTrainingPlan'].dispatch('click');
   assert.equal(calls.filter((url) => url === '/api/training-plans').length, 0);
-  finishRefine({ ok: true, json: async () => ({ plan: 'Revisado', macros, runId: 'draft' }) });
+  finishRefine({ ok: true, json: async () => ({ plan: 'Revisado', goals: 'Fuerza', macros, runId: 'draft', revision: 2 }) });
   await refining;
   assert.equal(flow.elements['#saveTrainingPlan'].disabled, false);
   const saving = flow.elements['#saveTrainingPlan'].dispatch('click');
@@ -764,9 +764,9 @@ test('reopening plans restores a signed backup before displaying it or requestin
   const restored = loadFlow('', async (url, options = {}) => {
     calls.push([url, options]);
     return { ok: true, json: async () => url === '/api/training-plan/restore'
-      ? { plan: 'Borrador recuperado', goals: 'Ganar fuerza', macros, runId: 'draft' }
+      ? { plan: 'Borrador recuperado', goals: 'Ganar fuerza', macros, runId: 'draft', revision: 1 }
       : url === '/api/training-plan/refine'
-        ? { plan: 'Borrador modificado', macros, runId: 'draft', draftToken: 'updated-backup', expiresAt: Date.now() + 60000 } : {} };
+        ? { plan: 'Borrador modificado', goals: 'Ganar fuerza', macros, runId: 'draft', revision: 2, expiresAt: Date.now() + 60000 } : {} };
   }, { ids, storage, intl: Intl, elements: { 'label[for="trainingPlanGoals"]': new Element() } });
   await restored.elements['#createTrainingPlanButton'].dispatch('click');
   assert.equal(restored.elements['#trainingPlanDialog'].open, true);
@@ -775,9 +775,10 @@ test('reopening plans restores a signed backup before displaying it or requestin
   restored.elements['#trainingPlanGoals'].value = 'Tres días';
   await restored.elements['#sendTrainingPlanGoals'].dispatch('click');
   const refine = calls.find(([url]) => url === '/api/training-plan/refine');
-  assert.equal(JSON.parse(refine[1].body).draftToken, 'signed-backup');
+  assert.equal(JSON.parse(refine[1].body).revision, 1);
+  assert.equal(JSON.parse(refine[1].body).draftToken, undefined);
   assert.equal(calls.some(([url]) => url === '/api/training-plan'), false);
-  assert.equal(restored.evaluate("draftStorage('plan').draftToken"), 'updated-backup');
+  assert.equal(restored.evaluate("draftStorage('plan').revision"), 2);
 });
 
 test('clarification applies multiple preview edits together in the reply composer', async () => {

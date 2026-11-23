@@ -41,7 +41,7 @@
 | Chat del chef | `chef-chat.js` | `chef-chat.test.js` |
 | Análisis y registro de entrenamientos, pasos y energía | `training-entries.js` | `training-entries.test.js`, `server.test.js` |
 | Planes: generación, refinamiento y sesión pendiente | `training-analysis.js` | `training-analysis.test.js`, `training-plan.test.js`, `server.test.js` |
-| Recuperación temporal de planes (24 h), firma y propiedad del respaldo | `training-analysis.js`; `POST /api/training-plan/restore` en `server.js`; `draftStorage()` en `onboarding-flow.js` | `training-plan.test.js`, `server.test.js`, `onboarding-flow.test.js` |
+| Recuperación temporal de planes (24 h), propiedad y revisión | `html/api/plan-drafts.js`; `POST /api/training-plan/restore` en `server.js`; `draftStorage()` en `onboarding-flow.js` | `training-plan.test.js`, `server.test.js`, `onboarding-flow.test.js` |
 | Validación, guardado, activación y lectura de planes | `training-plans.js` | `training-plans.test.js`, `server.test.js` |
 | Fechas y zona horaria del calendario | `calendar-day.js` | `calendar-day.test.js` |
 | Notificaciones | `notifications.js` | `notifications.test.js`, `server.test.js` |
@@ -55,7 +55,7 @@ El servidor calcula hashes de contenido de JS/CSS al arrancar y reescribe sus UR
 
 Tendencias biométricas: comparten solicitudes idénticas, caché local de 30 s e invalidación tras escrituras API; descartan respuestas antiguas y cancelan periodos reemplazados. Los pasos mantienen su petición independiente y también descartan/cancelan cargas reemplazadas. Notificaciones: listado y contador completo comparten una ejecución MySQL con snapshot de solo lectura. El resumen biométrico agrega ambos periodos desde una lectura de registros; la TMB y su fuente se obtienen de la misma fila.
 
-Los reintentos de guardado de entrenamientos reutilizan el payload completo en `savePendingTraining()` sin volver a analizar. Su respaldo y el de planes viven en `sessionStorage`, separados por cuenta mediante un ámbito opaco insertado por el servidor en el dashboard; no son registros definitivos ni se trasladan entre navegadores. El respaldo de planes incluye firma, propiedad y vencimiento; no expone IDs de sesión OpenCode. Cambiar la clave JWT invalida estos respaldos.
+Los reintentos de entrenamiento reutilizan el payload de `savePendingTraining()` en `sessionStorage`. Para planes solo se guarda una referencia por cuenta; el borrador, la revisión y el contexto residen en MySQL. No se exponen IDs de sesión OpenCode.
 
 Entrenamientos: los reintentos conservan el respaldo ante HTTP 409 y no sondean progreso de análisis. El guardado advierte si falla el refresco del día sin ofrecer reenviar un registro confirmado. `loadTrainingEntries()` devuelve `false` ante fallo de carga. Las comprobaciones Garmin reutilizan la zona horaria resuelta en servidor y exigen modo Garmin conectado tanto al guardar como al consultar; duración y MET deben seguir siendo positivos después del redondeo.
 
@@ -75,6 +75,7 @@ Comidas: el historial selecciona la última referencia completa por nombre sin l
 - El contrato activo de comidas utiliza solo energía, proteína, carbohidratos y grasa. Retirada física de columnas obsoletas preparada en `mysql/migrations/0015_remove_unused_nutrient.sql`; revisar despliegue/recuperación en `esquema-bd.md` antes de aplicarla.
 - `comportamiento-sesion-entrenamientos.md`: contrato e instrucciones del análisis de entrenamientos.
 - `comportamiento-sesion-plan.md`: generación y refinamiento de planes; fuente canónica del prompt enviado a OpenCode.
+- Crear plan: el modelo devuelve una pregunta o un informe listo. `training-analysis.js` compone datos y tabla de metas; `plan-drafts.js` bloquea el guardado hasta responder. El modal usa la misma revisión para continuar y recuperar aclaraciones.
 - `comportamiento-sesion-chef.md`: comportamiento del chat del chef.
 - `esquema-bd.md`: esquema y semántica documentada de tablas.
 - `mysql/migrations/`: cambios persistentes; las migraciones aplicadas son inmutables.

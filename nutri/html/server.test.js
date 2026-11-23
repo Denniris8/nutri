@@ -98,9 +98,10 @@ test('training day starts preferences, steps and active-plan reads without waiti
 test('plan restore authenticates the account and rejects invalid, expired and cross-account backups', async () => {
   const { issueTrainingPlanDraft } = require('./api/training-analysis.js');
   const secret = 'test-jwt-secret-must-be-at-least-32-bytes';
-  const pending = { runId: '123e4567-e89b-42d3-a456-426614174000', goals: 'Fuerza', plan: 'Borrador', macros: {}, context: {}, expiresAt: Date.now() + 60000 };
+  const pending = { runId: '123e4567-e89b-42d3-a456-426614174000', goals: 'Fuerza', plan: '[Datos Registrados]\n[Estimaciones Calculadas]\nBorrador', macros: {}, context: {}, expiresAt: Date.now() + 60000 };
   let upstreamCalls = 0;
-  await withServer(async (sql) => sql.includes('dashboard_sessions') ? '27' : '', async (base) => {
+  const dbDraft = mockPlanDraftQueries();
+  await withServer(async (sql) => sql.includes('dashboard_sessions') ? '27' : dbDraft(sql), async (base) => {
     const endpoint = `${base}/api/training-plan/restore`;
     const cookie = `nutri_session=${signJwt('27', pending.runId, secret)}`;
     const draftToken = issueTrainingPlanDraft('27', pending, secret);
@@ -108,7 +109,11 @@ test('plan restore authenticates the account and rejects invalid, expired and cr
     assert.equal((await post(endpoint, { draftToken }, { Cookie: cookie, Origin: 'https://other.example' })).status, 403);
     const restored = await post(endpoint, { draftToken }, { Cookie: cookie });
     assert.equal(restored.status, 200);
-    assert.deepEqual(await restored.json(), { runId: pending.runId, plan: pending.plan, goals: pending.goals, macros: pending.macros, expiresAt: pending.expiresAt });
+    const recovered = await restored.json();
+    assert.equal(recovered.runId, pending.runId);
+    assert.equal(recovered.revision, 1);
+    assert.match(recovered.plan, /Borrador/);
+    assert.equal(recovered.context, undefined);
     for (const token of [
       `${draftToken}x`,
       issueTrainingPlanDraft('28', pending, secret),
@@ -1329,15 +1334,36 @@ test('training plan generation is blocked when the account has no registered wei
   }, { openCodeRequest: async (...args) => { openCodeCalls.push(args); return { status: 200, data: {} }; } });
 });
 
+function mockPlanDraftQueries() {
+  const row = { revision: 0, state: 'generando', expiresAt: Date.now() + 60000 };
+  return (sql) => {
+    if (sql.includes("SELECT JSON_OBJECT('revision'")) return JSON.stringify(row);
+    if (sql.includes('SET datos=') || sql.includes('run_id,revision,estado,datos')) {
+      const payload = sql.match(/0x(7b[0-9a-f]+)/i)[1];
+      row.data = JSON.parse(Buffer.from(payload, 'hex').toString());
+      row.state = 'abierto'; row.revision++;
+      return '1';
+    }
+    if (sql.includes("SET estado='guardando'") && sql.includes(`revision=${row.revision} AND estado='abierto'`) && row.state === 'abierto' && (!sql.includes("'$.question'") || !row.data.question)) row.state = 'guardando';
+    if (sql.includes("SET estado='guardado'")) {
+      row.state = 'guardado';
+      row.data = JSON.parse(Buffer.from(sql.match(/0x(7b[0-9a-f]+)/i)[1], 'hex').toString());
+    }
+    return '';
+  };
+}
+
 test('authenticated user can refine an unsaved training plan and save the updated draft', async () => {
   const queries = [];
   const requests = [];
   const disclosure = 'Las metas de calorías y carbohidratos se ajustan según los entrenamientos registrados para el día seleccionado.';
   const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
-  const plan = `[Datos Registrados]\nEdad: 32 años; sexo masculino; estatura 175 cm.\n[Estimaciones Calculadas]\nMacros estimados.\n| Macro | Meta diaria |\n| --- | --- |\n| Proteínas | 140 g |\n| Carbohidratos | 220 g |\n| Grasas | 65 g |\n| Calorías | 2000 kcal |\n${disclosure}\n[Supuestos Adoptados]\nDisponibilidad asumida.`;
+  const plan = '[Estimaciones Calculadas]\nMacros estimados.\n[Supuestos Adoptados]\nDisponibilidad asumida.';
   let saveRequest;
+  const dbDraft = mockPlanDraftQueries();
   await withServer(async (sql) => {
     queries.push(sql);
+    if (sql.includes('borradores_plan')) return dbDraft(sql);
     if (sql.includes('SELECT s.usuario_id')) return '27';
     if (sql.includes("SELECT 'profile';")) return ['profile', JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null }), 'preferences', 'biometrics', '[]', 'hasWeight', '1', 'plicometrics', '[]', 'age', JSON.stringify({ age: 32 }), 'previousPlan'].join('\n');
     if (sql.includes("SELECT JSON_OBJECT('accountName'")) return JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null });
@@ -1356,29 +1382,31 @@ test('authenticated user can refine an unsaved training plan and save the update
     const generatedResponse = await post(base + '/api/training-plan', { goals: 'Ganar fuerza', suppressNotification: true }, { Cookie: cookie });
     assert.equal(generatedResponse.status, 200);
     const generated = await generatedResponse.json();
-    assert.equal(generated.plan, plan);
+    assert.match(generated.plan, /Edad: 32 años \(fuente: perfil\)/);
+    assert.equal(generated.revision, 1);
     assert.deepEqual(generated.macros, macros);
     assert.match(generated.runId, /^[0-9a-f-]{36}$/i);
 
-    const refineResponse = await post(base + '/api/training-plan/refine', { runId: generated.runId, changes: 'Reduce la rutina a tres días', suppressNotification: true }, { Cookie: cookie });
+    const refineResponse = await post(base + '/api/training-plan/refine', { runId: generated.runId, revision: 1, changes: 'Reduce la rutina a tres días', suppressNotification: true }, { Cookie: cookie });
     assert.equal(refineResponse.status, 200);
     const refined = await refineResponse.json();
     assert.equal(refined.runId, generated.runId);
-    assert.equal(refined.plan, plan);
+    assert.equal(refined.plan, generated.plan);
+    assert.equal(refined.revision, 2);
     assert.deepEqual(refined.macros, macros);
 
-    saveRequest = { runId: generated.runId, goals: 'Ganar fuerza', plan: refined.plan, macros: refined.macros, suppressNotification: true };
+    saveRequest = { runId: generated.runId, revision: 2, goals: 'Ganar fuerza', plan: refined.plan, macros: refined.macros, suppressNotification: true };
+    assert.equal((await post(base + '/api/training-plans', { ...saveRequest, revision: 1 }, { Cookie: cookie })).status, 409);
     const savedResponse = await post(base + '/api/training-plans', saveRequest, { Cookie: cookie });
     assert.equal(savedResponse.status, 201);
     const saved = await savedResponse.json();
     assert.equal(saved.id, 5);
     assert.equal(saved.requestId, generated.runId);
     assert.equal(saved.inserted, true);
-    const factsSql = queries.find((sql) => sql.includes("'hasWeight',b.hasWeight"));
-    assert.ok(factsSql);
-    assert.equal((factsSql.match(/FROM registros_biometricos/g) || []).length, 1);
-    assert.equal((factsSql.match(/FROM registros_plicometro/g) || []).length, 1);
-    assert.match(factsSql, /JSON_EXTRACT\(IF\(COUNT\(peso_kg\)>0,'true','false'\),'\$'\)/);
+    const replay = await post(base + '/api/training-plans', { runId: generated.runId, revision: 2 }, { Cookie: cookie });
+    assert.equal(replay.status, 200);
+    assert.equal((await replay.json()).id, saved.id);
+    assert.equal(queries.filter((sql) => sql.includes('INSERT INTO planes_entrenamiento')).length, 1);
     assert.ok(queries.some((sql) => sql.includes('INSERT INTO planes_entrenamiento') && sql.includes('usuario_id=27')));
     assert.deepEqual(requests, [
       { method: 'POST', endpoint: '/session' },
@@ -1399,30 +1427,67 @@ test('authenticated user can refine an unsaved training plan and save the update
         if (Object.hasOwn(message, 'cambiosSolicitados')) {
           assert.equal(message.goals, 'Ganar fuerza');
           assert.equal(message.cambiosSolicitados, 'Reduce la rutina a tres días');
-          assert.equal(message.borradorActual.plan_markdown, plan);
+          assert.match(message.borradorActual.plan_markdown, /Edad: 32 años \(fuente: perfil\)/);
           assert.deepEqual(message.borradorActual.macros_objetivo, macros);
-          return { status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({ macros_objetivo: macros, plan_markdown: plan }) }] } };
+          return { status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({ estado: 'plan_listo', macros_objetivo: macros, plan_markdown: plan }) }] } };
         }
         assert.deepEqual(message, { goals: 'Ganar fuerza', context: {
+          hasWeight: true, fechaReferencia: new Date().toISOString().slice(0, 10),
           profile: { age: 32, sex: 'masculino', heightCm: 175, restingMetabolismKcal: null, restingMetabolismSource: null },
           preferences: null, biometricRecords: [], plicometricRecords: [], previousTrainingPlanSummary: null,
         } });
-        return { status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({ macros_objetivo: macros, plan_markdown: plan }) }] } };
+        return { status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({ estado: 'plan_listo', macros_objetivo: macros, plan_markdown: plan }) }] } };
       }
       return { status: 204, data: null };
     },
   });
 });
 
+test('an unanswered plan question survives restore, blocks saving, and resumes on the same revision', async () => {
+  const draftDb = mockPlanDraftQueries();
+  const question = '¿A qué alimento tienes alergia?';
+  await withServer(async sql => {
+    if (sql.includes('SELECT s.usuario_id')) return '27';
+    if (sql.includes('borradores_plan')) return draftDb(sql);
+    if (sql.includes("SELECT 'profile';")) return ['biometrics','[]','hasWeight','1','plicometrics','[]'].join('\n');
+    assert.ok(!sql.includes('INSERT INTO planes_entrenamiento'));
+    return '';
+  }, async base => {
+    const headers = { Cookie: `nutri_session=${signJwt('27','123e4567-e89b-42d3-a456-426614174000','test-jwt-secret-must-be-at-least-32-bytes')}` };
+    const submit = (route, body) => post(`${base}/api/${route}`, { ...body, suppressNotification: true }, headers);
+    const draft = await (await submit('training-plan', { goals: 'Tengo una alergia alimentaria grave.' })).json();
+    assert.equal(draft.question, question);
+    assert.equal(draft.macros, undefined);
+    const key = { runId: draft.runId, revision: draft.revision };
+    assert.equal((await submit('training-plans', key)).status, 409);
+    assert.equal((await (await submit('training-plan/restore', key)).json()).question, question);
+    const ready = await (await submit('training-plan/refine', { ...key, changes: 'A los cacahuates.' })).json();
+    assert.equal(ready.state, 'plan_listo');
+    assert.equal(ready.revision, draft.revision + 1);
+    await require('./api/training-analysis.js').deleteTrainingPlanSession({ userId: '27', runId: ready.runId, requestOpenCode: async () => ({ status: 204 }) });
+  }, { openCodeRequest: async (method, endpoint, body) => {
+    if (endpoint === '/session') return { status: 201, data: { id: 'ses_plan_allergy' } };
+    if (method === 'DELETE') return { status: 204 };
+    const msg = JSON.parse(body.parts[0].text);
+    if (msg.cambiosSolicitados) assert.equal(msg.preguntaPendiente, question);
+    const reply = msg.cambiosSolicitados
+      ? { estado: 'plan_listo', plan_markdown: '[Estimaciones Calculadas]\nMeta de reposo.\n[Supuestos Adoptados]\nMenú sin cacahuates.', macros_objetivo: { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 } }
+      : { estado: 'requiere_aclaracion', pregunta: question };
+    return { status: 200, data: { parts: [{ type:'text', text:JSON.stringify(reply) }] } };
+  } });
+});
+
 test('training plan save logs a sanitized MySQL error code', async () => {
   const statements = [];
+  const dbDraft = mockPlanDraftQueries();
   const opencodeCalls = [];
   const disclosure = 'Las metas de calorías y carbohidratos se ajustan según los entrenamientos registrados para el día seleccionado.';
   const goals = 'Ganar fuerza';
-  const plan = `[Datos Registrados]\nEdad: 32 años; sexo masculino; estatura 175 cm.\n[Estimaciones Calculadas]\nMacros estimados.\n| Macro | Meta diaria |\n| --- | --- |\n| Proteínas | 140 g |\n| Carbohidratos | 220 g |\n| Grasas | 65 g |\n| Calorías | 2000 kcal |\n${disclosure}\n[Supuestos Adoptados]\nDisponibilidad asumida.`;
+  const plan = '[Estimaciones Calculadas]\nMacros estimados.\n[Supuestos Adoptados]\nDisponibilidad asumida.';
   const macros = { proteinas_g: 140, carbohidratos_g: 220, grasas_g: 65, calorias_kcal: 2000 };
   await withServer(async (sql) => {
     statements.push(sql);
+    if (sql.includes('borradores_plan')) return dbDraft(sql);
     if (sql.includes('SELECT s.usuario_id')) return '27';
     if (sql.includes("SELECT 'profile';")) return ['profile', JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null }), 'preferences', 'biometrics', '[]', 'hasWeight', '1', 'plicometrics', '[]', 'age', JSON.stringify({ age: 32 }), 'previousPlan'].join('\n');
     if (sql.includes("SELECT JSON_OBJECT('accountName'")) return JSON.stringify({ sex: 'masculino', heightCm: 175, restingMetabolismKcal: null });
@@ -1439,9 +1504,9 @@ test('training plan save logs a sanitized MySQL error code', async () => {
     const generatedResponse = await post(base + '/api/training-plan', { goals, suppressNotification: true }, { Cookie: cookie });
     assert.equal(generatedResponse.status, 200);
     const generated = await generatedResponse.json();
-    assert.equal(generated.plan, plan);
+    assert.match(generated.plan, /Edad: 32 años \(fuente: perfil\)/);
     const saveResponse = await post(base + '/api/training-plans', {
-      runId: generated.runId, goals, plan: generated.plan, macros: generated.macros, suppressNotification: true,
+      runId: generated.runId, revision: generated.revision, suppressNotification: true,
     }, { Cookie: cookie });
     assert.equal(saveResponse.status, 503);
     assert.deepEqual(opencodeCalls, ['POST /session', 'POST /session/ses_plan123/message']);
@@ -1451,7 +1516,7 @@ test('training plan save logs a sanitized MySQL error code', async () => {
     opencodeCalls.push(`${method} ${endpoint}`);
     if (endpoint === '/session') return { status: 200, data: { id: 'ses_plan123' } };
     if (endpoint === '/session/ses_plan123/message') return {
-      status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({ plan_markdown: plan, macros_objetivo: macros }) }] },
+      status: 200, data: { parts: [{ type: 'text', text: JSON.stringify({ estado: 'plan_listo', plan_markdown: plan, macros_objetivo: macros }) }] },
     };
     return { status: 200, data: {} };
   } });

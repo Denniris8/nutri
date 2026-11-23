@@ -93,7 +93,7 @@ test('manual training registration rejects a requestId reused for different save
     textSql: (value) => `'${value}'`, json: trainingJson,
     dbQuery: async (sql) => {
       if (sql.includes('SELECT zona_horaria')) return 'UTC';
-      if (sql.includes('INSERT INTO registros_entrenamientos')) return `41\n${JSON.stringify({ ...trainingRequest().analysis, id: '41', requestId: trainingRequest().requestId, description: trainingRequest().description, activity: 'Caminar', caloriesKcal: 257.3 })}`;
+      if (sql.includes('INSERT INTO registros_entrenamientos')) return `41\n${JSON.stringify({ ...trainingRequest().analysis, id: '41', requestId: trainingRequest().requestId, description: trainingRequest().description, activity: 'Caminar', caloriesKcal: 257.3, createdAt: '2026-10-26T12:00:00Z' })}`;
       return '';
     },
   });

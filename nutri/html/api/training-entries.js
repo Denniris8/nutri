@@ -321,7 +321,7 @@ SELECT JSON_OBJECT('id',id,'requestId',request_id,'description',descripcion,'act
       || Number(persisted.weightKg) !== entry.weightKg || Number(persisted.met) !== entry.met
       || Number(persisted.caloriesKcal) !== entry.caloriesKcal || Boolean(Number(persisted.garminIncluded)) !== garminIncluded
       || timeMismatch || dateMismatch) {
-      json(response, 409, { error: 'La clave de reintento ya corresponde a otro registro.' });
+      json(response, 409, { entryId: persisted.id, activity: persisted.activity, date: localCalendarDate(calendarTimezone, new Date(persisted.createdAt)), error: 'La clave de reintento ya corresponde a otro registro.' });
       return;
     }
     try { await dbQuery(`${resolveNotificationsSql({ userId, category: 'entrenamiento', textSql })};`); } catch {}

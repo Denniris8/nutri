@@ -3,7 +3,7 @@ const path = require('node:path');
 const { readFile } = require('node:fs/promises');
 const { openCodeRequest, readFoodSessionConfig } = require('./opencode-food.js');
 const { parseTrainingSavedTime } = require('./training-entries.js');
-const { extractPlanDisclosure, validatePlanSemantics } = require('./training-plans.js');
+const { extractPlanDisclosure, validatePlanSemantics, recordedPlanFacts } = require('./training-plans.js');
 const { createAnalysisProgressRecorder } = require('./analysis-progress.js');
 
 const permissions = [{ permission: '*', pattern: '*', action: 'deny' }];
@@ -15,6 +15,7 @@ const planLocks = new Map();
 const progress = new Map();
 const trainingPromptPath = path.resolve(__dirname, '../../comportamiento-sesion-entrenamientos.md');
 const trainingPlanPromptPath = path.resolve(__dirname, '../../comportamiento-sesion-plan.md');
+const bodyWeightQuestion = 'Indica tu peso actual aproximado en kg; el peso registrado no está disponible o tiene más de 60 días.';
 
 function issueTrainingPlanDraft(userId, pending, secret) {
   if (!secret) return undefined;
@@ -57,6 +58,7 @@ function reportTrainingProgress(userId, progressId, event, recordEvent) {
     plan_sent: 'Enviando objetivos y contexto para generar el plan…',
     plan_received: 'Plan recibido; validando contenido y metas…',
     plan_complete: 'Plan generado; listo para revisar y guardar.',
+    plan_question: 'Hace falta una aclaración antes de completar el plan.',
     analysis_failed: 'El análisis del entrenamiento se detuvo.', plan_failed: 'La generación del plan se detuvo.',
     analysis_retry: 'Respuesta incompleta; reintentando el análisis…', plan_retry: 'Plan incompleto; reintentando la generación…',
   };
@@ -99,16 +101,22 @@ function withUserLock(userId, run, store = locks) {
   return current.finally(() => { if (store.get(userId) === current) store.delete(userId); });
 }
 
-function parseTrainingPlanReply(parts, systemPrompt, context) {
+function parseTrainingPlanReply(parts, systemPrompt, context = {}, fixedMacros) {
   const raw = parts.filter((part) => part.type === 'text').map((part) => part.text || '').join('\n').trim()
     .replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   let reply;
   try { reply = JSON.parse(raw); }
   catch { throw new Error('El plan generado no cumple el formato esperado.'); }
   const macros = reply?.macros_objetivo;
+  if (reply?.estado === 'requiere_aclaracion') {
+    const question = typeof reply.pregunta === 'string' && reply.pregunta.trim();
+    if (Object.keys(reply).length !== 2 || !question || question.length > 500 || /[\r\n]/.test(question)
+      || !/^¿[^¿?]+\?$/.test(question)) throw new Error('Devuelve únicamente una pregunta concreta entre ¿ y ?.');
+    return { state: 'requiere_aclaracion', question };
+  }
   const keys = ['proteinas_g', 'carbohidratos_g', 'grasas_g', 'calorias_kcal'];
   if (!reply || typeof reply !== 'object' || Array.isArray(reply)
-    || Object.keys(reply).length !== 2 || !Object.hasOwn(reply, 'plan_markdown') || !Object.hasOwn(reply, 'macros_objetivo')
+    || reply.estado !== 'plan_listo' || Object.keys(reply).length !== 3 || !Object.hasOwn(reply, 'plan_markdown') || !Object.hasOwn(reply, 'macros_objetivo')
     || typeof reply.plan_markdown !== 'string' || !reply.plan_markdown.trim() || reply.plan_markdown.length > 30000
     || !macros || typeof macros !== 'object' || Array.isArray(macros)
     || Object.keys(macros).length !== keys.length || keys.some((key) => !Object.hasOwn(macros, key))) {
@@ -118,9 +126,18 @@ function parseTrainingPlanReply(parts, systemPrompt, context) {
   for (const key of keys) {
     const value = macros[key];
     if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > limits[key]) throw new Error('El plan generado contiene metas de macros no válidas.');
+    macros[key] = Number(value.toFixed(key === 'calorias_kcal' ? 1 : 2));
+    if (!macros[key]) throw new Error('La meta redondeada debe ser positiva.');
   }
-  validatePlanSemantics(reply.plan_markdown, macros, extractPlanDisclosure(systemPrompt), context);
-  return { plan: reply.plan_markdown.trim(), macros: Object.fromEntries(keys.map((key) => [key, macros[key]])) };
+  if (fixedMacros && keys.some(key => macros[key] !== fixedMacros[key])) throw new Error('Conserva los macros de reposo del borrador sin cambios.');
+  const body = reply.plan_markdown.trim();
+  if (!body.startsWith('[Estimaciones Calculadas]') || body.includes('[Datos Registrados]') || body.split('[Supuestos Adoptados]').length !== 2) throw new Error('Devuelve solo estimaciones, supuestos y recomendaciones.');
+  const disclosure = extractPlanDisclosure(systemPrompt);
+  const table = `| Nutriente | Meta diaria de reposo |\n|---|---:|\n| Proteínas | ${macros.proteinas_g} g |\n| Carbohidratos | ${macros.carbohidratos_g} g |\n| Grasas | ${macros.grasas_g} g |\n| Calorías | ${macros.calorias_kcal} kcal |\n${disclosure}`;
+  const plan = `[Datos Registrados]\n${recordedPlanFacts(context)}\n\n${body}\n\n${table}`;
+  if (plan.length > 30000) throw new Error('Reduce la extensión del plan.');
+  validatePlanSemantics(plan, macros, disclosure, context);
+  return { state: 'plan_listo', plan, macros };
 }
 
 async function openTrainingSession(userId, config, request) {
@@ -145,7 +162,7 @@ async function openTrainingSession(userId, config, request) {
   }, config.requestTimeoutMs);
   const id = created.data?.id;
   if (created.status < 200 || created.status >= 300 || !/^ses_[A-Za-z0-9_-]{4,120}$/.test(id || '')) throw new Error('No se pudo preparar el análisis del entrenamiento.');
-  sessions.set(userId, { id, fingerprint, verifiedAt: Date.now() });
+  sessions.set(userId, { ...(cached?.fingerprint === fingerprint ? cached : {}), id, fingerprint, verifiedAt: Date.now() });
   return id;
 }
 
@@ -165,8 +182,8 @@ function extractExplicitSteps(description, stepContext = {}) {
     || parsedLocalDate.toISOString().slice(0, 10) !== localDate) return { stepsCount: null, stepsDate: null };
   const dateMentions = [...text.matchAll(/\b(anteayer|ayer|hoy|mañana|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{4})\b/gi)];
   if (dateMentions.length > 1) return { stepsCount: null, stepsDate: null };
-  let day = new Date(`${localDate}T00:00:00Z`);
   const dateMention = dateMentions[0]?.[1]?.toLowerCase();
+  let day = new Date(`${dateMention ? localDate : stepContext.selectedDate || localDate}T00:00:00Z`);
   if (dateMention === 'mañana') return { stepsCount: null, stepsDate: null };
   if (dateMention === 'ayer') day.setUTCDate(day.getUTCDate() - 1);
   else if (dateMention === 'anteayer') day.setUTCDate(day.getUTCDate() - 2);
@@ -205,12 +222,12 @@ function parseReply(parts, biometricContext, explicitWeightKg, description = '',
   const weightKg = explicitWeightKg ?? (!biometricContext.latestWeightStale ? biometricContext.latestWeightKg : null);
   const missingDetails = [!activity && 'la actividad', durationMinutes == null && 'la duración', met == null && 'la intensidad'].filter(Boolean);
   const question = [reply.question || (missingDetails.length ? `Indica ${missingDetails.join(' y ')} del entrenamiento.` : null),
-    weightKg == null ? 'Indica tu peso actual aproximado en kg; el peso registrado no está disponible o tiene más de 60 días.' : null]
+    weightKg == null ? bodyWeightQuestion : null]
     .filter(Boolean).join(' ') || null;
   const missing = missingDetails.length > 0 || weightKg == null;
   const caloriesKcal = missing || question ? null : Math.round(met * 3.5 * weightKg / 200 * durationMinutes * 10) / 10;
   return {
-    trainingSession: true, question: caloriesKcal == null ? question : null,
+    trainingSession: true, question: weightKg == null && !missingDetails.length && (!reply.question || /(?:tu peso|peso (?:actual|corporal))/i.test(reply.question) && !/carga|levant|barra|mancuerna/i.test(reply.question)) ? bodyWeightQuestion : caloriesKcal == null ? question : null,
     activity, durationMinutes, met, weightKg, ...steps, caloriesKcal,
     formula: caloriesKcal == null ? null : `${met} MET × 3.5 × ${weightKg} kg / 200 × ${durationMinutes} min`,
   };
@@ -233,35 +250,57 @@ async function analyzeTraining({ userId, description, userWeightContext = descri
     registeredHeightCm: numeric(biometricData?.registeredHeightCm, 80, 250),
   };
   const savedTime = parseTrainingSavedTime(text);
+  const explicitSteps = extractExplicitSteps(text, stepContext);
+  if (stepContext?.selectedDate) {
+    const mentions = text.replace(/\b(?:por|de) la mañana\b/gi, '').match(/\b(?:anteayer|ayer|hoy|mañana|\d{4}-\d{2}-\d{2}|\d{1,2}\/\d{1,2}\/\d{4})\b/gi) || [];
+    if (mentions.some((mention) => extractExplicitSteps(`${mention}: 0 pasos`, stepContext).stepsDate !== stepContext.selectedDate)) {
+      throw Object.assign(new Error(`Está seleccionado ${stepContext.selectedDate}, pero la fecha del mensaje no coincide. Elige el día correcto o corrige la descripción antes de guardar.`), { status: 400 });
+    }
+  }
+  if (explicitSteps.stepsCount !== null && /^(?:(?:hoy|ayer|anteayer)[:,]?\s+)?(?:(?:hice|caminé|registré|di)\s+)?\d[\d.,]*\s*(?:mil\s*)?pasos[.!]?$/i.test(text)) {
+    return { trainingSession: false, activity: null, durationMinutes: null, met: null, question: null, ...explicitSteps, caloriesKcal: null, weightKg: null, formula: null, biometricContext, saveTimeStatus: 'none', requestedSaveTime: null };
+  }
   return withUserLock(id, async () => {
     reportTrainingProgress(id, progressId, 'analysis_config', progressRecorder?.record);
     const config = await readConfig();
     const systemPrompt = await readTrainingPrompt();
     reportTrainingProgress(id, progressId, 'analysis_session', progressRecorder?.record);
-    const sessionId = await openTrainingSession(id, config, requestOpenCode);
+    let sessionId = await openTrainingSession(id, config, requestOpenCode);
     const model = config.model ? { providerID: config.model.providerID, modelID: config.model.modelID } : undefined;
     reportTrainingProgress(id, progressId, 'analysis_sent', progressRecorder?.record);
-    const weightMatches = [...String(userWeightContext || text).matchAll(/(?:peso(?:\s+actual|\s+corporal)?\s*(?:es|de|:|=)?\s*)(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\b|^\s*(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\s*$/gim)];
-    const weightMatch = weightMatches.at(-1);
-    const explicitWeightKg = weightMatch ? numeric(Number((weightMatch[1] || weightMatch[2]).replace(',', '.')), 20, 400) : null;
+    const context = sessions.get(id);
+    const declaration = [...text.matchAll(/\b(?:mi peso(?:\s+actual|\s+corporal)?(?:\s+es)?|peso (?:actual|corporal)|yo peso)\s*[:=]?\s*(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\b/gi)].at(-1);
+    const bare = context.awaitingWeight && text.match(/^(\d+(?:[.,]\d+)?)\s*(?:kg|kilos?)\.?$/i);
+    const rawWeight = declaration?.[1] || bare?.[1];
+    const explicitWeightKg = rawWeight ? numeric(Number(rawWeight.replace(',', '.')), 20, 400) : context.weightKg ?? null;
+    let recovered = false;
     const analyze = async (correccionFormato) => {
-      const result = await requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
+      const send = () => requestOpenCode('POST', `/session/${encodeURIComponent(sessionId)}/message`, {
         system: systemPrompt,
         tools: {},
         ...(model ? { model } : {}),
         ...(config.agent ? { agent: config.agent } : {}),
         ...(config.variant ? { variant: config.variant } : {}),
-        parts: [{ type: 'text', text: JSON.stringify({ description: text, biometricContext, stepContext, ...(correccionFormato ? { correccionFormato } : {}) }) }],
+        parts: [{ type: 'text', text: JSON.stringify({ description: text, historialUsuario: userWeightContext, preguntaAnterior: context.question, biometricContext, stepContext, ...(correccionFormato ? { correccionFormato } : {}) }) }],
       }, config.requestTimeoutMs);
-      if (result.status === 404) sessions.delete(id);
+      let result;
+      try { result = await send(); }
+      catch (error) { if (error.status !== 404) throw error; result = { status: 404 }; }
+      if (result.status === 404 && !recovered) {
+        recovered = true;
+        sessions.delete(id);
+        sessionId = await openTrainingSession(id, config, requestOpenCode);
+        result = await send();
+      }
       if (result.status < 200 || result.status >= 300) throw new Error('No se pudo analizar el entrenamiento.');
       reportTrainingProgress(id, progressId, 'analysis_received', progressRecorder?.record);
-      return parseReply(result.data?.parts || [], biometricContext, explicitWeightKg, text, stepContext);
+      try { return parseReply(result.data?.parts || [], biometricContext, explicitWeightKg, text, stepContext); }
+      catch (error) { throw Object.assign(error, { code: 'TRAINING_REPLY_FORMAT' }); }
     };
     let reply;
     try { reply = await analyze(); }
     catch (error) {
-      if (error.message === 'No se pudo analizar el entrenamiento.') throw error;
+      if (error.code !== 'TRAINING_REPLY_FORMAT') throw error;
       reportTrainingProgress(id, progressId, 'analysis_retry', progressRecorder?.record);
       reply = await analyze('Devuelve únicamente el JSON con todos los campos requeridos y con los tipos indicados.');
     }
@@ -269,6 +308,7 @@ async function analyzeTraining({ userId, description, userWeightContext = descri
       reportTrainingProgress(id, progressId, 'analysis_no_session_retry', progressRecorder?.record);
       reply = await analyze('El usuario mencionó un entrenamiento. Si afirma haberlo realizado, clasifícalo con trainingSession:true y pregunta solo el dato que falte. Si solo menciona pasos o niega haber entrenado, mantén trainingSession:false.');
     }
+    Object.assign(sessions.get(id), { weightKg: explicitWeightKg, question: reply.question, awaitingWeight: reply.question === bodyWeightQuestion });
     return { ...reply, biometricContext, requestedSaveTime: savedTime.value, saveTimeStatus: savedTime.status };
   });
 }
@@ -302,21 +342,24 @@ async function deleteTrainingPlanSession({ userId, runId, requestOpenCode = open
   return withUserLock(id, () => closePendingPlanSession(id, requestOpenCode, runId), planLocks);
 }
 
-async function refineTrainingPlan({ userId, runId, changes, draftToken, recoverySecret, progressId, progressRecorder, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
+async function refineTrainingPlan({ userId, runId, changes, snapshot, progressId, progressRecorder, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
   const id = String(userId);
   const text = typeof changes === 'string' ? changes.trim() : '';
   if (!/^\d+$/.test(id) || typeof runId !== 'string' || !text || text.length > 2000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(text)) {
     throw Object.assign(new Error('Describe los cambios que quieres hacer (máximo 2000 caracteres).'), { status: 400 });
   }
   return withUserLock(id, async () => {
-    let pending = pendingPlanSessions.get(id);
-    if (!pending && draftToken) {
-      const draft = readTrainingPlanDraft(id, draftToken, recoverySecret);
-      if (draft.runId !== runId) throw Object.assign(new Error('El borrador no coincide con la solicitud.'), { status: 409 });
-      pending = { ...draft, sessionId: null };
-      pendingPlanSessions.set(id, pending);
-    }
-    if (!pending || pending.runId !== runId) throw Object.assign(new Error('El borrador ya no está disponible. Genera un plan nuevo.'), { status: 409 });
+    if (!snapshot || snapshot.runId !== runId) throw Object.assign(new Error('El borrador ya no está disponible. Genera un plan nuevo.'), { status: 409 });
+    const cached = pendingPlanSessions.get(id);
+    if (cached && cached.runId !== runId) await closePendingPlanSession(id, requestOpenCode);
+    const pending = { ...snapshot, sessionId: cached?.runId === runId ? cached.sessionId : null };
+    const prior = pending.baseline || (pending.plan ? { plan_markdown: pending.plan, macros_objetivo: pending.macros } : null);
+    const requestText = [pending.pendingChange, text].filter(Boolean).join('\n');
+    // Una mención («no cambies las calorías») no autoriza recalcular las metas.
+    const changeNutrition = requestText.split(/[.;!?\n]/).some(clause =>
+      !/\b(?:no|sin|conserva|mant[eé]n)\b/i.test(clause) &&
+      /\b(?:ajust\w*|cambi\w*|recalcul\w*|aument\w*|reduc\w*|sub[ei]\w*|baj\w*|fij\w*|modific\w*|quiero)\b.{0,60}\b(?:macros?|calor[ií]as|kcal|prote[ií]nas?|grasas?|carbohidratos?|d[eé]ficit|super[aá]vit|objetivo energ[eé]tico)\b/i.test(clause));
+    const fixedMacros = prior && !changeNutrition ? prior.macros_objetivo : null;
     if (pending.expiresAt <= Date.now()) throw Object.assign(new Error('El borrador venció. Genera un plan nuevo.'), { status: 409 });
     const config = await readConfig();
     const systemPrompt = await readTrainingPlanPrompt();
@@ -328,37 +371,41 @@ async function refineTrainingPlan({ userId, runId, changes, draftToken, recovery
       }, config.requestTimeoutMs);
       if (created.status < 200 || created.status >= 300 || !/^ses_[A-Za-z0-9_-]{4,120}$/.test(created.data?.id || '')) throw Object.assign(new Error('No se pudo recuperar la sesión del plan.'), { upstream: true });
       pending.sessionId = created.data.id;
+      pendingPlanSessions.set(id, { runId, sessionId: pending.sessionId });
     };
     if (!pending.sessionId) await openSession();
     reportTrainingProgress(id, progressId, 'plan_sent', progressRecorder?.record);
+    let recovered = false;
     const send = async (correccionFormato) => {
       const body = {
         system: systemPrompt, tools: {}, ...(model ? { model } : {}),
         ...(config.agent ? { agent: config.agent } : {}), ...(config.variant ? { variant: config.variant } : {}),
-        parts: [{ type: 'text', text: JSON.stringify({ goals: pending.goals, context: pending.context, borradorActual: { plan_markdown: pending.plan, macros_objetivo: pending.macros }, cambiosSolicitados: text, ...(correccionFormato ? { correccionFormato } : {}) }) }],
+        parts: [{ type: 'text', text: JSON.stringify({ goals: pending.goals, context: pending.context, borradorActual: prior, aclaraciones: pending.answers || [], preguntaPendiente: pending.question, cambioPendiente: pending.pendingChange, cambiosSolicitados: text, macrosFijos: fixedMacros, ...(correccionFormato ? { correccionFormato } : {}) }) }],
       };
-      let result = await requestOpenCode('POST', `/session/${encodeURIComponent(pending.sessionId)}/message`, body, config.requestTimeoutMs);
-      if (result.status === 404) {
+      const post = () => requestOpenCode('POST', `/session/${encodeURIComponent(pending.sessionId)}/message`, body, config.requestTimeoutMs);
+      let result;
+      try { result = await post(); } catch (error) { if (error.status !== 404) throw error; result = { status: 404 }; }
+      if (result.status === 404 && !recovered) {
+        recovered = true;
         await openSession();
-        result = await requestOpenCode('POST', `/session/${encodeURIComponent(pending.sessionId)}/message`, body, config.requestTimeoutMs);
+        result = await post();
       }
       if (result.status < 200 || result.status >= 300) throw Object.assign(new Error('No se pudo actualizar el plan.'), { upstream: true });
       reportTrainingProgress(id, progressId, 'plan_received', progressRecorder?.record);
-      return parseTrainingPlanReply(result.data?.parts || [], systemPrompt, pending.context);
+      try { return parseTrainingPlanReply(result.data?.parts || [], systemPrompt, pending.context, fixedMacros); }
+      catch (error) { throw Object.assign(error, { code: 'PLAN_FORMAT' }); }
     };
     let refined;
     try { refined = await send(); }
     catch (error) {
-      if (error.upstream) throw error;
+      if (error.code !== 'PLAN_FORMAT') throw error;
       refined = await send(`Aplica los cambios solicitados al borrador y devuelve únicamente el objeto JSON completo requerido. Error de validación previo: ${String(error.message).slice(0, 250)}`);
     }
-    pending.plan = refined.plan;
-    pending.macros = refined.macros;
-    return { ...refined, runId, draftToken: issueTrainingPlanDraft(id, pending, recoverySecret), expiresAt: pending.expiresAt };
+    return { ...refined, runId, expiresAt: pending.expiresAt };
   }, planLocks);
 }
 
-async function generateTrainingPlan({ userId, goals, context, recoverySecret, progressId, progressRecorder, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
+async function generateTrainingPlan({ userId, goals, context, progressId, progressRecorder, requestOpenCode = openCodeRequest, readConfig = readFoodSessionConfig }) {
   const id = String(userId);
   const text = typeof goals === 'string' ? goals.trim() : '';
   if (!/^\d+$/.test(id)) throw Object.assign(new Error('Cuenta autenticada no válida.'), { status: 400 });
@@ -404,27 +451,27 @@ async function generateTrainingPlan({ userId, goals, context, recoverySecret, pr
         }, config.requestTimeoutMs);
         if (result.status < 200 || result.status >= 300) throw Object.assign(new Error('No se pudo generar el plan.'), { upstream: true });
         reportTrainingProgress(id, progressId, 'plan_received', progressRecorder?.record);
-        return parseTrainingPlanReply(result.data?.parts || [], systemPrompt, context);
+        try { return parseTrainingPlanReply(result.data?.parts || [], systemPrompt, context); }
+        catch (error) { throw Object.assign(error, { code: 'PLAN_FORMAT' }); }
       };
       let plan;
       try { plan = await generate(); }
       catch (error) {
-        if (error.upstream) throw error;
+        if (error.code !== 'PLAN_FORMAT') throw error;
         reportTrainingProgress(id, progressId, 'plan_retry', progressRecorder?.record);
         plan = await generate(`Corrige la respuesta anterior: ${String(error.message).slice(0, 300)} Devuelve únicamente el JSON completo requerido.`);
       }
-      const runId = randomUUID();
-      const pending = { sessionId, runId, goals: text, context, plan: plan.plan, macros: plan.macros, expiresAt: Date.now() + 24 * 60 * 60 * 1000 };
-      pendingPlanSessions.set(id, pending);
+      const runId = progressId || randomUUID();
+      pendingPlanSessions.set(id, { sessionId, runId });
       retained = true;
-      return { ...plan, runId, draftToken: issueTrainingPlanDraft(id, pending, recoverySecret), expiresAt: pending.expiresAt };
+      return { ...plan, runId, expiresAt: Date.now() + 24 * 60 * 60 * 1000 };
     } catch (error) {
       failure = error;
       throw error;
     } finally {
       if (!retained) {
         try {
-          const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(sessionId)}`, undefined, config.requestTimeoutMs);
+          const deleted = await requestOpenCode('DELETE', `/session/${encodeURIComponent(sessionId)}`, undefined, 5000);
           if ((deleted.status < 200 || deleted.status >= 300) && deleted.status !== 404) throw new Error();
         } catch { throw Object.assign(new Error('No se pudo cerrar la sesión temporal del plan.'), { code: 'TRAINING_PLAN_SESSION_CLEANUP', cause: failure }); }
       }

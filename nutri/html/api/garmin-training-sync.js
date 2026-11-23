@@ -12,6 +12,8 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
   if (deviceMode !== 'garmin' || keyVersion !== '1') throw Object.assign(new Error('La cuenta Garmin no está vinculada.'), { status: 409 });
   const calendarTimezone = await readCalendarTimezone(userId, dbQuery, timezone);
   const range = calendarDayRange(date, calendarTimezone);
+  const localDate = localCalendarDate(calendarTimezone);
+  if (date > localDate) throw Object.assign(new Error('Selecciona hoy o un día anterior para sincronizar Garmin.'), { status: 400 });
 
   let credentials;
   try { credentials = decryptGarminCredentials({ ciphertext, nonce, authTag }, secret); }
@@ -38,8 +40,7 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
       (async () => {
         await client.connect(transport);
         if (timedOut) throw new Error('Se agotó el tiempo de sincronización Garmin.');
-        const localDate = localCalendarDate(calendarTimezone);
-        const stepDates = [date].filter((stepDate) => stepDate <= localDate);
+        const stepDates = [date];
         const [result, stepResults] = await Promise.all([
           client.callTool({ name: 'get_activities_by_date', arguments: { startDate: date, endDate: date } }, undefined, { timeout: 40000 }).catch(() => ({ isError: true, content: [] })),
           Promise.all(stepDates.map(async (stepDate) => {
@@ -48,6 +49,7 @@ async function syncGarminTraining({ userId, date, timezone, dbQuery, textSql, se
               if (response.isError) return [stepDate, null];
               const payload = (response.content || []).filter((part) => part.type === 'text').map((part) => part.text || '').join('\n');
               const summary = JSON.parse(payload);
+              if (summary?.calendarDate != null && summary.calendarDate !== stepDate) return [stepDate, null];
               const rawSteps = summary?.totalSteps == null ? NaN : Number(summary.totalSteps);
               const rawActiveKcal = summary?.activeKilocalories == null ? NaN : Number(summary.activeKilocalories);
               const stepsCount = Number.isSafeInteger(rawSteps) && rawSteps >= 0 && rawSteps <= 250000 ? rawSteps : null;

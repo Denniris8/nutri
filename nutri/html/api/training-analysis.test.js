@@ -13,6 +13,26 @@ test('training progress is scoped to the authenticated user and progress id', ()
   assert.equal(getTrainingProgress('28', 'training-progress-test'), null);
 });
 
+test('saves unambiguous steps on the selected past day without opening OpenCode', async () => {
+  const args = { userId: '904', description: 'Hice 8 mil pasos', stepContext: { localDate: '2026-11-23', selectedDate: '2026-11-20' }, readConfig: () => assert.fail('Unexpected model call') };
+  const result = await analyzeTraining(args);
+  assert.deepEqual([result.trainingSession, result.stepsDate, result.stepsCount], [false, '2026-11-20', 8000]);
+  await assert.rejects(analyzeTraining({ ...args, description: 'Hoy hice 8 mil pasos' }), /fecha del mensaje/);
+});
+
+test('recovers one missing session, but never retries a timeout as invalid JSON', async () => {
+  let creates = 0, sends = 0;
+  const args = { userId: '905', description: 'Hice pesas 30 minutos', biometricData: { latestWeightKg: 68 }, readConfig: async () => ({}), requestOpenCode: async (method, path) => {
+    if (path === '/session') return { status: 200, data: { id: `ses_recovery${++creates}` } };
+    if (++sends === 1) throw Object.assign(new Error('missing'), { status: 404 });
+    if (sends > 2) throw new Error('timeout');
+    return { status: 200, data: { parts: reply() } };
+  } };
+  assert.equal((await analyzeTraining(args)).weightKg, 68);
+  await assert.rejects(analyzeTraining({ ...args, description: '80 kg' }), /timeout/);
+  assert.deepEqual([creates, sends], [2, 3]);
+});
+
 test('retries once when the training reply is malformed', async () => {
   const calls = [];
   const requestOpenCode = async (method, path) => {
@@ -61,6 +81,14 @@ test('calories are calculated from MET, duration and server-selected weight', ()
   assert.equal(result.weightKg, 70);
   assert.equal(result.caloriesKcal, 257.3);
   assert.match(result.formula, /7 MET.*70 kg.*30 min/);
+});
+
+test('bare kg refer to body weight only after a dedicated body-weight question', async () => {
+  const run = (userId, description, biometricData) => analyzeTraining({ userId, description, biometricData, readConfig: async () => ({}),
+    requestOpenCode: async (_, path) => path === '/session' ? { status: 200, data: { id: `ses_weight${userId}` } } : { status: 200, data: { parts: reply() } } });
+  assert.equal((await run('906', '80 kg', { latestWeightKg: 65 })).weightKg, 65);
+  assert.match((await run('907', 'Hice pesas 30 minutos', {})).question, /peso actual/);
+  assert.equal((await run('907', '80 kg', {})).weightKg, 80);
 });
 
 test('an explicit current weight takes precedence over the registered value', () => {

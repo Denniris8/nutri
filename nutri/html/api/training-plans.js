@@ -1,5 +1,23 @@
 const macroFields = ['proteinas_g', 'carbohidratos_g', 'grasas_g', 'calorias_kcal'];
 
+function recordedPlanFacts({ profile = {}, biometricRecords = [], plicometricRecords = [] }) {
+  const lines = [];
+  for (const [key, label, unit] of [['age','Edad','años'],['sex','Sexo',''],['heightCm','Estatura','cm'],['restingMetabolismKcal','TMB','kcal/día']]) {
+    if (profile[key] != null) lines.push(`- ${label}: ${profile[key]} ${unit} (fuente: ${key === 'restingMetabolismKcal' ? profile.restingMetabolismSource || 'perfil' : 'perfil'}).`);
+  }
+  const series = (records, dateKey, source, metrics) => {
+    const ordered = [...records].sort((a,b) => String(b[dateKey]).localeCompare(String(a[dateKey])));
+    lines.push(`- ${source}: ${ordered.length} registros${ordered.length ? `, del ${ordered.at(-1)[dateKey]} al ${ordered[0][dateKey]}` : ''}.`);
+    for (const [key,label,unit] of metrics) {
+      const row = ordered.find((r) => r[key] != null);
+      if (row) lines.push(`- ${label}: ${row[key]} ${unit} (${row[dateKey]}, ${row.source || source}).`);
+    }
+  };
+  series(biometricRecords, 'measuredAt', 'Biometría', [['weightKg','Peso','kg'],['bodyFatPct','Grasa corporal','%'],['musclePct','Músculo','%'],['bmi','IMC','kg/m²'],['visceralFat','Grasa visceral','(índice)'],['bodyAge','Edad corporal','años'],['restingMetabolismKcal','Metabolismo basal','kcal/día']]);
+  series(plicometricRecords, 'fecha', 'Plicómetro', [['tricepsMm','Tríceps'],['bicepsMm','Bíceps'],['subescapularMm','Subescapular'],['suprailiacoMm','Suprailiaco'],['abdominalMm','Abdominal'],['musloAnteriorMm','Muslo anterior'],['pantorrillaMm','Pantorrilla']].map(([k,l]) => [k,l,'mm']));
+  return lines.join('\n');
+}
+
 function extractPlanDisclosure(prompt) {
   const disclosure = String(prompt).match(/añade literalmente esta frase:\s*[“"]([^”"]+)[”"]/i)?.[1];
   if (!disclosure) throw new Error('El prompt del plan no define la nota canónica de ajuste diario.');
@@ -57,7 +75,7 @@ function validatePlanSemantics(content, macros, disclosure, context) {
   if (positions.some((position) => position < 0) || positions.some((position, index) => index > 0 && position <= positions[index - 1])
     || typeof disclosure !== 'string' || !content.includes(disclosure)) throw new Error('El plan debe distinguir datos, estimaciones y supuestos e incluir la nota canónica de ajuste diario.');
   validateMacroPresentation(content, macros, disclosure);
-  if (context) {
+  if (context && !(context.hasWeight && content.startsWith(`[Datos Registrados]\n${recordedPlanFacts(context)}\n\n[Estimaciones Calculadas]`))) {
     const section = content.match(/\[Datos Registrados\]([\s\S]*?)\[Estimaciones Calculadas\]/i)?.[1] || '';
     const missingAge = context.profile?.age == null && /\b(?:edad(?!\s+corporal)|age)\b.{0,20}\b\d{1,3}\b|\b\d{1,3}\s+años\b/i.test(section);
     const missingSex = context.profile?.sex == null && /\b(?:sexo|sex)\b.{0,12}\b(?:masculino|femenino|male|female)\b/i.test(section);
@@ -223,4 +241,4 @@ COMMIT;`);
   return outcome.deleted === true;
 }
 
-module.exports = { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, readTrainingPlanForDate, readTrainingPlans, requireRegisteredWeight, saveTrainingPlan, summarizeTrainingPlan, validateMacroPresentation, validatePlanSemantics, validateTrainingPlan };
+module.exports = { activateTrainingPlan, deleteTrainingPlan, extractPlanDisclosure, recordedPlanFacts, readTrainingPlanForDate, readTrainingPlans, requireRegisteredWeight, saveTrainingPlan, summarizeTrainingPlan, validateMacroPresentation, validatePlanSemantics, validateTrainingPlan };
